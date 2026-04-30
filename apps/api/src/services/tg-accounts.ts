@@ -1,8 +1,13 @@
-import { getPrisma, encryptString, decryptString } from '@nosquare/db';
+import { getPrisma, encryptString, decryptString, Prisma } from '@nosquare/db';
 import { Errors } from '@nosquare/shared';
 import { TgClient } from '@nosquare/tg-client';
 import { env } from '../env.js';
+import { logger } from '../logger.js';
 import { tgBootstrapFromEnv, tgProxyFromEnv } from './tg-config.js';
+
+function isRecordNotFound(err: unknown): boolean {
+  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025';
+}
 
 let _tgClient: TgClient | undefined;
 
@@ -32,18 +37,36 @@ export function getTgClient(): TgClient {
         save: async (id, sessionString) => {
           const enc = await encryptString(sessionString);
           const prisma = getPrisma();
-          await prisma.tgAccount.update({
-            where: { id },
-            data: { sessionEncrypted: enc, status: 'active' },
-          });
+          try {
+            await prisma.tgAccount.update({
+              where: { id },
+              data: { sessionEncrypted: enc, status: 'active' },
+            });
+          } catch (err) {
+            if (!isRecordNotFound(err)) throw err;
+            logger.warn(
+              { tgAccountId: id },
+              'tg session save skipped: tg_account row not found (bootstrap-only session?)',
+            );
+          }
         },
         markStatus: async (id, status) => {
           const prisma = getPrisma();
-          await prisma.tgAccount.update({ where: { id }, data: { status } });
+          try {
+            await prisma.tgAccount.update({ where: { id }, data: { status } });
+          } catch (err) {
+            if (!isRecordNotFound(err)) throw err;
+            logger.warn({ tgAccountId: id, status }, 'tg markStatus skipped: row not found');
+          }
         },
         setCooldownUntil: async (id, until) => {
           const prisma = getPrisma();
-          await prisma.tgAccount.update({ where: { id }, data: { cooldownUntil: until } });
+          try {
+            await prisma.tgAccount.update({ where: { id }, data: { cooldownUntil: until } });
+          } catch (err) {
+            if (!isRecordNotFound(err)) throw err;
+            logger.warn({ tgAccountId: id }, 'tg setCooldownUntil skipped: row not found');
+          }
         },
       },
     });
