@@ -84,6 +84,11 @@ export function startAgentRunWorker() {
             red_flags_total: 0,
           }, { conversationId: conv.id });
 
+          // Handoff=operator_now flips the conversation into manual mode and
+          // pings the operator room — but we still run ReplyComposer below
+          // so the operator opens an already-loaded scratchpad of
+          // suggestions instead of a blank page. Suggestions are advisory
+          // in manual mode (no auto-approve), so this is purely additive.
           if (handoff.action === 'operator_now') {
             await prisma.conversation.update({
               where: { id: conv.id },
@@ -100,7 +105,6 @@ export function startAgentRunWorker() {
               reason: handoff.reason,
               urgency: handoff.urgency,
             });
-            return { ok: true, action: 'operator_now' };
           }
 
           // generate replies + safety filter. The DB stores message
