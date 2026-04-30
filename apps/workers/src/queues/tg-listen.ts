@@ -34,15 +34,65 @@ export function startTgListenWorker() {
       const data = TgListenJobZ.parse(job.data);
       const prisma = getPrisma();
 
-      // 1. Resolve contact strictly by tgUserId. Older code had a "pick the
-      // most recently updated tg_username contact" fallback, but that
-      // attributes the inbound to a *random* contact and corrupts threads.
-      // tg-send now resolves and persists tgUserId on the first outbound,
-      // so this lookup is reliable for every contact we've actually
-      // messaged.
-      const contact = await prisma.contact.findFirst({
+      // 1. Resolve contact. Strict tgUserId lookup first — that's what tg-send
+      // now persists on first outbound. For contacts that were messaged
+      // *before* the resolve-on-send fix landed (so tgUserId is empty),
+      // fall back to: resolve the inbound user's profile via TG, then
+      // match by tg_username — value or stored tgUsername. On hit, we
+      // back-fill tgUserId + profile fields so future inbounds use the
+      // fast path. The old "take any tg_username contact" fallback that
+      // mis-attributed messages is gone.
+      let contact = await prisma.contact.findFirst({
         where: { tgUserId: data.fromTgUserId },
       });
+
+      if (!contact) {
+        const tg = getTgClient();
+        if (tg) {
+          try {
+            const handle = await tg.for(data.tgAccountId);
+            const profile = await handle.resolveUser(data.fromTgUserId);
+            const username = profile.username?.toLowerCase();
+            if (username) {
+              // Match either by previously-resolved tgUsername (rare —
+              // some other code path may have populated it) or by the
+              // contact's normalized `value` (which is what we store as
+              // a bare lowercase handle for tg_username contacts).
+              contact = await prisma.contact.findFirst({
+                where: {
+                  type: 'tg_username',
+                  OR: [
+                    { tgUsername: { equals: username, mode: 'insensitive' } },
+                    { value: { equals: username, mode: 'insensitive' } },
+                  ],
+                },
+                orderBy: { updatedAt: 'desc' },
+              });
+              if (contact) {
+                contact = await prisma.contact.update({
+                  where: { id: contact.id },
+                  data: {
+                    tgUserId: data.fromTgUserId,
+                    tgUsername: profile.username ?? null,
+                    tgFirstName: profile.firstName ?? null,
+                    tgLastName: profile.lastName ?? null,
+                  },
+                });
+                logger.info(
+                  { contactId: contact.id, username, fromTgUserId: data.fromTgUserId },
+                  'tg-listen: back-filled tgUserId from username resolution',
+                );
+              }
+            }
+          } catch (err) {
+            logger.warn(
+              { err: (err as Error).message, fromTgUserId: data.fromTgUserId },
+              'tg-listen: resolveUser fallback failed',
+            );
+          }
+        }
+      }
+
       if (!contact) {
         logger.info(
           { fromTgUserId: data.fromTgUserId, tgAccountId: data.tgAccountId },
@@ -51,7 +101,6 @@ export function startTgListenWorker() {
         return { ok: true, skipped: 'no contact' };
       }
 
-      // Persist tgUserId on the contact for next time.
       // 2. Find or create the conversation.
       let conv = await prisma.conversation.findUnique({
         where: {
