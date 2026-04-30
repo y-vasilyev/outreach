@@ -488,7 +488,25 @@ export class SessionManager {
                 'telegram/events/index.js'
               )) as unknown as {
                 NewMessage: new (params?: { incoming?: boolean; outgoing?: boolean }) => unknown;
+                Raw: new () => unknown;
               };
+              // DEBUG: a Raw handler fires for every update GramJS receives,
+              // not just NewMessage. Lets us tell apart "GramJS isn't getting
+              // updates from the DC at all" (raw silent) vs. "the
+              // NewMessage filter is dropping our messages" (raw fires but
+              // NewMessage doesn't). Logged per delivery so it's loud.
+              try {
+                const rawBuilder = new events.Raw();
+                client.addEventHandler((update: unknown) => {
+                  const u = update as { className?: string };
+                  console.log(
+                    `[tg-client] raw update tgAccountId=${tgAccountId} type=${u?.className ?? '?'}`,
+                  );
+                }, rawBuilder);
+                console.log(`[tg-client] raw debug handler bound for tgAccountId=${tgAccountId}`);
+              } catch (err) {
+                console.error(`[tg-client] raw debug bind failed:`, err);
+              }
               gramJsBuilder = new events.NewMessage({ incoming: true, outgoing: false });
               gramJsHandler = (event: unknown) => {
                 // Trace EVERY delivery so we can tell sync filtering
