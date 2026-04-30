@@ -123,6 +123,7 @@ export function withFallback(
   return {
     kind: primary.kind,
     estimateTokens: (t) => primary.estimateTokens(t),
+    listModels: () => primary.listModels(),
     async complete(req) {
       try {
         const res = await primary.complete(req);
@@ -227,6 +228,7 @@ function wrap(provider: LLMProvider, around: CompleteFn): LLMProvider {
   return {
     kind: provider.kind,
     estimateTokens: (t) => provider.estimateTokens(t),
+    listModels: () => provider.listModels(),
     complete: (req) => around(req, innerComplete),
     completeJson: async (req, parser) => {
       // We need the wrapping strategy (retry / timeout / accounting) to apply

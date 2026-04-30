@@ -35,4 +35,9 @@ export async function endpointsRoutes(app: FastifyInstance) {
       return { ok: false, error: (e as Error).message };
     }
   });
+
+  app.get('/endpoints/:id/models', async (req) => {
+    const params = z.object({ id: z.string() }).parse(req.params);
+    return endpointsService.listModels(params.id);
+  });
 }

@@ -2,6 +2,7 @@ import { getPrisma, encryptJson, decryptJson } from '@nosquare/db';
 import type { CreateEndpointInputZ } from '@nosquare/shared';
 import { z } from 'zod';
 import { Errors } from '@nosquare/shared';
+import { createProvider, type ModelInfo } from '@nosquare/llm';
 
 type CreateInput = z.infer<typeof CreateEndpointInputZ>;
 
@@ -96,5 +97,20 @@ export const endpointsService = {
       iamToken: auth.iamToken,
       defaultHeaders: ep.defaultHeaders as Record<string, string>,
     };
+  },
+
+  async listModels(endpointId: string): Promise<ModelInfo[]> {
+    const resolved = await this.resolve(endpointId);
+    const provider = createProvider(resolved.provider, {
+      baseUrl: resolved.baseUrl,
+      apiKey: resolved.apiKey,
+      folderId: resolved.folderId,
+      iamToken: resolved.iamToken,
+      defaultHeaders: resolved.defaultHeaders,
+      // Models endpoint shouldn't take long; cap to 15s so a dead provider
+      // doesn't block the UI.
+      timeoutMs: 15_000,
+    });
+    return provider.listModels();
   },
 };

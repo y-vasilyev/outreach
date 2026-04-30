@@ -4,13 +4,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeftIcon, ArrowPathIcon, CheckIcon } from '@heroicons/react/24/outline';
 import { PageHeader } from '../../components/PageHeader';
 import { Tabs } from '../../components/Tabs';
-import { Input } from '../../components/Input';
 import { Select } from '../../components/Select';
 import { Textarea } from '../../components/Textarea';
 import { Switch } from '../../components/Switch';
 import { Button } from '../../components/Button';
 import { Badge } from '../../components/Badge';
 import { Spinner } from '../../components/Spinner';
+import { ModelCombobox } from '../../components/ModelCombobox';
 import { useToast } from '../../components/Toast';
 import { api } from '../../lib/api';
 import { formatDateTime, formatMoney, formatNumber } from '../../lib/format';
@@ -190,12 +190,12 @@ function ConfigForm({
             onChange={(e) => setFallbackId(e.target.value)}
             options={[{ value: '', label: '— нет —' }, ...epOptions]}
           />
-          <Input
+          <ModelCombobox
             label="Модель"
-            placeholder="yandexgpt / claude-haiku-4.5 / gpt-4o-mini"
+            endpointId={endpointId || null}
             value={model}
-            onChange={(e) => setModel(e.target.value)}
-            helpText="Текстовое поле — провайдер сам валидирует имя."
+            onChange={setModel}
+            helpText="Список моделей подгружается из выбранного endpoint. Можно ввести свой id."
           />
           <div className="flex items-end">
             <Switch

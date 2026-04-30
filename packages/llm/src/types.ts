@@ -47,6 +47,19 @@ export interface CompletionResponse {
   providerUsed?: string;
 }
 
+export interface ModelInfo {
+  /** Provider-specific model id passed back as `CompletionRequest.model`. */
+  id: string;
+  /** Human-friendly name (defaults to id when the provider doesn't ship one). */
+  name?: string;
+  /** Free-form provider description. */
+  description?: string;
+  /** Max input context window (tokens) when reported. */
+  contextLength?: number;
+  /** Pricing in USD per 1M tokens, when reported. */
+  pricing?: { promptPer1M?: number; completionPer1M?: number };
+}
+
 export interface LLMProvider {
   readonly kind: ProviderKind;
   complete(req: CompletionRequest): Promise<CompletionResponse>;
@@ -56,6 +69,8 @@ export interface LLMProvider {
   ): Promise<{ value: T; meta: CompletionResponse }>;
   /** Cheap synchronous estimate. Used for budgeting before a real call. */
   estimateTokens(text: string): number;
+  /** List models this endpoint can serve. May be cached / hardcoded. */
+  listModels(): Promise<ModelInfo[]>;
 }
 
 export interface ProviderConfig {

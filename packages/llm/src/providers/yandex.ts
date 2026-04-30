@@ -4,6 +4,7 @@ import type {
   CompletionRequest,
   CompletionResponse,
   LLMProvider,
+  ModelInfo,
   ProviderConfig,
 } from '../types.js';
 
@@ -168,6 +169,49 @@ export class YandexProvider implements LLMProvider {
     return hasVersion
       ? `gpt://${folder}/${model}`
       : `gpt://${folder}/${model}/latest`;
+  }
+
+  /**
+   * Try the OpenAI-compatible models endpoint Yandex AI Studio exposes
+   * (https://aistudio.yandex.ru/docs/ru/ai-studio/concepts/api.html); fall
+   * back to a hand-curated list of legacy gpt:// URIs when the catalogue
+   * call is unavailable for the configured baseUrl.
+   */
+  async listModels(): Promise<ModelInfo[]> {
+    try {
+      const url = `${this.cfg.baseUrl || DEFAULT_BASE_URL}/v1/models`;
+      const headers: Record<string, string> = { ...(this.cfg.defaultHeaders ?? {}) };
+      if (this.cfg.iamToken) headers.Authorization = `Bearer ${this.cfg.iamToken}`;
+      else if (this.cfg.apiKey) headers.Authorization = `Api-Key ${this.cfg.apiKey}`;
+      if (this.cfg.folderId) headers['x-folder-id'] = this.cfg.folderId;
+      const res = await fetch(url, { method: 'GET', headers });
+      if (res.ok) {
+        const json = (await res.json()) as { data?: Array<{ id?: string; name?: string }> };
+        const items = (json.data ?? [])
+          .filter((m): m is { id: string } & typeof m => typeof m.id === 'string' && m.id.length > 0)
+          .map((m) => ({ id: m.id, ...(m.name ? { name: m.name } : {}) }))
+          .sort((a, b) => a.id.localeCompare(b.id));
+        if (items.length > 0) return items;
+      }
+    } catch {
+      /* fall through to fallback */
+    }
+    const ids = [
+      'yandexgpt',
+      'yandexgpt/latest',
+      'yandexgpt/rc',
+      'yandexgpt-lite',
+      'yandexgpt-lite/latest',
+      'yandexgpt-lite/rc',
+      'yandexgpt-32k',
+      'yandexgpt-32k/latest',
+      'yandexgpt-32k/rc',
+      'llama',
+      'llama/latest',
+      'llama-lite',
+      'llama-lite/latest',
+    ];
+    return ids.map((id) => ({ id }));
   }
 }
 

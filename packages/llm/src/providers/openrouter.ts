@@ -4,11 +4,13 @@ import type {
   CompletionRequest,
   CompletionResponse,
   LLMProvider,
+  ModelInfo,
   ProviderConfig,
 } from '../types.js';
 
 const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
 const COMPLETION_PATH = '/chat/completions';
+const MODELS_PATH = '/models';
 
 interface OpenAIChoice {
   message?: { role?: string; content?: string };
@@ -73,6 +75,10 @@ export class OpenRouterProvider implements LLMProvider {
       'X-Title': title,
       ...(this.cfg.defaultHeaders ?? {}),
     };
+  }
+
+  async listModels(): Promise<ModelInfo[]> {
+    return openAiCompatListModels(this.cfg, MODELS_PATH, 'openrouter');
   }
 }
 
@@ -190,4 +196,80 @@ async function safeReadText(res: Response): Promise<string> {
   } catch {
     return '';
   }
+}
+
+interface OpenAIModelsResponse {
+  data?: Array<{
+    id?: string;
+    name?: string;
+    description?: string;
+    context_length?: number;
+    /** OpenRouter-specific. Strings, USD per token. */
+    pricing?: { prompt?: string; completion?: string };
+  }>;
+}
+
+/**
+ * Fetch the model catalogue from any OpenAI-compatible endpoint
+ * (`GET <baseUrl>/models`). Used by both OpenRouter and OpenAI-compat
+ * providers.
+ */
+export async function openAiCompatListModels(
+  cfg: ProviderConfig,
+  modelsPath: string,
+  providerLabel: string,
+): Promise<ModelInfo[]> {
+  const url = `${cfg.baseUrl || DEFAULT_BASE_URL}${modelsPath}`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${cfg.apiKey}`,
+        ...(cfg.defaultHeaders ?? {}),
+      },
+    });
+  } catch (e) {
+    throw Errors.upstream(`${providerLabel}: models network error`, {
+      message: (e as Error).message,
+    });
+  }
+  if (!res.ok) {
+    const body = await safeReadText(res);
+    throw Errors.upstream(`${providerLabel}: GET /models HTTP ${res.status}`, {
+      status: res.status,
+      body: body.slice(0, 500),
+    });
+  }
+  let json: OpenAIModelsResponse;
+  try {
+    json = (await res.json()) as OpenAIModelsResponse;
+  } catch (e) {
+    throw Errors.upstream(`${providerLabel}: /models invalid JSON`, {
+      message: (e as Error).message,
+    });
+  }
+  return (json.data ?? [])
+    .filter((m): m is { id: string } & typeof m => typeof m.id === 'string' && m.id.length > 0)
+    .map((m) => {
+      const out: ModelInfo = { id: m.id };
+      if (m.name) out.name = m.name;
+      if (m.description) out.description = m.description;
+      if (typeof m.context_length === 'number') out.contextLength = m.context_length;
+      const pp = parsePricing(m.pricing?.prompt);
+      const cp = parsePricing(m.pricing?.completion);
+      if (pp != null || cp != null) {
+        out.pricing = {};
+        if (pp != null) out.pricing.promptPer1M = pp * 1_000_000;
+        if (cp != null) out.pricing.completionPer1M = cp * 1_000_000;
+      }
+      return out;
+    })
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function parsePricing(s: string | undefined): number | null {
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
 }
