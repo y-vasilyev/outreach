@@ -60,4 +60,15 @@ export async function conversationsRoutes(app: FastifyInstance) {
     const params = z.object({ id: z.string(), sid: z.string() }).parse(req.params);
     return conversationsService.rejectSuggestion(params.sid);
   });
+
+  /**
+   * Re-run the AI suggestion pipeline on this conversation. Server picks
+   * `on_inbound` (ReplyComposer) when there's a recent inbound to react
+   * to, otherwise `outreach_first_message` (OpeningComposer). Old pending
+   * suggestions are expired so the inbox shows the fresh batch only.
+   */
+  app.post('/conversations/:id/regenerate-suggestions', async (req) => {
+    const params = z.object({ id: z.string() }).parse(req.params);
+    return conversationsService.regenerateSuggestions(params.id);
+  });
 }

@@ -172,4 +172,57 @@ export const conversationsService = {
       data: { status: 'rejected' },
     });
   },
+
+  /**
+   * Re-trigger AI suggestion generation for an existing conversation. Picks
+   * the right pipeline based on conversation state:
+   *   - If there's at least one inbound message AND the latest message is
+   *     inbound (or no outbound exists yet) → `on_inbound` (ReplyComposer
+   *     based on the last reply).
+   *   - Otherwise → `outreach_first_message` (OpeningComposer).
+   *
+   * Marks any existing `pending` suggestions as `expired` so the inbox
+   * doesn't show stale ones from before the rerun.
+   */
+  async regenerateSuggestions(conversationId: string): Promise<{
+    ok: true;
+    pipeline: 'on_inbound' | 'outreach_first_message';
+    expiredCount: number;
+  }> {
+    const prisma = getPrisma();
+    const conv = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { id: true, contactId: true, campaignId: true },
+    });
+    if (!conv) throw Errors.notFound('conversation', conversationId);
+
+    const messages = await prisma.message.findMany({
+      where: { conversationId },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+      select: { id: true, direction: true },
+    });
+
+    const hasInbound = messages.some((m) => m.direction === 'in_');
+    const lastIsInbound = messages[0]?.direction === 'in_';
+    const pipeline =
+      hasInbound && lastIsInbound ? 'on_inbound' : 'outreach_first_message';
+
+    // Expire any stale pending suggestions so the inbox doesn't show old +
+    // new mixed.
+    const expired = await prisma.suggestion.updateMany({
+      where: { conversationId, status: 'pending' },
+      data: { status: 'expired' },
+    });
+
+    const queues = getQueues();
+    await queues.agentRun.add(pipeline, {
+      pipeline,
+      conversationId,
+      contactId: conv.contactId,
+      ...(conv.campaignId ? { campaignId: conv.campaignId } : {}),
+    });
+
+    return { ok: true, pipeline, expiredCount: expired.count };
+  },
 };

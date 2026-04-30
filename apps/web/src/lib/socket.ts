@@ -28,11 +28,13 @@ export function disconnectSocket(): void {
 export interface RealtimeEvents {
   'message.new': { conversationId: string; messageId: string; direction: 'in' | 'out'; text: string };
   'suggestion.new': { conversationId: string; suggestionId: string };
+  'suggestion.approved': { conversationId: string; suggestionId: string; auto?: boolean };
   'status.changed': { conversationId: string; status: string };
   'mode.changed': { conversationId: string; mode: 'auto' | 'assisted' | 'manual' };
   'channel.progress': { channelId: string; status: string; pct?: number };
   'campaign.tick': { campaignId: string; sent?: number; replies?: number };
   'dashboard.update': Record<string, number>;
+  'operator.assigned': { conversationId: string; reason: string; urgency: 'low' | 'normal' | 'high' };
 }
 
 export function useRoom<E extends keyof RealtimeEvents>(

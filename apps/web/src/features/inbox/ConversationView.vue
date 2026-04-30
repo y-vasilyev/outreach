@@ -134,6 +134,32 @@ function onComposerKey(e: KeyboardEvent): void {
 }
 
 function escalate(): void { modeMut.mutate('manual'); }
+
+/**
+ * Re-trigger AI suggestion generation. Useful when prior runs returned
+ * no usable suggestions (e.g. SafetyFilter blocked everything) or when
+ * the operator wants a fresh batch with a different agent config.
+ */
+const regenerateMut = useMutation({
+  mutationFn: () =>
+    api.post<{ ok: true; pipeline: 'on_inbound' | 'outreach_first_message'; expiredCount: number }>(
+      `/conversations/${cId.value}/regenerate-suggestions`,
+      {},
+    ),
+  onSuccess: (r) => {
+    qc.invalidateQueries({ queryKey: ['conversation-suggestions', cId.value] });
+    toast.info(
+      r.pipeline === 'on_inbound' ? 'Reply suggestions в очереди' : 'Opening suggestions в очереди',
+      r.expiredCount > 0 ? `Старых подсказок отменено: ${r.expiredCount}` : undefined,
+    );
+  },
+  onError: (e: Error) => toast.error('Не удалось перегенерировать', e.message),
+});
+
+useRoom(() => room.value, 'suggestion.approved', () => {
+  qc.invalidateQueries({ queryKey: ['conversation-suggestions', cId.value] });
+  qc.invalidateQueries({ queryKey: ['conversation-messages', cId.value] });
+});
 </script>
 
 <template>
@@ -155,6 +181,16 @@ function escalate(): void { modeMut.mutate('manual'); }
       <Pill :state="c.status" />
       <Pill :state="c.mode" />
       <span class="divider-v" />
+      <button
+        class="btn ghost sm"
+        :disabled="regenerateMut.isPending.value"
+        @click="regenerateMut.mutate()"
+        title="Сгенерировать AI-подсказки заново"
+      >
+        <span v-if="regenerateMut.isPending.value" class="spinner" />
+        <Icon v-else name="sparkle" :size="12" />
+        <span>Подсказки</span>
+      </button>
       <button class="btn ghost sm" @click="escalate" title="Эскалация на оператора">
         <Icon name="flag" :size="12" /><span>Эскалация</span>
       </button>
