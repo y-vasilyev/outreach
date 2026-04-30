@@ -2,6 +2,7 @@ import { getPrisma, encryptString, decryptString } from '@nosquare/db';
 import { Errors } from '@nosquare/shared';
 import { TgClient } from '@nosquare/tg-client';
 import { env } from '../env.js';
+import { tgBootstrapFromEnv, tgProxyFromEnv } from './tg-config.js';
 
 let _tgClient: TgClient | undefined;
 
@@ -10,6 +11,8 @@ export function getTgClient(): TgClient {
     if (!env.TG_API_ID || !env.TG_API_HASH) {
       throw Errors.badRequest('TG_API_ID/TG_API_HASH not configured');
     }
+    const proxy = tgProxyFromEnv();
+    const bootstrap = tgBootstrapFromEnv();
     _tgClient = new TgClient({
       creds: { apiId: Number(env.TG_API_ID), apiHash: env.TG_API_HASH },
       defaultRateLimits: {
@@ -17,6 +20,8 @@ export function getTgClient(): TgClient {
         msgPerDay: 30,
         newContactsPerDay: 15,
       },
+      ...(proxy ? { proxy } : {}),
+      ...(bootstrap ? { bootstrap } : {}),
       sessionLoader: {
         load: async (id) => {
           const prisma = getPrisma();

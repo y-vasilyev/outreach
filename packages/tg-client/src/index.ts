@@ -19,6 +19,8 @@ export type {
   SendMessageResult,
   TelegramClientHandle,
   TgAccountStatus,
+  TgBootstrapSession,
   TgCredentials,
+  TgProxyConfig,
   TgSessionRecord,
 } from './types.js';

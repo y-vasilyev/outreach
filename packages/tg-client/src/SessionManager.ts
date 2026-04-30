@@ -7,8 +7,15 @@ import type {
   SendMessageResult,
   TelegramClientHandle,
   TgAccountStatus,
+  TgBootstrapSession,
   TgCredentials,
+  TgProxyConfig,
 } from './types.js';
+
+export interface SessionManagerOptions {
+  proxy?: TgProxyConfig;
+  bootstrap?: TgBootstrapSession;
+}
 
 // We keep GramJS opaque — see CLAUDE.md "Do not let GramJS leak into routes".
 // TODO: tighten types once we settle on a real tg-client API surface.
@@ -55,6 +62,7 @@ export class SessionManager {
   constructor(
     private readonly creds: TgCredentials,
     private readonly loader: SessionLoader,
+    private readonly opts: SessionManagerOptions = {},
   ) {}
 
   async getClient(tgAccountId: string): Promise<TelegramClientHandle> {
@@ -91,18 +99,34 @@ export class SessionManager {
       );
     }
 
-    const sessionString = await this.loader.load(tgAccountId);
+    let sessionString = await this.loader.load(tgAccountId);
+    // Bootstrap fallback: if no DB session and an env-supplied session is
+    // configured for this account, use it. We DO persist it back so the next
+    // boot reads from the (encrypted) DB row.
+    if (
+      (!sessionString || sessionString.length === 0) &&
+      this.opts.bootstrap &&
+      this.opts.bootstrap.tgAccountId === tgAccountId
+    ) {
+      sessionString = this.opts.bootstrap.sessionString;
+      try {
+        await this.loader.save(tgAccountId, sessionString);
+      } catch {
+        /* save is best-effort during bootstrap */
+      }
+    }
 
     // Lazy GramJS import — only the call-sites that actually need a live
     // session pay the dep cost. Unit tests of unrelated parts don't load it.
     const tg = await loadGramJS();
 
     const session = new tg.StringSession(sessionString ?? '');
+    const proxy = mapProxy(this.opts.proxy);
     const client = new tg.TelegramClient(
       session,
       this.creds.apiId,
       this.creds.apiHash,
-      { connectionRetries: 5 },
+      proxy ? { connectionRetries: 5, proxy } : { connectionRetries: 5 },
     ) as unknown as GramJSClient;
 
     let isAuthorized = false;
@@ -410,7 +434,7 @@ interface GramJSModule {
     session: unknown,
     apiId: number,
     apiHash: string,
-    opts: { connectionRetries: number },
+    opts: { connectionRetries: number; proxy?: GramJSProxy },
   ) => unknown;
   StringSession: new (session: string) => unknown;
   Api: {
@@ -458,6 +482,32 @@ async function loadGramJS(): Promise<GramJSModule> {
     errors: tg.errors ?? {},
   };
   return gramJsCache;
+}
+
+type GramJSProxy =
+  | {
+      socksType: 4 | 5;
+      ip: string;
+      port: number;
+      username?: string;
+      password?: string;
+    }
+  | {
+      MTProxy: true;
+      ip: string;
+      port: number;
+      secret: string;
+    };
+
+function mapProxy(p: TgProxyConfig | undefined): GramJSProxy | undefined {
+  if (!p) return undefined;
+  if (p.type === 'socks5') {
+    const out: GramJSProxy = { socksType: 5, ip: p.ip, port: p.port };
+    if (p.username) (out as { username?: string }).username = p.username;
+    if (p.password) (out as { password?: string }).password = p.password;
+    return out;
+  }
+  return { MTProxy: true, ip: p.ip, port: p.port, secret: p.secret };
 }
 
 function stringifyBigInt(value: unknown): string {

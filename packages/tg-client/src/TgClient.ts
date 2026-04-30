@@ -4,13 +4,19 @@ import { SessionManager, type SessionLoader } from './SessionManager.js';
 import type {
   RateLimits,
   TelegramClientHandle,
+  TgBootstrapSession,
   TgCredentials,
+  TgProxyConfig,
 } from './types.js';
 
 export interface TgClientOptions {
   creds: TgCredentials;
   sessionLoader: SessionLoader;
   defaultRateLimits: RateLimits;
+  /** Optional SOCKS5 / MTProxy. Same proxy is used for every account. */
+  proxy?: TgProxyConfig;
+  /** Optional pre-existing session string used for a specific account id. */
+  bootstrap?: TgBootstrapSession;
   /** Optional override (mainly for tests). Defaults to the process singleton. */
   floodGuard?: FloodGuard;
 }
@@ -28,7 +34,10 @@ export class TgClient {
   private readonly limiters = new Map<string, RateLimiter>();
 
   constructor(opts: TgClientOptions) {
-    this.sessions = new SessionManager(opts.creds, opts.sessionLoader);
+    this.sessions = new SessionManager(opts.creds, opts.sessionLoader, {
+      proxy: opts.proxy,
+      bootstrap: opts.bootstrap,
+    });
     this.defaults = { ...opts.defaultRateLimits };
     this.floodGuard = opts.floodGuard ?? defaultFloodGuard;
   }

@@ -3,6 +3,37 @@ export interface TgCredentials {
   apiHash: string;
 }
 
+/**
+ * Network proxy for the underlying GramJS client. Supports SOCKS5 (with
+ * optional auth) and MTProxy. Translated to GramJS `proxy` option at the
+ * TelegramClient construction site.
+ */
+export type TgProxyConfig =
+  | {
+      type: 'socks5';
+      ip: string;
+      port: number;
+      username?: string;
+      password?: string;
+    }
+  | {
+      type: 'mtproxy';
+      ip: string;
+      port: number;
+      secret: string;
+    };
+
+/**
+ * Optional bootstrap: when no session is loaded for `tgAccountId`, fall back
+ * to this pre-existing session string (e.g. one supplied via env). Useful for
+ * an "env parser account" that the platform team hands over a ready GramJS
+ * session for, without going through the UI login wizard.
+ */
+export interface TgBootstrapSession {
+  tgAccountId: string;
+  sessionString: string;
+}
+
 export interface TgSessionRecord {
   tgAccountId: string;
   /** Decrypted by caller. Empty string means "no session yet". */

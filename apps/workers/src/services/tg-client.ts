@@ -1,6 +1,7 @@
 import { TgClient } from '@nosquare/tg-client';
 import { getPrisma, encryptString, decryptString } from '@nosquare/db';
 import { env } from '../env.js';
+import { tgBootstrapFromEnv, tgProxyFromEnv } from './tg-config.js';
 
 let _tg: TgClient | undefined;
 
@@ -8,6 +9,8 @@ export function getTgClient(): TgClient | null {
   if (_tg) return _tg;
   if (!env.TG_API_ID || !env.TG_API_HASH) return null;
 
+  const proxy = tgProxyFromEnv();
+  const bootstrap = tgBootstrapFromEnv();
   _tg = new TgClient({
     creds: { apiId: Number(env.TG_API_ID), apiHash: env.TG_API_HASH },
     defaultRateLimits: {
@@ -15,6 +18,8 @@ export function getTgClient(): TgClient | null {
       msgPerDay: 30,
       newContactsPerDay: 15,
     },
+    ...(proxy ? { proxy } : {}),
+    ...(bootstrap ? { bootstrap } : {}),
     sessionLoader: {
       load: async (id) => {
         const prisma = getPrisma();
