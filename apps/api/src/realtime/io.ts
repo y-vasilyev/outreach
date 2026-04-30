@@ -20,10 +20,24 @@ export function attachIo(httpServer: HTTPServer): IOServer {
   io.adapter(createAdapter(getRedisPub(), getRedisSub()));
 
   io.use((socket, next) => {
-    const token =
-      (socket.handshake.auth as { token?: string } | undefined)?.token ??
-      (socket.handshake.headers.authorization?.replace(/^Bearer /, '') ?? '');
-    if (!token) return next(new Error('No token'));
+    const tokenFromAuth = (socket.handshake.auth as { token?: string } | undefined)?.token;
+    const tokenFromHeader = socket.handshake.headers.authorization?.replace(/^Bearer /, '');
+    const token = tokenFromAuth ?? tokenFromHeader ?? '';
+    logger.info(
+      {
+        sid: socket.id,
+        addr: socket.handshake.address,
+        url: socket.handshake.url,
+        hasAuthToken: !!tokenFromAuth,
+        hasHeaderToken: !!tokenFromHeader,
+        transport: socket.conn.transport.name,
+      },
+      'ws handshake',
+    );
+    if (!token) {
+      logger.warn({ sid: socket.id }, 'ws handshake rejected: no token');
+      return next(new Error('No token'));
+    }
     try {
       // verify with @fastify/jwt secret-compatible jsonwebtoken
       // we can't import the same instance here; use a minimal verify
