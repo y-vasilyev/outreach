@@ -34,6 +34,12 @@ export function startCampaignDispatcher() {
           platforms?: string[];
           roleGuess?: string[];
           minConfidence?: number;
+          /**
+           * Tags act as a narrowing filter: a contact must have at least one
+           * of these tags. Operators add `cmp:<campaignId>` via the "В
+           * кампанию" UI; without `hasSome` here that bridge is dead.
+           */
+          tags?: string[];
         };
 
         const where: Prisma.ContactWhereInput = {
@@ -47,6 +53,9 @@ export function startCampaignDispatcher() {
             : {}),
           ...(filter.platforms && filter.platforms.length > 0
             ? { channel: { platform: { in: filter.platforms as never[] } } }
+            : {}),
+          ...(filter.tags && filter.tags.length > 0
+            ? { tags: { hasSome: filter.tags } }
             : {}),
           conversations: { none: { campaignId: c.id } },
         };
