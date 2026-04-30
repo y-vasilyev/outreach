@@ -1,59 +1,174 @@
 import { getPrisma } from '@nosquare/db';
 
+const DAY_MS = 24 * 3600 * 1000;
+
+export interface DashboardData {
+  channels: {
+    total: number;
+    new: number;
+    scraping: number;
+    extracted: number;
+    failed: number;
+  };
+  contacts: { total: number; reachable_tg: number; manual: number };
+  conversations: { active: number; assisted: number; manual: number; auto: number };
+  campaigns: { running: number; paused: number };
+  cost: { tokens_today: number; cost_today_usd: number; cost_7d_usd: number };
+  reply_rate_7d: number;
+  recent_activity: Array<{
+    id: string;
+    type: 'channel_extracted' | 'message_sent' | 'reply' | 'escalation' | 'failed';
+    title: string;
+    subtitle?: string;
+    at: string;
+  }>;
+}
+
 export const dashboardService = {
-  async stats() {
+  async stats(): Promise<DashboardData> {
     const prisma = getPrisma();
+    const dayAgo = new Date(Date.now() - DAY_MS);
+    const sevenDaysAgo = new Date(Date.now() - 7 * DAY_MS);
+
     const [
-      channelsTotal,
-      channelsExtracted,
+      channelsByStatus,
+      contactsTotal,
       contactsReachable,
-      conversationsActive,
+      contactsManual,
+      convByStatusMode,
       campaignsRunning,
-      tgAccountsActive,
-      messagesLast24h,
-      tokensLast24h,
+      campaignsPaused,
+      tokensToday,
+      cost7d,
+      messagesSent7d,
+      messagesReplied7d,
+      recentChannels,
+      recentMessages,
     ] = await Promise.all([
-      prisma.channel.count(),
-      prisma.channel.count({ where: { status: 'extracted' } }),
-      prisma.contact.count({ where: { reachability: 'reachable_tg', status: 'qualified' } }),
-      prisma.conversation.count({ where: { status: 'active' } }),
-      prisma.campaign.count({ where: { status: 'running' } }),
-      prisma.tgAccount.count({ where: { status: 'active' } }),
-      prisma.message.count({
-        where: { createdAt: { gte: new Date(Date.now() - 24 * 3600 * 1000) } },
+      prisma.channel.groupBy({ by: ['status'], _count: { _all: true } }),
+      prisma.contact.count(),
+      prisma.contact.count({ where: { reachability: 'reachable_tg' } }),
+      prisma.contact.count({ where: { reachability: 'manual' } }),
+      prisma.conversation.groupBy({
+        by: ['status', 'mode'],
+        _count: { _all: true },
       }),
+      prisma.campaign.count({ where: { status: 'running' } }),
+      prisma.campaign.count({ where: { status: 'paused' } }),
       prisma.agentRun.aggregate({
         _sum: { tokensIn: true, tokensOut: true, costUsd: true },
-        where: { createdAt: { gte: new Date(Date.now() - 24 * 3600 * 1000) } },
+        where: { createdAt: { gte: dayAgo } },
+      }),
+      prisma.agentRun.aggregate({
+        _sum: { costUsd: true },
+        where: { createdAt: { gte: sevenDaysAgo } },
+      }),
+      prisma.message.count({
+        where: { direction: 'out_', status: 'sent', createdAt: { gte: sevenDaysAgo } },
+      }),
+      prisma.message.count({
+        where: { direction: 'in_', createdAt: { gte: sevenDaysAgo } },
+      }),
+      prisma.channel.findMany({
+        where: { status: 'extracted' },
+        orderBy: { scrapedAt: 'desc' },
+        take: 5,
+        select: {
+          id: true,
+          handle: true,
+          title: true,
+          scrapedAt: true,
+          _count: { select: { contacts: true } },
+        },
+      }),
+      prisma.message.findMany({
+        where: { OR: [{ direction: 'in_' }, { status: 'sent' }] },
+        orderBy: { createdAt: 'desc' },
+        take: 8,
+        include: {
+          conversation: {
+            include: {
+              contact: { select: { value: true } },
+            },
+          },
+        },
       }),
     ]);
 
-    return {
-      channelsTotal,
-      channelsExtracted,
-      contactsReachable,
-      conversationsActive,
-      campaignsRunning,
-      tgAccountsActive,
-      messagesLast24h,
-      tokensLast24h: {
-        in: tokensLast24h._sum.tokensIn ?? 0,
-        out: tokensLast24h._sum.tokensOut ?? 0,
-        costUsd: Number(tokensLast24h._sum.costUsd ?? 0),
-      },
-    };
-  },
+    const channelByStatus = (status: string): number =>
+      channelsByStatus.find((r) => r.status === status)?._count._all ?? 0;
+    const channelsTotal = channelsByStatus.reduce((s, r) => s + r._count._all, 0);
 
-  async byPlatform() {
-    const prisma = getPrisma();
-    const rows = await prisma.channel.groupBy({
-      by: ['platform', 'status'],
-      _count: { _all: true },
-    });
-    return rows.map((r) => ({
-      platform: r.platform,
-      status: r.status,
-      count: r._count._all,
-    }));
+    let convActive = 0;
+    let convAssisted = 0;
+    let convManual = 0;
+    let convAuto = 0;
+    for (const r of convByStatusMode) {
+      const c = r._count._all;
+      if (r.status === 'active') convActive += c;
+      if (r.mode === 'assisted') convAssisted += c;
+      if (r.mode === 'manual') convManual += c;
+      if (r.mode === 'auto') convAuto += c;
+    }
+
+    const tokensIn = tokensToday._sum.tokensIn ?? 0;
+    const tokensOut = tokensToday._sum.tokensOut ?? 0;
+    const tokensTodayTotal = tokensIn + tokensOut;
+    const costToday = Number(tokensToday._sum.costUsd ?? 0);
+    const cost7dUsd = Number(cost7d._sum.costUsd ?? 0);
+    const replyRate =
+      messagesSent7d > 0 ? Math.min(1, messagesReplied7d / messagesSent7d) : 0;
+
+    const recent: DashboardData['recent_activity'] = [];
+    for (const ch of recentChannels) {
+      recent.push({
+        id: `channel:${ch.id}`,
+        type: 'channel_extracted',
+        title: `${ch.title ?? ch.handle} — извлечено ${ch._count.contacts} контактов`,
+        subtitle: ch.handle,
+        at: (ch.scrapedAt ?? new Date()).toISOString(),
+      });
+    }
+    for (const m of recentMessages) {
+      const isReply = m.direction === 'in_';
+      const partner = m.conversation.contact.value;
+      recent.push({
+        id: `message:${m.id}`,
+        type: isReply ? 'reply' : 'message_sent',
+        title: isReply ? `Ответ от ${partner}` : `Отправлено: ${partner}`,
+        subtitle: m.text.slice(0, 80),
+        at: m.createdAt.toISOString(),
+      });
+    }
+    recent.sort((a, b) => b.at.localeCompare(a.at));
+
+    return {
+      channels: {
+        total: channelsTotal,
+        new: channelByStatus('new'),
+        scraping: channelByStatus('scraping') + channelByStatus('extracting'),
+        extracted: channelByStatus('extracted') + channelByStatus('ready'),
+        failed: channelByStatus('failed'),
+      },
+      contacts: {
+        total: contactsTotal,
+        reachable_tg: contactsReachable,
+        manual: contactsManual,
+      },
+      conversations: {
+        active: convActive,
+        assisted: convAssisted,
+        manual: convManual,
+        auto: convAuto,
+      },
+      campaigns: { running: campaignsRunning, paused: campaignsPaused },
+      cost: {
+        tokens_today: tokensTodayTotal,
+        cost_today_usd: costToday,
+        cost_7d_usd: cost7dUsd,
+      },
+      reply_rate_7d: replyRate,
+      recent_activity: recent.slice(0, 10),
+    };
   },
 };
