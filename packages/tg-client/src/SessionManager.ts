@@ -138,12 +138,26 @@ export class SessionManager {
 
     const session = new tg.StringSession(sessionString ?? '');
     const proxy = mapProxy(this.opts.proxy);
+    const useFakeTls = !!(proxy && 'MTProxy' in proxy && proxy.host);
     const client = new tg.TelegramClient(
       session,
       this.creds.apiId,
       this.creds.apiHash,
-      proxy ? { connectionRetries: 5, proxy } : { connectionRetries: 5 },
+      {
+        connectionRetries: 5,
+        ...(proxy ? { proxy } : {}),
+      },
     ) as unknown as GramJSClient;
+
+    // GramJS overrides `clientParams.connection` to its own
+    // ConnectionTCPMTProxyAbridged whenever the proxy has `MTProxy` field
+    // (telegramBaseClient.js:97). To inject our fake-TLS subclass we have to
+    // patch `client._connection` *after* the constructor.
+    if (useFakeTls) {
+      const m = await import('./connection/FakeTlsConnection.js');
+      const cls = await m.loadFakeTlsConnectionClass();
+      (client as unknown as { _connection: unknown })._connection = cls;
+    }
 
     // GramJS hardcodes port 80 whenever a proxy is set (useWSS is incompatible
     // with proxies). When `forcePort443` is requested, override the port on
@@ -525,44 +539,52 @@ type GramJSProxy =
       port: number;
       secret: string;
       timeout?: number;
+      /**
+       * Non-standard field consumed by our `FakeTlsConnection`. Its presence
+       * triggers fake-TLS handshake; the value is the SNI hostname encoded
+       * inside the original `ee...` secret.
+       */
+      host?: string;
     };
 
 /**
- * Normalize an MTProxy secret to the 32-hex-char (16-byte) form GramJS accepts.
+ * Normalize an MTProxy secret to the format GramJS accepts.
  *
  * Telegram clients accept three secret formats:
  *   - 32 hex chars (raw 16-byte secret, original format)
- *   - 34 hex chars starting with `dd` (random-padding mode; GramJS strips `dd`)
+ *   - 34 hex chars starting with `dd` (random-padding mode)
  *   - 66+ hex chars starting with `ee` (fake-TLS: `ee` + 16-byte secret +
  *     variable-length SNI host bytes)
  *
- * GramJS only parses the first two natively. For the third we strip the `ee`
- * prefix and the trailing SNI bytes — the leading 16 bytes are still the
- * server-side secret, and many proxies accept legacy MTProxy mode in addition
- * to fake-TLS, so the handshake may still succeed. If the server is strictly
- * fake-TLS-only, this normalization gets past GramJS' validator but the
- * connection will still fail at the protocol layer.
+ * Returns the 32-hex-char secret plus, for fake-TLS, the embedded SNI host so
+ * `FakeTlsConnection` can run the TLS handshake.
  */
-function normalizeMtproxySecret(raw: string): string {
+function normalizeMtproxySecret(raw: string): { secret: string; host?: string } {
   const s = raw.trim();
-  // Hex form
   if (/^[0-9a-f]+$/i.test(s)) {
-    if (s.length === 32 || s.length === 34) return s; // raw or `dd` prefix — passthrough
+    if (s.length === 32 || s.length === 34) return { secret: s };
     if (s.length > 34 && /^ee/i.test(s)) {
-      return s.slice(2, 34); // drop `ee` and trailing SNI bytes
+      return {
+        secret: s.slice(2, 34),
+        host: Buffer.from(s.slice(34), 'hex').toString('utf8'),
+      };
     }
-    return s; // let GramJS reject so the user sees a clear error
+    return { secret: s };
   }
-  // Base64 form (less common, but TG share-links use url-safe base64 sometimes)
   try {
     const buf = Buffer.from(s, 'base64');
-    if (buf.length === 16) return buf.toString('hex');
-    if (buf.length === 17 && buf[0] === 0xdd) return buf.toString('hex');
-    if (buf.length > 17 && buf[0] === 0xee) return buf.slice(1, 17).toString('hex');
+    if (buf.length === 16) return { secret: buf.toString('hex') };
+    if (buf.length === 17 && buf[0] === 0xdd) return { secret: buf.toString('hex') };
+    if (buf.length > 17 && buf[0] === 0xee) {
+      return {
+        secret: buf.subarray(1, 17).toString('hex'),
+        host: buf.subarray(17).toString('utf8'),
+      };
+    }
   } catch {
     /* fallthrough */
   }
-  return s;
+  return { secret: s };
 }
 
 function mapProxy(p: TgProxyConfig | undefined): GramJSProxy | undefined {
@@ -574,12 +596,14 @@ function mapProxy(p: TgProxyConfig | undefined): GramJSProxy | undefined {
     if (p.timeoutSec) (out as { timeout?: number }).timeout = p.timeoutSec;
     return out;
   }
+  const { secret, host } = normalizeMtproxySecret(p.secret);
   const out: GramJSProxy = {
     MTProxy: true,
     ip: p.ip,
     port: p.port,
-    secret: normalizeMtproxySecret(p.secret),
+    secret,
   };
+  if (host) (out as { host?: string }).host = host;
   if (p.timeoutSec) (out as { timeout?: number }).timeout = p.timeoutSec;
   return out;
 }
