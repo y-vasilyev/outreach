@@ -22,7 +22,7 @@ export const ContactStatusZ = z.enum([
   'invalid',
   'blocked',
 ]);
-export const ExtractedByZ = z.enum(['regex', 'llm', 'both']);
+export const ExtractedByZ = z.enum(['regex', 'llm', 'both', 'manual']);
 
 export const ContactZ = z.object({
   id: z.string(),

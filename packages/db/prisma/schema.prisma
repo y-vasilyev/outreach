@@ -93,6 +93,9 @@ enum ExtractedBy {
   regex
   llm
   both
+  // Operator hand-edited the contact (role / confidence / value).
+  // The contact-extract worker checks this and skips overwriting on re-run.
+  manual
 }
 
 enum CampaignStatus {

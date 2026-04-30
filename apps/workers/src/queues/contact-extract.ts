@@ -134,12 +134,31 @@ export function startContactExtractWorker() {
       }
 
       // 4. Persist contacts
+      // Pre-load existing rows so we can detect operator overrides
+      // (`extractedBy === 'manual'`) and skip overwriting them on re-run.
+      const existing = await prisma.contact.findMany({
+        where: { channelId },
+        select: { type: true, value: true, extractedBy: true },
+      });
+      const manualKeys = new Set(
+        existing
+          .filter((e) => e.extractedBy === 'manual')
+          .map((e) => `${e.type}:${e.value}`),
+      );
+
       let saved = 0;
+      let preservedManual = 0;
       for (const c of extracted.contacts) {
         const value = c.value.trim();
         if (!value) continue;
         const type = mapContactType(c.type);
-        const reachability = type === 'tg_username' || type === 'tg_link' ? 'reachable_tg' : 'manual';
+        if (manualKeys.has(`${type}:${value}`)) {
+          // Operator already corrected this row; don't clobber.
+          preservedManual += 1;
+          continue;
+        }
+        const reachability =
+          type === 'tg_username' || type === 'tg_link' ? 'reachable_tg' : 'manual';
         try {
           await prisma.contact.upsert({
             where: { channelId_type_value: { channelId, type, value } },
@@ -166,6 +185,12 @@ export function startContactExtractWorker() {
         } catch (e) {
           logger.warn({ channelId, value, err: (e as Error).message }, 'contact upsert failed');
         }
+      }
+      if (preservedManual > 0) {
+        logger.info(
+          { channelId, preservedManual },
+          'preserved manual contact overrides during re-extract',
+        );
       }
 
       const redFlags = analysis.red_flags ?? [];

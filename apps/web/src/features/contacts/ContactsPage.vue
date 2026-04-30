@@ -11,8 +11,11 @@ import ConfBar from '../../components/ConfBar.vue';
 import Icon from '../../components/Icon.vue';
 import Spinner from '../../components/Spinner.vue';
 import EmptyState from '../../components/EmptyState.vue';
+import Dropdown from '../../components/Dropdown.vue';
 import AddToCampaignDialog from './AddToCampaignDialog.vue';
+import ContactEditDrawer from './ContactEditDrawer.vue';
 import { api } from '../../lib/api';
+import { useMutation } from '@tanstack/vue-query';
 import { toast } from '../../lib/toast';
 import { formatRelative } from '../../lib/format';
 import type { Contact } from './types';
@@ -28,6 +31,33 @@ const minConf = ref('');
 
 const selectedIds = ref<Set<string>>(new Set());
 const addToCampaignOpen = ref(false);
+const editingContact = ref<Contact | null>(null);
+
+const reExtractMut = useMutation({
+  mutationFn: (id: string) =>
+    api.post<{ ok: true; jobId: string }>(`/contacts/${id}/re-extract`, {}),
+  onSuccess: () => {
+    toast.info('LLM-extractor поставлен в очередь', 'Канал переобрабатывается');
+    qc.invalidateQueries({ queryKey: ['contacts'] });
+    qc.invalidateQueries({ queryKey: ['channels'] });
+  },
+  onError: (e: Error) => toast.error('Не удалось перезапустить', e.message),
+});
+
+function rowActions(c: Contact) {
+  return [
+    {
+      label: 'Открыть / редактировать',
+      icon: 'edit' as const,
+      onClick: () => (editingContact.value = c),
+    },
+    {
+      label: 'Обновить через ИИ',
+      icon: 'sparkle' as const,
+      onClick: () => reExtractMut.mutate(c.id),
+    },
+  ];
+}
 
 const queryKey = computed(() => [
   'contacts',
@@ -253,7 +283,17 @@ function exportCsv(): void {
             </div>
           </td>
           <td><span class="muted mono">{{ c.type }}</span></td>
-          <td><Pill :state="c.roleGuess" /></td>
+          <td>
+            <div style="display: flex; align-items: center; gap: 4px;">
+              <Pill :state="c.roleGuess" />
+              <span
+                v-if="c.extractedBy === 'manual'"
+                class="mono"
+                title="Поправил оператор"
+                style="font-size: 9.5px; padding: 1px 4px; background: var(--violet-bg); color: var(--violet); border: 1px solid var(--violet-line); border-radius: 3px;"
+              >manual</span>
+            </div>
+          </td>
           <td>
             <div style="display: flex; align-items: center; gap: 6px;">
               <Tag v-if="c.channel?.platform" :platform="c.channel.platform" />
@@ -269,7 +309,11 @@ function exportCsv(): void {
           <td><Pill :state="c.reachability" /></td>
           <td><Pill :state="c.status" /></td>
           <td class="muted-2 mono" style="font-size: 10.5px;">{{ formatRelative(c.updatedAt) }}</td>
-          <td><button class="btn ghost icon-only sm"><Icon name="more" :size="12" /></button></td>
+          <td>
+            <Dropdown :items="rowActions(c)" align="right">
+              <button class="btn ghost icon-only sm"><Icon name="more" :size="12" /></button>
+            </Dropdown>
+          </td>
         </tr>
       </tbody>
     </table>
@@ -285,5 +329,11 @@ function exportCsv(): void {
       qc.invalidateQueries({ queryKey: ['contacts'] });
       qc.invalidateQueries({ queryKey: ['campaigns'] });
     }"
+  />
+
+  <ContactEditDrawer
+    :contact="editingContact"
+    @close="editingContact = null"
+    @updated="() => qc.invalidateQueries({ queryKey: ['contacts'] })"
   />
 </template>

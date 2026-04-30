@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { ContactFiltersZ, ContactStatusZ } from '@nosquare/shared';
+import { ContactFiltersZ, ContactStatusZ, RoleGuessZ, ContactTypeZ } from '@nosquare/shared';
 import { contactsService } from '../services/contacts.js';
 
 export async function contactsRoutes(app: FastifyInstance) {
@@ -14,7 +14,17 @@ export async function contactsRoutes(app: FastifyInstance) {
   app.patch('/contacts/:id', async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
     const body = z
-      .object({ status: ContactStatusZ.optional(), tags: z.array(z.string()).optional() })
+      .object({
+        status: ContactStatusZ.optional(),
+        tags: z.array(z.string()).optional(),
+        // Operator override fields. Setting any of these flips
+        // `extractedBy` to `manual` so the worker won't perturb them.
+        roleGuess: RoleGuessZ.optional(),
+        confidence: z.number().min(0).max(1).optional(),
+        value: z.string().min(1).max(500).optional(),
+        label: z.string().max(200).nullable().optional(),
+        type: ContactTypeZ.optional(),
+      })
       .parse(req.body);
     return contactsService.update(params.id, body);
   });
@@ -22,5 +32,15 @@ export async function contactsRoutes(app: FastifyInstance) {
   app.get('/contacts/:id/draft', async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
     return contactsService.draft(params.id);
+  });
+
+  /**
+   * Re-run the LLM contact_extractor on the parent channel. The worker's
+   * upsert refreshes the contact's roleGuess / confidence / rationale; rows
+   * marked `extractedBy: 'manual'` are skipped so operator overrides survive.
+   */
+  app.post('/contacts/:id/re-extract', async (req) => {
+    const params = z.object({ id: z.string() }).parse(req.params);
+    return contactsService.reExtract(params.id);
   });
 }
