@@ -175,6 +175,39 @@ function extractUrls(text: string): string[] {
   return Array.from(text.matchAll(re), (m) => m[0]);
 }
 
+const YT_CHANNEL_ID_RE = /^UC[a-zA-Z0-9_-]{20,30}$/;
+
+/**
+ * Build the identifier query for ScrapeCreators YouTube endpoints.
+ * - `UC…` → `channelId`
+ * - `@handle` or bare handle → `handle` (without leading `@`, since the API expects `ThePatMcAfeeShow`)
+ * - full URL → `url` by default; with `resolveUrl: true` we extract `channelId`/`handle` from the URL because
+ *   `/v1/youtube/channel-videos` does not accept a `url` param.
+ */
+function ytIdentifierQuery(
+  input: string,
+  opts: { resolveUrl?: boolean } = {},
+): Record<string, string> {
+  const trimmed = input.trim();
+  if (YT_CHANNEL_ID_RE.test(trimmed)) return { channelId: trimmed };
+  if (!/^https?:\/\//i.test(trimmed)) {
+    const handle = trimmed.startsWith('@') ? trimmed.slice(1) : trimmed;
+    return { handle };
+  }
+  if (opts.resolveUrl) {
+    const path = trimmed.replace(/^https?:\/\/[^/]+\//i, '').split(/[?#]/)[0] ?? '';
+    if (path.startsWith('channel/')) {
+      const id = path.slice('channel/'.length).split('/')[0] ?? '';
+      if (YT_CHANNEL_ID_RE.test(id)) return { channelId: id };
+    }
+    if (path.startsWith('@')) {
+      const h = path.split('/')[0]?.slice(1) ?? '';
+      if (h) return { handle: h };
+    }
+  }
+  return { url: trimmed };
+}
+
 function isoFromMaybe(v: unknown): string {
   if (typeof v === 'string') {
     const d = new Date(v);
@@ -314,10 +347,7 @@ export class ScrapeCreatorsClient {
   // ---------- YouTube ----------
 
   async getYoutubeChannel(handleOrUrl: string): Promise<YoutubeChannel> {
-    const isUrl = /^https?:\/\//i.test(handleOrUrl);
-    const query: Record<string, string | number> = isUrl
-      ? { url: handleOrUrl }
-      : { handle: handleOrUrl };
+    const query = ytIdentifierQuery(handleOrUrl);
     const raw = await this.request<unknown>('/v1/youtube/channel', query);
     const parsed = ytChannelSchema.safeParse(raw);
     if (!parsed.success) {
@@ -377,11 +407,10 @@ export class ScrapeCreatorsClient {
     opts: { limit?: number } = {},
   ): Promise<YoutubeVideosResult> {
     const limit = opts.limit ?? 12;
-    const isUrl = /^https?:\/\//i.test(channelIdOrHandle);
-    const query: Record<string, string | number> = isUrl
-      ? { url: channelIdOrHandle, limit }
-      : { handle: channelIdOrHandle, limit };
-    const raw = await this.request<unknown>('/v1/youtube/channel/videos', query);
+    // /v1/youtube/channel-videos accepts only `channelId` or `handle` (no `url`).
+    // Resolve a URL to its handle/channelId before calling.
+    const query = ytIdentifierQuery(channelIdOrHandle, { resolveUrl: true });
+    const raw = await this.request<unknown>('/v1/youtube/channel-videos', query);
     const parsed = ytVideosSchema.safeParse(raw);
     if (!parsed.success) {
       this.logger?.warn(
@@ -396,7 +425,7 @@ export class ScrapeCreatorsClient {
       (getProp(pickRecord(getProp(raw, 'data')), 'videos') as unknown[] | undefined) ??
       [];
 
-    const videos: YoutubeVideo[] = itemsRaw.map((item) => {
+    const videos: YoutubeVideo[] = itemsRaw.slice(0, limit).map((item) => {
       const r = pickRecord(item);
       const id =
         asString(getProp(r, 'id')) ??
@@ -409,10 +438,12 @@ export class ScrapeCreatorsClient {
         asString(getProp(r, 'snippet_description')) ??
         '';
       const published =
+        getProp(r, 'publishedTime') ??
         getProp(r, 'published_at') ??
         getProp(r, 'publishedAt') ??
         getProp(r, 'publish_date') ??
-        getProp(r, 'published_time');
+        getProp(r, 'published_time') ??
+        getProp(r, 'publishedTimeText');
       return {
         id,
         published_at_iso: isoFromMaybe(published),
