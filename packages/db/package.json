@@ -27,12 +27,10 @@
   "dependencies": {
     "@nosquare/shared": "workspace:*",
     "@prisma/client": "^5.14.0",
-    "bcryptjs": "^2.4.3",
-    "libsodium-wrappers": "^0.7.13"
+    "bcryptjs": "^2.4.3"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
-    "@types/libsodium-wrappers": "^0.7.14",
     "prisma": "^5.14.0",
     "tsx": "^4.7.2",
     "typescript": "^5.4.5",
