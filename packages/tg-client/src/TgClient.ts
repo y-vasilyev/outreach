@@ -17,6 +17,8 @@ export interface TgClientOptions {
   proxy?: TgProxyConfig;
   /** Optional pre-existing session string used for a specific account id. */
   bootstrap?: TgBootstrapSession;
+  /** Force GramJS to connect to Telegram DCs on port 443 instead of 80. */
+  forcePort443?: boolean;
   /** Optional override (mainly for tests). Defaults to the process singleton. */
   floodGuard?: FloodGuard;
 }
@@ -37,6 +39,7 @@ export class TgClient {
     this.sessions = new SessionManager(opts.creds, opts.sessionLoader, {
       proxy: opts.proxy,
       bootstrap: opts.bootstrap,
+      forcePort443: opts.forcePort443,
     });
     this.defaults = { ...opts.defaultRateLimits };
     this.floodGuard = opts.floodGuard ?? defaultFloodGuard;

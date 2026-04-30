@@ -21,6 +21,10 @@ const EnvZ = z.object({
   TG_PROXY_PASSWORD: z.string().optional(),
   TG_PROXY_SECRET: z.string().optional(),
   TG_PROXY_TIMEOUT_SEC: z.coerce.number().int().min(1).max(120).optional(),
+  TG_PROXY_FORCE_PORT_443: z
+    .enum(['true', 'false', '1', '0'])
+    .optional()
+    .transform((v) => v === 'true' || v === '1'),
   LOG_LEVEL: z.string().default('info'),
   LOG_MESSAGE_BODIES: z.string().default('false'),
 });

@@ -15,10 +15,26 @@ import type {
 export interface SessionManagerOptions {
   proxy?: TgProxyConfig;
   bootstrap?: TgBootstrapSession;
+  /**
+   * Force GramJS to dial Telegram DCs on port 443 instead of the default 80.
+   * Use this when the upstream SOCKS5 proxy blocks low ports (common with
+   * residential rotating proxies that drop port-80 traffic to TG DCs).
+   * GramJS itself only reaches 443 when `useWSS` is on, but `useWSS` is
+   * incompatible with proxies, so we override the port at the session layer.
+   */
+  forcePort443?: boolean;
 }
 
 // We keep GramJS opaque — see CLAUDE.md "Do not let GramJS leak into routes".
 // TODO: tighten types once we settle on a real tg-client API surface.
+interface GramJSSession {
+  save: () => string;
+  dcId?: number;
+  serverAddress?: string;
+  port?: number;
+  setDC?: (dcId: number, serverAddress: string, port: number) => void;
+}
+
 type GramJSClient = {
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
@@ -30,7 +46,7 @@ type GramJSClient = {
     opts: { message: string },
   ) => Promise<unknown>;
   invoke: (request: unknown) => Promise<unknown>;
-  session: { save: () => string };
+  session: GramJSSession;
   sendCode?: (
     apiCreds: { apiId: number; apiHash: string },
     phone: string,
@@ -128,6 +144,16 @@ export class SessionManager {
       this.creds.apiHash,
       proxy ? { connectionRetries: 5, proxy } : { connectionRetries: 5 },
     ) as unknown as GramJSClient;
+
+    // GramJS hardcodes port 80 whenever a proxy is set (useWSS is incompatible
+    // with proxies). When `forcePort443` is requested, override the port on
+    // the underlying session so GramJS dials :443 instead.
+    if (this.opts.forcePort443) {
+      const s = client.session;
+      if (typeof s.setDC === 'function' && typeof s.dcId === 'number' && typeof s.serverAddress === 'string') {
+        s.setDC(s.dcId, s.serverAddress, 443);
+      }
+    }
 
     let isAuthorized = false;
     if (sessionString && sessionString.length > 0) {

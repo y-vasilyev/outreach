@@ -27,6 +27,7 @@ export function getTgClient(): TgClient {
       },
       ...(proxy ? { proxy } : {}),
       ...(bootstrap ? { bootstrap } : {}),
+      ...(env.TG_PROXY_FORCE_PORT_443 ? { forcePort443: true } : {}),
       sessionLoader: {
         load: async (id) => {
           const prisma = getPrisma();
