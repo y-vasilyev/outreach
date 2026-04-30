@@ -55,27 +55,46 @@ export function formatRelative(input: string | Date | null | undefined): string 
   return formatDate(d);
 }
 
-export function formatNumber(n: number | null | undefined): string {
-  if (n === null || n === undefined || Number.isNaN(n)) return '—';
-  return new Intl.NumberFormat('ru-RU').format(n);
+/**
+ * Coerce wire-format numbers to a JS number.
+ *
+ * Prisma's `Decimal` columns serialise to JSON as **strings** by default
+ * (e.g. `"0.42"`, not `0.42`). The wire schema declares them as numbers but
+ * older API responses or ones we haven't fixed yet may still leak strings —
+ * formatters need to be tolerant so they don't crash with
+ * `n.toFixed is not a function`.
+ */
+function toNum(n: number | string | null | undefined): number | null {
+  if (n === null || n === undefined) return null;
+  const v = typeof n === 'number' ? n : Number(n);
+  return Number.isFinite(v) ? v : null;
 }
 
-export function formatCompact(n: number | null | undefined): string {
-  if (n === null || n === undefined || Number.isNaN(n)) return '—';
+export function formatNumber(n: number | string | null | undefined): string {
+  const v = toNum(n);
+  if (v === null) return '—';
+  return new Intl.NumberFormat('ru-RU').format(v);
+}
+
+export function formatCompact(n: number | string | null | undefined): string {
+  const v = toNum(n);
+  if (v === null) return '—';
   return new Intl.NumberFormat('ru-RU', {
     notation: 'compact',
     maximumFractionDigits: 1,
-  }).format(n);
+  }).format(v);
 }
 
-export function formatMoney(n: number | null | undefined): string {
-  if (n === null || n === undefined || Number.isNaN(n)) return '$0.00';
-  return `$${n.toFixed(n < 1 ? 4 : 2)}`;
+export function formatMoney(n: number | string | null | undefined): string {
+  const v = toNum(n);
+  if (v === null) return '$0.00';
+  return `$${v.toFixed(v < 1 ? 4 : 2)}`;
 }
 
-export function formatPct(n: number | null | undefined, digits = 1): string {
-  if (n === null || n === undefined || Number.isNaN(n)) return '—';
-  return `${(n * 100).toFixed(digits)}%`;
+export function formatPct(n: number | string | null | undefined, digits = 1): string {
+  const v = toNum(n);
+  if (v === null) return '—';
+  return `${(v * 100).toFixed(digits)}%`;
 }
 
 export function truncate(s: string | null | undefined, max = 80): string {

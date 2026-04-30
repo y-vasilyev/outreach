@@ -99,11 +99,14 @@ export const agentsService = {
     const prisma = getPrisma();
     const a = await prisma.agentConfig.findUnique({ where: { id }, select: { name: true } });
     if (!a) throw Errors.notFound('agent', id);
-    return prisma.agentRun.findMany({
+    const rows = await prisma.agentRun.findMany({
       where: { agentName: a.name },
       orderBy: { createdAt: 'desc' },
       take: limit,
     });
+    // costUsd is Decimal in the DB and arrives as a string on the wire —
+    // coerce so the UI's `formatMoney` doesn't crash on `.toFixed`.
+    return rows.map((r) => ({ ...r, costUsd: Number(r.costUsd) }));
   },
 
   async test(id: string, input: Record<string, unknown>) {

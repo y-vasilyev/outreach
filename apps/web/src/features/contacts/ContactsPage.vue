@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/vue-query';
 import PageHead from '../../components/PageHead.vue';
 import Tabs from '../../components/Tabs.vue';
 import FilterBar from '../../components/FilterBar.vue';
-import Chip from '../../components/Chip.vue';
+import FilterChipSelect from '../../components/FilterChipSelect.vue';
 import Pill from '../../components/Pill.vue';
 import Tag from '../../components/Tag.vue';
 import ConfBar from '../../components/ConfBar.vue';
@@ -18,10 +18,10 @@ import type { Contact } from './types';
 import type { IconName } from '../../lib/icons';
 
 const tab = ref<'all' | 'new' | 'qualified' | 'contacted' | 'active'>('all');
-const typeFilter = ref<'' | 'tg_username' | 'tg_link' | 'email' | 'website' | 'web_form' | 'other'>('');
-const roleFilter = ref<'' | 'owner' | 'ad_manager' | 'generic' | 'bot' | 'unknown'>('owner');
-const reachFilter = ref<'' | 'reachable_tg' | 'manual' | 'unreachable'>('');
-const minConf = ref<'' | '0.5' | '0.7' | '0.85'>('0.7');
+const typeFilter = ref('');
+const roleFilter = ref('');
+const reachFilter = ref('');
+const minConf = ref('');
 
 const queryKey = computed(() => [
   'contacts',
@@ -47,10 +47,19 @@ const contacts = computed<Contact[]>(() => {
   return d.items;
 });
 
+/**
+ * The DB stores `confidence` as Decimal; some older API responses may surface
+ * it as a string. Coerce defensively so `.toFixed` and arithmetic don't crash.
+ */
+function asConf(v: unknown): number {
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
 const filtered = computed<Contact[]>(() => {
   if (!minConf.value) return contacts.value;
   const m = parseFloat(minConf.value);
-  return contacts.value.filter((c) => c.confidence >= m);
+  return contacts.value.filter((c) => asConf(c.confidence) >= m);
 });
 
 const counts = computed(() => ({
@@ -69,6 +78,35 @@ const tabsList = computed(() => [
   { id: 'active', label: 'В диалоге', count: counts.value.active },
 ]);
 
+const typeOptions = [
+  { value: 'tg_username', label: 'tg_username' },
+  { value: 'tg_link', label: 'tg_link' },
+  { value: 'email', label: 'email' },
+  { value: 'website', label: 'website' },
+  { value: 'web_form', label: 'web_form' },
+  { value: 'other', label: 'other' },
+];
+
+const roleOptions = [
+  { value: 'owner', label: 'owner' },
+  { value: 'ad_manager', label: 'ad_manager' },
+  { value: 'generic', label: 'generic' },
+  { value: 'bot', label: 'bot' },
+  { value: 'unknown', label: 'unknown' },
+];
+
+const reachOptions = [
+  { value: 'reachable_tg', label: 'reachable_tg' },
+  { value: 'manual', label: 'manual' },
+  { value: 'unreachable', label: 'unreachable' },
+];
+
+const confOptions = [
+  { value: '0.5', label: '≥ 0.50' },
+  { value: '0.7', label: '≥ 0.70' },
+  { value: '0.85', label: '≥ 0.85' },
+];
+
 const typeIcon: Record<string, IconName> = {
   tg_username: 'send',
   tg_link: 'link',
@@ -86,7 +124,7 @@ function exportCsv(): void {
       c.type,
       c.value,
       c.roleGuess,
-      c.confidence,
+      asConf(c.confidence),
       c.reachability,
       c.status,
     ].map((s) => String(s).replace(/,/g, ' ')).join(','),
@@ -115,62 +153,10 @@ function exportCsv(): void {
   </PageHead>
   <Tabs :tabs="tabsList" :active="tab" @change="(id) => (tab = id as any)" />
   <FilterBar>
-    <Chip
-      label="Тип"
-      :value="typeFilter || 'любой'"
-      :applied="!!typeFilter"
-      removable
-      @click="
-        typeFilter =
-          typeFilter === '' ? 'tg_username'
-          : typeFilter === 'tg_username' ? 'email'
-          : typeFilter === 'email' ? 'website'
-          : (''  as any)
-      "
-      @remove="typeFilter = ''"
-    />
-    <Chip
-      label="Роль"
-      :value="roleFilter || 'любая'"
-      :applied="!!roleFilter"
-      removable
-      @click="
-        roleFilter =
-          roleFilter === '' ? 'owner'
-          : roleFilter === 'owner' ? 'ad_manager'
-          : roleFilter === 'ad_manager' ? 'generic'
-          : (''  as any)
-      "
-      @remove="roleFilter = ''"
-    />
-    <Chip
-      label="Канал связи"
-      :value="reachFilter || 'любой'"
-      :applied="!!reachFilter"
-      removable
-      @click="
-        reachFilter =
-          reachFilter === '' ? 'reachable_tg'
-          : reachFilter === 'reachable_tg' ? 'manual'
-          : reachFilter === 'manual' ? 'unreachable'
-          : ('' as any)
-      "
-      @remove="reachFilter = ''"
-    />
-    <Chip
-      label="Confidence"
-      :value="minConf ? `≥ ${minConf}` : 'любая'"
-      :applied="!!minConf"
-      tone="warn"
-      removable
-      @click="
-        minConf =
-          minConf === '0.7' ? '0.85'
-          : minConf === '0.85' ? '0.5'
-          : '0.7'
-      "
-      @remove="minConf = ''"
-    />
+    <FilterChipSelect v-model="typeFilter" label="Тип" :options="typeOptions" placeholder="любой" />
+    <FilterChipSelect v-model="roleFilter" label="Роль" :options="roleOptions" placeholder="любая" />
+    <FilterChipSelect v-model="reachFilter" label="Канал связи" :options="reachOptions" placeholder="любой" />
+    <FilterChipSelect v-model="minConf" label="Confidence" :options="confOptions" placeholder="любая" tone="warn" />
     <template #right>
       <span class="muted-2">{{ filtered.length }} из {{ contacts.length }}</span>
     </template>
@@ -223,8 +209,8 @@ function exportCsv(): void {
           </td>
           <td>
             <div style="display: flex; align-items: center; gap: 6px;">
-              <ConfBar :value="c.confidence" />
-              <span class="mono muted-2" style="font-size: 10.5px;">{{ c.confidence.toFixed(2) }}</span>
+              <ConfBar :value="asConf(c.confidence)" />
+              <span class="mono muted-2" style="font-size: 10.5px;">{{ asConf(c.confidence).toFixed(2) }}</span>
             </div>
           </td>
           <td><Pill :state="c.reachability" /></td>

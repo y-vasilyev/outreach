@@ -9,7 +9,7 @@ type Status = z.infer<typeof ContactStatusZ>;
 export const contactsService = {
   async list(filters: Filters & { limit?: number }) {
     const prisma = getPrisma();
-    return prisma.contact.findMany({
+    const rows = await prisma.contact.findMany({
       where: {
         ...(filters.channelId && { channelId: filters.channelId }),
         ...(filters.type && { type: filters.type }),
@@ -29,6 +29,9 @@ export const contactsService = {
       orderBy: { createdAt: 'desc' },
       take: filters.limit ?? 200,
     });
+    // Prisma serialises `Decimal` columns as strings on the wire. Wire
+    // contract (and the UI) expects a number (0..1).
+    return rows.map((r) => ({ ...r, confidence: Number(r.confidence) }));
   },
 
   async update(id: string, patch: { status?: Status; tags?: string[] }) {

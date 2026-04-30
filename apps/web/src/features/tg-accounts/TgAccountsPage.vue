@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import PageHead from '../../components/PageHead.vue';
 import Tabs from '../../components/Tabs.vue';
 import FilterBar from '../../components/FilterBar.vue';
-import Chip from '../../components/Chip.vue';
+import FilterChipSelect from '../../components/FilterChipSelect.vue';
 import Pill from '../../components/Pill.vue';
 import Avatar from '../../components/Avatar.vue';
 import Bar from '../../components/Bar.vue';
@@ -24,7 +24,16 @@ import type { TgAccount } from './types';
 const qc = useQueryClient();
 
 const tab = ref<'all' | 'outreach' | 'parser'>('all');
-const stateFilter = ref<'' | 'active' | 'warmup' | 'cooldown' | 'banned' | 'need_auth'>('');
+const stateFilter = ref('');
+
+const stateOptions = [
+  { value: 'active', label: 'active' },
+  { value: 'warmup', label: 'warmup' },
+  { value: 'cooldown', label: 'cooldown' },
+  { value: 'banned', label: 'banned' },
+  { value: 'need_auth', label: 'need_auth' },
+  { value: 'idle', label: 'idle' },
+];
 
 const formOpen = ref(false);
 const editing = ref<TgAccount | null>(null);
@@ -112,21 +121,7 @@ function dropdownItems(a: TgAccount) {
   </PageHead>
   <Tabs :tabs="tabsList" :active="tab" @change="(id) => (tab = id as any)" />
   <FilterBar>
-    <Chip
-      label="Состояние"
-      :value="stateFilter || 'любое'"
-      :applied="!!stateFilter"
-      removable
-      @click="
-        stateFilter =
-          stateFilter === '' ? 'active'
-          : stateFilter === 'active' ? 'warmup'
-          : stateFilter === 'warmup' ? 'cooldown'
-          : stateFilter === 'cooldown' ? 'need_auth'
-          : ('' as any)
-      "
-      @remove="stateFilter = ''"
-    />
+    <FilterChipSelect v-model="stateFilter" label="Состояние" :options="stateOptions" placeholder="любое" />
     <template #right>
       <span class="muted-2">{{ filtered.length }} из {{ list.length }}</span>
     </template>

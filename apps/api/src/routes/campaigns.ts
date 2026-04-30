@@ -33,4 +33,12 @@ export async function campaignsRoutes(app: FastifyInstance) {
     const params = z.object({ id: z.string() }).parse(req.params);
     return campaignsService.setStatus(params.id, 'paused');
   });
+
+  app.post('/campaigns/:id/preview', async (req) => {
+    const params = z.object({ id: z.string() }).parse(req.params);
+    const body = z
+      .object({ limit: z.number().int().min(1).max(20).default(5) })
+      .parse(req.body ?? {});
+    return campaignsService.preview(params.id, body.limit);
+  });
 }

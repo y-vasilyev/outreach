@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import PageHead from '../../components/PageHead.vue';
 import Tabs from '../../components/Tabs.vue';
 import FilterBar from '../../components/FilterBar.vue';
-import Chip from '../../components/Chip.vue';
+import FilterChipSelect from '../../components/FilterChipSelect.vue';
 import Pill from '../../components/Pill.vue';
 import Tag from '../../components/Tag.vue';
 import Avatar from '../../components/Avatar.vue';
@@ -22,11 +22,28 @@ import type { Channel } from './types';
 
 const qc = useQueryClient();
 
-const tab = ref<'all' | 'scraping' | 'extracted' | 'needs_review' | 'failed'>('all');
+// Tab ids must match `ChannelStatus` enum values that the API accepts.
+type ChannelTab = 'all' | 'new' | 'scraping' | 'extracted' | 'failed';
+const tab = ref<ChannelTab>('all');
 const search = ref('');
-const platformFilter = ref<'' | 'telegram' | 'instagram' | 'youtube'>('');
-const langFilter = ref<'' | 'ru' | 'en'>('ru');
-const minSubs = ref<'' | '1k' | '5k' | '10k'>('5k');
+const platformFilter = ref('');
+const langFilter = ref('');
+const minSubs = ref('');
+
+const platformOptions = [
+  { value: 'telegram', label: 'Telegram' },
+  { value: 'instagram', label: 'Instagram' },
+  { value: 'youtube', label: 'YouTube' },
+];
+const langOptions = [
+  { value: 'ru', label: 'ru' },
+  { value: 'en', label: 'en' },
+];
+const subsOptions = [
+  { value: '1k', label: '≥ 1K' },
+  { value: '5k', label: '≥ 5K' },
+  { value: '10k', label: '≥ 10K' },
+];
 
 const importOpen = ref(false);
 const selected = ref<Channel | null>(null);
@@ -65,9 +82,11 @@ const counts = computed(() => {
   const all = channels.value.length;
   return {
     all,
-    scraping: channels.value.filter((c) => c.status === 'scraping').length,
-    extracted: channels.value.filter((c) => c.status === 'extracted' || c.status === 'ready').length,
-    needs_review: channels.value.filter((c) => c.status === 'needs_review' || c.status === 'new').length,
+    // Match the same `status` filter the API will receive when the tab is
+    // selected — otherwise the badge count and the listing would disagree.
+    new: channels.value.filter((c) => c.status === 'new').length,
+    scraping: channels.value.filter((c) => c.status === 'scraping' || c.status === 'extracting').length,
+    extracted: channels.value.filter((c) => c.status === 'extracted' || c.status === 'ready' || c.status === 'done').length,
     failed: channels.value.filter((c) => c.status === 'failed').length,
   };
 });
@@ -85,9 +104,9 @@ const scrapeAllMut = useMutation({
 
 const tabsList = computed(() => [
   { id: 'all', label: 'Все', count: counts.value.all },
+  { id: 'new', label: 'Новые', count: counts.value.new },
   { id: 'scraping', label: 'Скрейпинг', count: counts.value.scraping },
   { id: 'extracted', label: 'Готовы', count: counts.value.extracted },
-  { id: 'needs_review', label: 'Ревью', count: counts.value.needs_review },
   { id: 'failed', label: 'Ошибки', count: counts.value.failed },
 ]);
 </script>
@@ -107,31 +126,9 @@ const tabsList = computed(() => [
   </PageHead>
   <Tabs :tabs="tabsList" :active="tab" @change="(id) => (tab = id as any)" />
   <FilterBar>
-    <Chip
-      :label="'Платформа'"
-      :value="platformFilter || 'любая'"
-      :applied="!!platformFilter"
-      removable
-      @click="platformFilter = (platformFilter === '' ? 'telegram' : platformFilter === 'telegram' ? 'instagram' : platformFilter === 'instagram' ? 'youtube' : '') as any"
-      @remove="platformFilter = ''"
-    />
-    <Chip
-      label="Язык"
-      :value="langFilter || 'любой'"
-      :applied="!!langFilter"
-      tone="ok"
-      removable
-      @click="langFilter = langFilter === 'ru' ? 'en' : langFilter === 'en' ? '' : 'ru'"
-      @remove="langFilter = ''"
-    />
-    <Chip
-      label="Подписчики"
-      :value="minSubs ? `≥ ${minSubs.toUpperCase()}` : 'любые'"
-      :applied="!!minSubs"
-      removable
-      @click="minSubs = minSubs === '5k' ? '10k' : minSubs === '10k' ? '1k' : '5k'"
-      @remove="minSubs = ''"
-    />
+    <FilterChipSelect v-model="platformFilter" label="Платформа" :options="platformOptions" placeholder="любая" />
+    <FilterChipSelect v-model="langFilter" label="Язык" :options="langOptions" placeholder="любой" tone="ok" />
+    <FilterChipSelect v-model="minSubs" label="Подписчики" :options="subsOptions" placeholder="любые" />
     <template #right>
       <span class="muted-2">{{ filteredChannels.length }} из {{ channels.length }}</span>
     </template>

@@ -3,7 +3,7 @@ import { computed, ref } from 'vue';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import PageHead from '../../components/PageHead.vue';
 import FilterBar from '../../components/FilterBar.vue';
-import Chip from '../../components/Chip.vue';
+import FilterChipSelect from '../../components/FilterChipSelect.vue';
 import Tag from '../../components/Tag.vue';
 import Pill from '../../components/Pill.vue';
 import Icon from '../../components/Icon.vue';
@@ -22,9 +22,21 @@ interface DraftResp {
 
 const qc = useQueryClient();
 
-const typeFilter = ref<'' | 'email' | 'website' | 'web_form' | 'other'>('');
-const statusFilter = ref<'' | 'new' | 'contacted' | 'finished'>('new');
+const typeFilter = ref('');
+const statusFilter = ref('new');
 const selected = ref<Contact | null>(null);
+
+const typeOptions = [
+  { value: 'email', label: 'email' },
+  { value: 'website', label: 'website' },
+  { value: 'web_form', label: 'web_form' },
+  { value: 'other', label: 'other' },
+];
+const statusOptions = [
+  { value: 'new', label: 'new' },
+  { value: 'contacted', label: 'contacted' },
+  { value: 'finished', label: 'finished' },
+];
 
 const queryKey = computed(() => ['contacts-manual', { type: typeFilter.value, status: statusFilter.value }] as const);
 
@@ -76,22 +88,8 @@ async function copy(text: string): Promise<void> {
 <template>
   <PageHead title="Manual outreach" sub="Контакты без TG: email, web-форма, IG. Агент готовит черновик — оператор пишет сам." />
   <FilterBar>
-    <Chip
-      label="Тип"
-      :value="typeFilter || 'любой'"
-      :applied="!!typeFilter"
-      removable
-      @click="typeFilter = typeFilter === '' ? 'email' : typeFilter === 'email' ? 'website' : typeFilter === 'website' ? 'web_form' : '' as any"
-      @remove="typeFilter = ''"
-    />
-    <Chip
-      label="Статус"
-      :value="statusFilter || 'любой'"
-      :applied="!!statusFilter"
-      removable
-      @click="statusFilter = statusFilter === 'new' ? 'contacted' : statusFilter === 'contacted' ? 'finished' : statusFilter === 'finished' ? '' : 'new' as any"
-      @remove="statusFilter = ''"
-    />
+    <FilterChipSelect v-model="typeFilter" label="Тип" :options="typeOptions" placeholder="любой" />
+    <FilterChipSelect v-model="statusFilter" label="Статус" :options="statusOptions" placeholder="любой" />
     <template #right>
       <span class="muted-2">{{ list.length }}</span>
     </template>

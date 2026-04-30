@@ -10,7 +10,7 @@ type Filters = z.infer<typeof ConversationFiltersZ>;
 export const conversationsService = {
   async list(filters: Filters & { limit?: number }) {
     const prisma = getPrisma();
-    return prisma.conversation.findMany({
+    const rows = await prisma.conversation.findMany({
       where: {
         ...(filters.status && { status: filters.status }),
         ...(filters.mode && { mode: filters.mode }),
@@ -20,9 +20,44 @@ export const conversationsService = {
       include: {
         contact: { include: { channel: { select: { handle: true, platform: true, title: true } } } },
         tgAccount: { select: { id: true, label: true } },
+        campaign: { select: { id: true, name: true } },
       },
       orderBy: [{ lastInboundAt: 'desc' }, { createdAt: 'desc' }],
       take: filters.limit ?? 100,
+    });
+
+    if (rows.length === 0) return rows;
+
+    // Per-conversation aggregates (latest message + pending suggestions count)
+    // — kept in two grouped queries instead of N+1 lookups.
+    const ids = rows.map((r) => r.id);
+    const [lastMessages, pendingSuggestions] = await Promise.all([
+      prisma.message.findMany({
+        where: { conversationId: { in: ids } },
+        orderBy: { createdAt: 'desc' },
+        distinct: ['conversationId'],
+        select: { conversationId: true, text: true, createdAt: true, direction: true },
+      }),
+      prisma.suggestion.groupBy({
+        by: ['conversationId'],
+        where: { conversationId: { in: ids }, status: 'pending' },
+        _count: { _all: true },
+      }),
+    ]);
+
+    const lastByConv = new Map<string, (typeof lastMessages)[number]>();
+    for (const m of lastMessages) lastByConv.set(m.conversationId, m);
+    const pendingByConv = new Map<string, number>();
+    for (const s of pendingSuggestions) pendingByConv.set(s.conversationId, s._count._all);
+
+    return rows.map((r) => {
+      const last = lastByConv.get(r.id);
+      return {
+        ...r,
+        lastMessageText: last?.text ?? null,
+        lastMessageAt: last?.createdAt?.toISOString() ?? null,
+        pendingSuggestions: pendingByConv.get(r.id) ?? 0,
+      };
     });
   },
 
