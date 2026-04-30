@@ -2,6 +2,7 @@ import type { Prisma } from '@nosquare/db';
 import { getPrisma } from '@nosquare/db';
 import { getRunner } from '../services/runner.js';
 import { logger } from '../logger.js';
+import { tryAutoApprove } from '../services/auto-approve.js';
 
 interface OpenerOut {
   variants: Array<{ text: string; rationale: string; risk_score: number }>;
@@ -11,14 +12,27 @@ interface SafetyOut {
   risk_score: number;
 }
 
+interface CampaignSchedule {
+  tz?: string;
+  workHours?: { start?: string; end?: string };
+  /** ISO weekday numbers; 0=Sun..6=Sat to match `Date.getDay()`. */
+  days?: number[];
+  maxPerDayPerAccount?: number;
+}
+
 const DISPATCH_INTERVAL_MS = 30_000;
 
 /**
- * Lightweight campaign dispatcher: every N seconds picks up to K qualified contacts
- * for each running campaign whose target filter matches, creates a conversation
- * with the least-loaded outreach account from the pool, generates suggestions
- * via outreach_first_message pipeline, and stores them as pending suggestions
- * (auto-mode could auto-send the top one — left as pending for safety).
+ * Lightweight campaign dispatcher: every N seconds picks up to K qualified
+ * contacts for each running campaign whose target filter matches, creates a
+ * conversation with the least-loaded outreach account from the pool,
+ * generates opener suggestions, and either:
+ *   - leaves them as `pending` for the operator (assisted/manual modes), or
+ *   - auto-sends the top one when conv.mode === 'auto' and SafetyFilter is
+ *     happy (`tryAutoApprove`).
+ *
+ * Schedule (`campaign.schedule`) is honoured: outside `workHours` or on
+ * disallowed weekdays the campaign tick is skipped silently.
  */
 export function startCampaignDispatcher() {
   let stopping = false;
@@ -30,6 +44,12 @@ export function startCampaignDispatcher() {
       const campaigns = await prisma.campaign.findMany({ where: { status: 'running' } });
 
       for (const c of campaigns) {
+        const schedule = (c.schedule ?? {}) as CampaignSchedule;
+        if (!isWithinSchedule(schedule)) {
+          logger.debug({ campaignId: c.id }, 'campaign outside schedule window; skipping tick');
+          continue;
+        }
+
         const filter = c.targetFilter as {
           platforms?: string[];
           roleGuess?: string[];
@@ -80,13 +100,21 @@ export function startCampaignDispatcher() {
 
         accounts.sort((a, b) => a.sentTodayMsg - b.sentTodayMsg);
 
+        // Effective daily cap = stricter of per-account `dailyMsgLimit` and
+        // per-campaign `schedule.maxPerDayPerAccount`. Either field acts
+        // alone if the other is missing.
+        const campaignCap = schedule.maxPerDayPerAccount;
+
         const runner = getRunner();
         for (let i = 0; i < candidates.length; i++) {
           const contact = candidates[i];
           if (!contact) continue;
           const acct = accounts[i % accounts.length];
           if (!acct) continue;
-          if (acct.sentTodayMsg >= acct.dailyMsgLimit) continue;
+          const cap = campaignCap
+            ? Math.min(acct.dailyMsgLimit, campaignCap)
+            : acct.dailyMsgLimit;
+          if (acct.sentTodayMsg >= cap) continue;
 
           const conv = await prisma.conversation.upsert({
             where: { tgAccountId_contactId: { tgAccountId: acct.id, contactId: contact.id } },
@@ -108,6 +136,13 @@ export function startCampaignDispatcher() {
               campaign: { goal_text: c.goalText, value_prop: c.valueProp },
             }, { conversationId: conv.id, campaignId: c.id, contactId: contact.id });
 
+            // Track the highest-scoring variant after the safety loop, so
+            // auto-approve sends the BEST one rather than the first to
+            // pass safety.
+            let bestSuggestionId: string | null = null;
+            let bestScore = 0;
+            let bestText = '';
+
             for (const v of opener.variants) {
               const safety = await runner.run<SafetyOut>('safety_filter', {
                 draft: v.text,
@@ -116,21 +151,40 @@ export function startCampaignDispatcher() {
                 campaign: { name: c.name },
               }, { conversationId: conv.id });
               if (!safety.allow) continue;
-              await prisma.suggestion.create({
+              const score = 1 - safety.risk_score;
+              const sug = await prisma.suggestion.create({
                 data: {
                   conversationId: conv.id,
                   agentName: 'opening_composer',
                   text: v.text,
                   rationale: v.rationale,
-                  score: 1 - safety.risk_score,
+                  score,
                   status: 'pending',
                 },
               });
+              if (score > bestScore) {
+                bestScore = score;
+                bestSuggestionId = sug.id;
+                bestText = v.text;
+              }
             }
+
             await prisma.contact.update({
               where: { id: contact.id },
               data: { status: 'contacted' },
             });
+
+            // Auto-mode: when the conversation is `auto`-mode and the top
+            // suggestion is high-confidence + low-risk, send it without
+            // waiting for an operator click.
+            if (bestSuggestionId) {
+              await tryAutoApprove({
+                conversationId: conv.id,
+                suggestionId: bestSuggestionId,
+                text: bestText,
+                score: bestScore,
+              });
+            }
           } catch (e) {
             logger.warn(
               { campaignId: c.id, contactId: contact.id, err: (e as Error).message },
@@ -151,4 +205,47 @@ export function startCampaignDispatcher() {
       clearInterval(handle);
     },
   };
+}
+
+/**
+ * Returns true when the current wall-clock time falls inside `schedule.days`
+ * AND `schedule.workHours`, both interpreted in `schedule.tz`.
+ *
+ * Missing fields = "no constraint": an empty schedule means "always on"
+ * (preserves the prior behaviour for unscheduled campaigns). Time strings
+ * must be `HH:MM` 24-hour format.
+ *
+ * Time-zone resolution uses `Intl.DateTimeFormat` with a numeric hour/minute
+ * formatter — no third-party tz library needed.
+ */
+function isWithinSchedule(s: CampaignSchedule): boolean {
+  const tz = s.tz || 'UTC';
+  const now = new Date();
+
+  if (Array.isArray(s.days) && s.days.length > 0) {
+    const dayName = new Intl.DateTimeFormat('en-US', {
+      weekday: 'short',
+      timeZone: tz,
+    }).format(now);
+    const map: Record<string, number> = {
+      Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
+    };
+    const wd = map[dayName] ?? -1;
+    if (!s.days.includes(wd)) return false;
+  }
+
+  if (s.workHours?.start && s.workHours.end) {
+    const fmt = new Intl.DateTimeFormat('en-GB', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone: tz,
+    });
+    const parts = fmt.formatToParts(now);
+    const h = parts.find((p) => p.type === 'hour')?.value ?? '00';
+    const m = parts.find((p) => p.type === 'minute')?.value ?? '00';
+    const cur = `${h}:${m}`;
+    if (cur < s.workHours.start || cur >= s.workHours.end) return false;
+  }
+  return true;
 }
