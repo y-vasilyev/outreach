@@ -1,6 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { ContactFiltersZ, ContactStatusZ, RoleGuessZ, ContactTypeZ } from '@nosquare/shared';
+import {
+  ContactBulkCreateInputZ,
+  ContactCreateInputZ,
+  ContactFiltersZ,
+  ContactStatusZ,
+  ContactTypeZ,
+  RoleGuessZ,
+} from '@nosquare/shared';
 import { contactsService } from '../services/contacts.js';
 
 export async function contactsRoutes(app: FastifyInstance) {
@@ -9,6 +16,28 @@ export async function contactsRoutes(app: FastifyInstance) {
   app.get('/contacts', async (req) => {
     const q = ContactFiltersZ.parse(req.query);
     return contactsService.list(q);
+  });
+
+  /**
+   * Operator-driven manual create. The contact is stamped as
+   * `extractedBy='manual'` (so the contact-extract worker won't clobber it
+   * later) and gets a default confidence of 1.0.
+   */
+  app.post('/contacts', async (req, reply) => {
+    const input = ContactCreateInputZ.parse(req.body);
+    const row = await contactsService.create(input);
+    reply.code(201);
+    return row;
+  });
+
+  /**
+   * Bulk variant. Accepts a single channelId + free-form lines (auto-detect)
+   * or structured items. Tolerant: dedupes against existing rows on the same
+   * channel, returns `{ accepted, skipped, created, errors }`.
+   */
+  app.post('/contacts/bulk', async (req) => {
+    const input = ContactBulkCreateInputZ.parse(req.body);
+    return contactsService.bulkCreate(input);
   });
 
   app.patch('/contacts/:id', async (req) => {

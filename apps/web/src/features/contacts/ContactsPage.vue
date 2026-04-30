@@ -13,6 +13,7 @@ import Spinner from '../../components/Spinner.vue';
 import EmptyState from '../../components/EmptyState.vue';
 import Dropdown from '../../components/Dropdown.vue';
 import AddToCampaignDialog from './AddToCampaignDialog.vue';
+import ContactCreateDialog from './ContactCreateDialog.vue';
 import ContactEditDrawer from './ContactEditDrawer.vue';
 import StartConversationDialog from './StartConversationDialog.vue';
 import { api } from '../../lib/api';
@@ -32,6 +33,7 @@ const minConf = ref('');
 
 const selectedIds = ref<Set<string>>(new Set());
 const addToCampaignOpen = ref(false);
+const createOpen = ref(false);
 const editingContact = ref<Contact | null>(null);
 const startChatFor = ref<Contact | null>(null);
 
@@ -294,6 +296,9 @@ function exportCsv(): void {
         <Icon name="x" :size="12" /><span>Снять выделение</span>
       </button>
       <button class="btn" @click="exportCsv"><Icon name="upload" :size="12" /><span>Экспорт CSV</span></button>
+      <button class="btn" @click="createOpen = true">
+        <Icon name="plus" :size="12" /><span>Добавить</span>
+      </button>
       <button
         class="btn primary"
         :disabled="selectedIds.size === 0"
@@ -407,6 +412,15 @@ function exportCsv(): void {
       clearSelection();
       qc.invalidateQueries({ queryKey: ['contacts'] });
       qc.invalidateQueries({ queryKey: ['campaigns'] });
+    }"
+  />
+
+  <ContactCreateDialog
+    :open="createOpen"
+    @close="createOpen = false"
+    @done="() => {
+      createOpen = false;
+      qc.invalidateQueries({ queryKey: ['contacts'] });
     }"
   />
 
