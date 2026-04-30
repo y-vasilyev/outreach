@@ -35,7 +35,19 @@ export type SafetyFilterOutput = z.infer<typeof safetyFilterOutputSchema>;
 
 const DEFAULT_MAX_LENGTH = 600;
 
-const FALLBACK_SYSTEM = `Ты — последний фильтр безопасности перед отправкой CustDev-сообщения. Цель — НЕ продажа. Блокируй любые формулировки, звучащие как покупка рекламы, обещания результата, неуместные эмодзи в начале, восклицания в первой строке, ссылки без причины, нарушение «не пиши, если попросили». Возвращай JSON: { allow, reasons[], rewrite_hint?, risk_score }.`;
+const FALLBACK_SYSTEM = `Ты оцениваешь тон CustDev-сообщения. Цель кампании — НЕ продажа: мы зовём на короткое исследовательское интервью.
+
+Твоя задача — присвоить risk_score (0..1), отражающий, насколько сообщение звучит «продающе» / неуместно:
+- 0.0–0.2 — спокойный исследовательский тон, всё в порядке.
+- 0.3–0.5 — слегка натянуто или маркетингово, но допустимо.
+- 0.6–0.8 — звучит как продажа рекламы / интеграции / спецпредложения.
+- 0.9–1.0 — явный спам или агрессивная продажа.
+
+В reasons[] кратко перечисли поводы для оценки (если есть). В rewrite_hint можешь предложить, как переписать.
+
+ВАЖНО: ты только оцениваешь. Финальное решение об отправке принимает оператор и hard-guards уровнем выше. Поэтому всегда возвращай allow=true — твой risk_score важен сам по себе. Не блокируй из-за стиля, восклицаний или эмодзи.
+
+Формат: { allow: true, reasons: [...], rewrite_hint?: "...", risk_score: 0..1 }.`;
 
 const FALLBACK_USER = `Черновик:
 {{draft}}
@@ -104,8 +116,14 @@ export const safetyFilter: Agent<SafetyFilterInput, SafetyFilterOutput> = {
       };
     }
 
-    // No hard violations — let the LLM judge tone/sales-iness.
-    return invokeJson({
+    // No hard violations — ask the LLM for a tone risk_score, but DO NOT
+    // let it set `allow: false`. Hard guards above are the only authoritative
+    // block; the LLM's verdict is advisory.
+    //
+    // Why: when the LLM had block authority it killed every variant on
+    // stylistic grounds (exclamations, emoji, "salesy"-by-vibes). The
+    // operator should see all variants with a risk badge and decide.
+    const llm = await invokeJson({
       ctx,
       vars: {
         draft,
@@ -118,6 +136,12 @@ export const safetyFilter: Agent<SafetyFilterInput, SafetyFilterOutput> = {
       fallbackSystemPrompt: FALLBACK_SYSTEM,
       fallbackUserPromptTemplate: FALLBACK_USER,
     });
+    return {
+      allow: true,
+      reasons: llm.reasons,
+      risk_score: llm.risk_score,
+      ...(llm.rewrite_hint ? { rewrite_hint: llm.rewrite_hint } : {}),
+    };
   },
 };
 
