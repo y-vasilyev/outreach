@@ -226,15 +226,26 @@ function reset(): void {
         </div>
       </div>
 
-      <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 22px 22px;">
-        <div class="muted-2" style="font-size: 11px;">Обновлён: {{ formatDateTime(agent.updatedAt) }}</div>
-        <div style="display: flex; gap: 6px;">
-          <button class="btn" @click="reset"><Icon name="refresh" :size="12" /><span>Сбросить</span></button>
-          <button class="btn primary" :disabled="saveMut.isPending.value" @click="saveMut.mutate()">
-            <span v-if="saveMut.isPending.value" class="spinner" />
-            <Icon v-else name="check" :size="12" /><span>Сохранить новую версию</span>
-          </button>
-        </div>
+    </div>
+    <!-- Pinned action bar: lives outside `.cards` so it stays visible when
+         the form scrolls. Only shown on the config tab. -->
+    <div v-if="tab === 'config'" class="page-action-bar">
+      <div class="muted-2" style="font-size: 11px;">
+        Обновлён: {{ formatDateTime(agent.updatedAt) }}
+      </div>
+      <div class="actions">
+        <button class="btn" @click="reset">
+          <Icon name="refresh" :size="12" /><span>Сбросить</span>
+        </button>
+        <button
+          class="btn primary"
+          :disabled="saveMut.isPending.value"
+          @click="saveMut.mutate()"
+        >
+          <span v-if="saveMut.isPending.value" class="spinner" />
+          <Icon v-else name="check" :size="12" />
+          <span>Сохранить новую версию</span>
+        </button>
       </div>
     </div>
 

@@ -562,12 +562,41 @@ table.tbl tbody tr.selected td { background: var(--accent-bg); }
 .minibar.ok > i { background: var(--ok); }
 .minibar.warn > i { background: var(--warn); }
 
-/* Card grid for screens not using tables */
+/* Card grid for screens not using tables.
+ *
+ * `.main` (the page chrome above) is `overflow: hidden` because the Inbox
+ * uses internal 3-pane scroll. For card-grid pages we want the page itself
+ * to scroll instead — otherwise long forms (Agent config, Campaign builder)
+ * cut off the action buttons at the bottom of the viewport. `flex: 1` plus
+ * `min-height: 0` makes `.cards` take the remaining vertical space and
+ * scroll its content within it.
+ */
 .cards {
   display: grid;
   gap: 12px;
   padding: 14px 22px 22px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
+
+/**
+ * Persistent action bar pinned to the bottom of a page. Use AFTER `.cards`
+ * inside `.main` — `.cards` fills the remaining space, this strip stays
+ * visible. Save / Reset / "Запустить" buttons live here so they don't
+ * disappear off-screen on long forms.
+ */
+.page-action-bar {
+  flex: none;
+  padding: 10px 22px;
+  border-top: 1px solid var(--line);
+  background: var(--paper-2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.page-action-bar .actions { display: flex; gap: 6px; align-items: center; }
 
 .card {
   border: 1px solid var(--line);
