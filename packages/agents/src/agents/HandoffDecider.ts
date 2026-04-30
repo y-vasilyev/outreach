@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import type { Agent } from '../types.js';
 import { invokeJson, readParams } from './_runtime.js';
-import { ConfidenceCoerced } from './_coerce.js';
+import { ConfidenceCoerced, HandoffActionCoerced, UrgencyCoerced } from './_coerce.js';
 
 import { INTENTS } from './IntentClassifier.js';
 
@@ -24,9 +24,13 @@ export const handoffDeciderInputSchema = z.object({
 });
 
 export const handoffDeciderOutputSchema = z.object({
-  action: z.enum(['ai_continue', 'ai_suggest_only', 'operator_now']),
+  // Coerce both fields — the LLM regularly invents action words
+  // (`continue_dialog`, `escalate`, …) and urgency labels (`urgent`,
+  // `medium`, Russian variants). Tolerant mappers translate the obvious
+  // synonyms; truly unknown values still fall through to a Zod error.
+  action: HandoffActionCoerced,
   reason: z.string(),
-  urgency: z.enum(['low', 'normal', 'high']),
+  urgency: UrgencyCoerced,
 });
 
 export type HandoffDeciderInput = z.infer<typeof handoffDeciderInputSchema>;

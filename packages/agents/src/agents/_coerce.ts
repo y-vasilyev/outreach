@@ -95,6 +95,77 @@ export const LengthCoerced = z.preprocess((v) => {
 }, LengthEnum);
 
 /**
+ * Handoff action enum + tolerant coercer. The LLM tends to invent its own
+ * action vocabulary (`continue_dialog`, `proceed`, `escalate`, `human` …)
+ * even when the system prompt lists the exact tokens. Map common
+ * synonyms to the canonical three so a perfectly reasonable response
+ * doesn't waste a retry.
+ */
+export const HandoffActionEnum = z.enum(['ai_continue', 'ai_suggest_only', 'operator_now']);
+
+export const HandoffActionCoerced = z.preprocess((v) => {
+  if (typeof v !== 'string') return v;
+  const s = v.toLowerCase().trim();
+  if (s === 'ai_continue' || s === 'ai_suggest_only' || s === 'operator_now') return s;
+  // Operator escalation synonyms first — they're the safest to over-trigger.
+  if (
+    s.includes('operator') ||
+    s.includes('human') ||
+    s.includes('escalat') ||
+    s.includes('handoff') ||
+    s.includes('hand off') ||
+    s.includes('handover') ||
+    s.includes('операт') ||
+    s.includes('передат') ||
+    s.includes('эскал') ||
+    s.includes('челов')
+  ) {
+    return 'operator_now';
+  }
+  // Suggestion-only synonyms.
+  if (
+    s.includes('suggest') ||
+    s.includes('assist') ||
+    s.includes('подсказ') ||
+    s.includes('assisted') ||
+    s.includes('hint')
+  ) {
+    return 'ai_suggest_only';
+  }
+  // Anything that reads as "keep going" or "continue" defaults to ai_continue.
+  if (
+    s.includes('continue') ||
+    s.includes('proceed') ||
+    s.includes('keep') ||
+    s === 'ai' ||
+    s === 'auto' ||
+    s.includes('продолж') ||
+    s.includes('диалог') ||
+    s.includes('авто')
+  ) {
+    return 'ai_continue';
+  }
+  return v;
+}, HandoffActionEnum);
+
+/**
+ * Urgency enum + tolerant coercer. Same story — models emit synonyms.
+ */
+export const UrgencyEnum = z.enum(['low', 'normal', 'high']);
+
+export const UrgencyCoerced = z.preprocess((v) => {
+  if (typeof v !== 'string') return v;
+  const s = v.toLowerCase().trim();
+  if (s === 'low' || s === 'normal' || s === 'high') return s;
+  if (s.includes('urgent') || s.includes('срочн') || s.includes('критич') || s === 'critical')
+    return 'high';
+  if (s.includes('низк') || s.includes('небольш') || s.includes('minor')) return 'low';
+  if (s.includes('средн') || s.includes('обычн') || s === 'medium' || s === 'med' || s === 'mid')
+    return 'normal';
+  return v;
+}, UrgencyEnum);
+
+/**
  * Integer score in `[min..max]`. Accepts qualitative strings (low/medium/
  * high/etc.) and numeric strings; clamps and rounds. Used by quality-review
  * style scoring agents that ask the LLM for a 1..5 rating.
