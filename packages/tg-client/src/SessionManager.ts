@@ -486,8 +486,8 @@ export class SessionManager {
                 NewMessage: new (params?: { incoming?: boolean; outgoing?: boolean }) => unknown;
               };
               gramJsBuilder = new events.NewMessage({ incoming: true, outgoing: false });
-              gramJsHandler = async (event: unknown) => {
-                const msg = await mapIncomingEvent(event, tgAccountId);
+              gramJsHandler = (event: unknown) => {
+                const msg = mapIncomingEvent(event, tgAccountId);
                 if (!msg) return;
                 for (const sub of incomingSubs) {
                   try {
@@ -544,10 +544,7 @@ interface SenderEntity {
   lastName?: string;
 }
 
-async function mapIncomingEvent(
-  event: unknown,
-  tgAccountId: string,
-): Promise<IncomingMessage | null> {
+function mapIncomingEvent(event: unknown, tgAccountId: string): IncomingMessage | null {
   const e = event as {
     message?: {
       id?: number | { toString(): string };
@@ -561,10 +558,6 @@ async function mapIncomingEvent(
       date?: number;
       sender?: SenderEntity | null;
       _sender?: SenderEntity | null;
-      // GramJS exposes a getSender() method that resolves the sender User
-      // from the entity cache. It's the reliable path when the sync
-      // properties aren't populated yet.
-      getSender?: () => Promise<SenderEntity | null | undefined>;
     };
     _sender?: SenderEntity | null;
     isPrivate?: boolean;
@@ -597,17 +590,12 @@ async function mapIncomingEvent(
     ? new Date(dateNum * 1000).toISOString()
     : new Date().toISOString();
   // Sender entity hangs off the message in several places depending on
-  // the GramJS version. Try sync getters first, then await getSender()
-  // which resolves from the entity cache populated by the same Updates
-  // envelope (so it doesn't need an `access_hash` round-trip).
-  let sender: SenderEntity | null | undefined = m.sender ?? m._sender ?? e._sender;
-  if (!sender && typeof m.getSender === 'function') {
-    try {
-      sender = await m.getSender();
-    } catch {
-      /* entity cache miss — fall back to undefined sender below */
-    }
-  }
+  // the GramJS version. We deliberately stay sync here — making the
+  // handler async (so we could `await m.getSender()`) silently broke
+  // event delivery in this GramJS build. If the inline sender is
+  // missing we fall through with no profile fields; the worker has its
+  // own backfill path.
+  const sender: SenderEntity | null | undefined = m.sender ?? m._sender ?? e._sender;
   const fromUsername =
     typeof sender?.username === 'string' && sender.username ? sender.username : undefined;
   const fromFirstName =
