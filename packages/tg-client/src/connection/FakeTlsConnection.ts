@@ -153,18 +153,23 @@ export async function loadFakeTlsConnectionClass(): Promise<unknown> {
 
   /**
    * Padded Intermediate transport.
-   *   - obfuscation connection_type (tag in the 64-byte handshake): dddddddd
+   *   - obfuscation connection_type (read by GramJS' MTProxyIO from the
+   *     class's *static* obfuscateTag field): dddddddd
    *   - per-packet wire format: [len: u32 LE] [data + random pad 0..15]
-   *     where `len` = data.length + pad.length (multiple of 4, ≤ 2^31).
+   *     where `len` = data.length + pad.length (≤ 2^31).
    */
   class PaddedIntermediatePacketCodec extends (PacketCodec as unknown as new (
     ...args: unknown[]
   ) => { tag?: Buffer; obfuscateTag?: Buffer }) {
+    static tag: Buffer | undefined = undefined;
+    static obfuscateTag: Buffer = Buffer.from('dddddddd', 'hex');
     constructor(props: unknown) {
       super(props);
-      // No separate transport tag; connection_type inside obfuscation greeting carries it.
-      this.tag = undefined;
-      this.obfuscateTag = Buffer.from('dddddddd', 'hex');
+      // GramJS' MTProxyIO reads `this._packetClass.obfuscateTag` (static).
+      // Other parts of GramJS read instance `this.tag` / `this.obfuscateTag`,
+      // so mirror them here for safety.
+      this.tag = PaddedIntermediatePacketCodec.tag;
+      this.obfuscateTag = PaddedIntermediatePacketCodec.obfuscateTag;
     }
     encodePacket(data: Buffer): Buffer {
       const padLen = Math.floor(Math.random() * 16); // 0..15
@@ -172,13 +177,8 @@ export async function loadFakeTlsConnectionClass(): Promise<unknown> {
       const out = Buffer.alloc(4 + totalLen);
       out.writeUInt32LE(totalLen, 0);
       data.copy(out, 4);
-      if (padLen > 0) {
-        // crypto.randomBytes is fine but Math.random here is acceptable —
-        // Telegram only requires the pad to be unpredictable to a passive
-        // observer, and the bytes are encrypted by the obfuscation layer.
-        for (let i = 0; i < padLen; i++) {
-          out[4 + data.length + i] = Math.floor(Math.random() * 256);
-        }
+      for (let i = 0; i < padLen; i++) {
+        out[4 + data.length + i] = Math.floor(Math.random() * 256);
       }
       return out;
     }
