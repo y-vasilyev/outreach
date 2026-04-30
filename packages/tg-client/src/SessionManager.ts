@@ -1,0 +1,582 @@
+import { AppError } from '@nosquare/shared/errors';
+import { floodGuard } from './FloodGuard.js';
+import type {
+  RecentPost,
+  ResolvedChannel,
+  ResolvedUser,
+  SendMessageResult,
+  TelegramClientHandle,
+  TgAccountStatus,
+  TgCredentials,
+} from './types.js';
+
+// We keep GramJS opaque — see CLAUDE.md "Do not let GramJS leak into routes".
+// TODO: tighten types once we settle on a real tg-client API surface.
+type GramJSClient = {
+  connect: () => Promise<void>;
+  disconnect: () => Promise<void>;
+  getMe: () => Promise<unknown>;
+  getEntity: (target: unknown) => Promise<unknown>;
+  getMessages: (target: unknown, opts: { limit: number }) => Promise<unknown>;
+  sendMessage: (
+    target: unknown,
+    opts: { message: string },
+  ) => Promise<unknown>;
+  invoke: (request: unknown) => Promise<unknown>;
+  session: { save: () => string };
+  sendCode?: (
+    apiCreds: { apiId: number; apiHash: string },
+    phone: string,
+  ) => Promise<{ phoneCodeHash: string }>;
+};
+
+export interface SessionLoader {
+  /** Returns decrypted session string, or null if not yet authorized. */
+  load(tgAccountId: string): Promise<string | null>;
+  save(tgAccountId: string, sessionString: string): Promise<void>;
+  markStatus(tgAccountId: string, status: TgAccountStatus): Promise<void>;
+  setCooldownUntil(tgAccountId: string, until: Date | null): Promise<void>;
+}
+
+interface CachedClient {
+  handle: TelegramClientHandle;
+  client: GramJSClient | null;
+}
+
+/**
+ * Holds long-lived `TelegramClient` instances per `tgAccountId`. One client
+ * per account: GramJS is not safe to share across logical sessions, but a
+ * single account multiplexes fine.
+ */
+export class SessionManager {
+  private readonly cache = new Map<string, CachedClient>();
+  private readonly pending = new Map<string, Promise<TelegramClientHandle>>();
+
+  constructor(
+    private readonly creds: TgCredentials,
+    private readonly loader: SessionLoader,
+  ) {}
+
+  async getClient(tgAccountId: string): Promise<TelegramClientHandle> {
+    const cached = this.cache.get(tgAccountId);
+    if (cached) return cached.handle;
+
+    const inFlight = this.pending.get(tgAccountId);
+    if (inFlight) return inFlight;
+
+    const promise = this.create(tgAccountId).finally(() => {
+      this.pending.delete(tgAccountId);
+    });
+    this.pending.set(tgAccountId, promise);
+    return promise;
+  }
+
+  async invalidate(tgAccountId: string): Promise<void> {
+    const cached = this.cache.get(tgAccountId);
+    this.cache.delete(tgAccountId);
+    if (!cached?.client) return;
+    try {
+      await cached.client.disconnect();
+    } catch {
+      /* swallow — disconnect is best-effort */
+    }
+  }
+
+  private async create(tgAccountId: string): Promise<TelegramClientHandle> {
+    if (!this.creds.apiId || !this.creds.apiHash) {
+      throw new AppError(
+        'CONFIG',
+        'TG_API_ID / TG_API_HASH are not configured',
+        500,
+      );
+    }
+
+    const sessionString = await this.loader.load(tgAccountId);
+
+    // Lazy GramJS import — only the call-sites that actually need a live
+    // session pay the dep cost. Unit tests of unrelated parts don't load it.
+    const tg = await loadGramJS();
+
+    const session = new tg.StringSession(sessionString ?? '');
+    const client = new tg.TelegramClient(
+      session,
+      this.creds.apiId,
+      this.creds.apiHash,
+      { connectionRetries: 5 },
+    ) as unknown as GramJSClient;
+
+    let isAuthorized = false;
+    if (sessionString && sessionString.length > 0) {
+      try {
+        await client.connect();
+        await client.getMe(); // healthcheck
+        isAuthorized = true;
+      } catch (err) {
+        // Connection failed or session was revoked.
+        await this.loader.markStatus(tgAccountId, 'need_auth');
+        try {
+          await client.disconnect();
+        } catch {
+          /* ignore */
+        }
+        throw mapTgError(err, tgAccountId, this.loader);
+      }
+    } else {
+      // No session yet — keep the client object around so the caller can
+      // drive the auth flow via `startLogin`/`confirmCode`/`confirmPassword`.
+      try {
+        await client.connect();
+      } catch (err) {
+        throw mapTgError(err, tgAccountId, this.loader);
+      }
+    }
+
+    const handle = this.buildHandle(tgAccountId, client, isAuthorized);
+    this.cache.set(tgAccountId, { handle, client });
+    return handle;
+  }
+
+  private buildHandle(
+    tgAccountId: string,
+    client: GramJSClient,
+    isAuthorized: boolean,
+  ): TelegramClientHandle {
+    const loader = this.loader;
+    const creds = this.creds;
+    // Per-handle login state shared between startLogin/confirmCode/confirmPassword.
+    const loginState: { phone?: string; phoneCodeHash?: string } = {};
+    const requireAuth = (): void => {
+      if (!handle.isAuthorized) {
+        throw new AppError(
+          'UNAUTHORIZED',
+          'TG account requires login',
+          401,
+        );
+      }
+    };
+
+    const wrap = async <T>(op: () => Promise<T>): Promise<T> => {
+      try {
+        return await op();
+      } catch (err) {
+        throw mapTgError(err, tgAccountId, loader);
+      }
+    };
+
+    const handle: TelegramClientHandle = {
+      tgAccountId,
+      isAuthorized,
+      client,
+
+      async getMe() {
+        requireAuth();
+        return wrap(async () => {
+          const me = (await client.getMe()) as {
+            id?: { toString(): string };
+            username?: string;
+          };
+          return {
+            id: me?.id ? me.id.toString() : '',
+            username: me?.username,
+          };
+        });
+      },
+
+      async resolveChannel(handleStr: string) {
+        requireAuth();
+        return wrap(async () => {
+          const tg = await loadGramJS();
+          const entity = (await client.getEntity(handleStr)) as Record<
+            string,
+            unknown
+          >;
+
+          const full = (await client.invoke(
+            new tg.Api.channels.GetFullChannel({
+              channel: entity as unknown as never,
+            }),
+          )) as {
+            fullChat?: {
+              about?: string;
+              participantsCount?: number;
+              linkedChatId?: { toString(): string } | null;
+            };
+            chats?: Array<Record<string, unknown>>;
+          };
+
+          const fullChat = full.fullChat ?? {};
+          const id = stringifyBigInt(entity.id);
+          const accessHash = stringifyBigInt(entity.accessHash);
+          const title =
+            typeof entity.title === 'string' ? entity.title : '';
+          const username =
+            typeof entity.username === 'string' ? entity.username : handleStr;
+
+          let linkedChat: ResolvedChannel['linkedChat'];
+          const linkedId = fullChat.linkedChatId;
+          if (linkedId && full.chats?.length) {
+            const linkedRaw = full.chats.find(
+              (c) => stringifyBigInt(c.id) === linkedId.toString(),
+            );
+            if (linkedRaw) {
+              linkedChat = {
+                id: stringifyBigInt(linkedRaw.id),
+                accessHash: stringifyBigInt(linkedRaw.accessHash),
+                handle:
+                  typeof linkedRaw.username === 'string'
+                    ? linkedRaw.username
+                    : undefined,
+              };
+            }
+          }
+
+          const resolved: ResolvedChannel = {
+            id,
+            accessHash,
+            handle: username,
+            title,
+            about: fullChat.about ?? '',
+            participantsCount: fullChat.participantsCount,
+            linkedChat,
+            raw: full,
+          };
+          return resolved;
+        });
+      },
+
+      async getRecentPosts(handleStr: string, limit: number) {
+        requireAuth();
+        return wrap(async () => {
+          const messages = (await client.getMessages(handleStr, {
+            limit,
+          })) as Array<Record<string, unknown>>;
+          return messages.map((m) => mapMessage(m));
+        });
+      },
+
+      async resolveUser(usernameOrId: string) {
+        requireAuth();
+        return wrap(async () => {
+          const entity = (await client.getEntity(usernameOrId)) as Record<
+            string,
+            unknown
+          >;
+          const resolved: ResolvedUser = {
+            id: stringifyBigInt(entity.id),
+            accessHash: stringifyBigInt(entity.accessHash),
+            username:
+              typeof entity.username === 'string'
+                ? entity.username
+                : undefined,
+            firstName:
+              typeof entity.firstName === 'string'
+                ? entity.firstName
+                : undefined,
+            lastName:
+              typeof entity.lastName === 'string'
+                ? entity.lastName
+                : undefined,
+            isBot: entity.bot === true,
+            raw: entity,
+          };
+          return resolved;
+        });
+      },
+
+      async sendMessage(toUsernameOrId: string, text: string) {
+        requireAuth();
+        if (floodGuard.isCoolingDown(tgAccountId)) {
+          const until = floodGuard.cooldownUntil(tgAccountId);
+          throw new AppError(
+            'RATE_LIMITED',
+            `Account is in FloodWait cooldown${
+              until ? ` until ${new Date(until).toISOString()}` : ''
+            }`,
+            429,
+          );
+        }
+        return wrap(async () => {
+          const result = (await client.sendMessage(toUsernameOrId, {
+            message: text,
+          })) as { id?: number | { toString(): string } };
+          const tgMsgId =
+            typeof result?.id === 'number'
+              ? String(result.id)
+              : stringifyBigInt(result?.id);
+          return {
+            tgMsgId,
+            sentAt: new Date().toISOString(),
+          } satisfies SendMessageResult;
+        });
+      },
+
+      async startLogin(phone: string) {
+        return wrap(async () => {
+          if (typeof client.sendCode !== 'function') {
+            throw new AppError(
+              'INTERNAL',
+              'Underlying client does not support sendCode',
+              500,
+            );
+          }
+          const res = await client.sendCode(
+            { apiId: creds.apiId, apiHash: creds.apiHash },
+            phone,
+          );
+          loginState.phone = phone;
+          loginState.phoneCodeHash = res.phoneCodeHash;
+          return { phoneCodeHash: res.phoneCodeHash };
+        });
+      },
+
+      async confirmCode(phone, phoneCodeHash, code) {
+        return wrap(async () => {
+          const tg = await loadGramJS();
+          try {
+            await client.invoke(
+              new tg.Api.auth.SignIn({
+                phoneNumber: phone,
+                phoneCodeHash,
+                phoneCode: code,
+              }),
+            );
+            const sessionString = client.session.save();
+            handle.isAuthorized = true;
+            await loader.save(tgAccountId, sessionString);
+            await loader.markStatus(tgAccountId, 'idle');
+            loginState.phone = phone;
+            loginState.phoneCodeHash = phoneCodeHash;
+            return { ok: true, needs2FA: false, sessionString };
+          } catch (err) {
+            const e = err as { message?: string; errorMessage?: string };
+            const msg = e?.message ?? e?.errorMessage ?? '';
+            if (/SESSION_PASSWORD_NEEDED/i.test(msg)) {
+              loginState.phone = phone;
+              loginState.phoneCodeHash = phoneCodeHash;
+              return { ok: false, needs2FA: true };
+            }
+            throw err;
+          }
+        });
+      },
+
+      async confirmPassword(password) {
+        return wrap(async () => {
+          const tg = await loadGramJS();
+          const passwordSrp = (await client.invoke(
+            new tg.Api.account.GetPassword({}),
+          )) as unknown;
+          // GramJS exposes a helper `computeCheck` to derive SRP params.
+          // Imported lazily to keep the surface minimal.
+          const passwordMod = (await import(
+            'telegram/Password.js'
+          )) as unknown as {
+            computeCheck: (
+              srp: unknown,
+              password: string,
+            ) => Promise<unknown>;
+          };
+          const check = await passwordMod.computeCheck(passwordSrp, password);
+          await client.invoke(
+            new tg.Api.auth.CheckPassword({
+              password: check as never,
+            }),
+          );
+          const sessionString = client.session.save();
+          handle.isAuthorized = true;
+          await loader.save(tgAccountId, sessionString);
+          await loader.markStatus(tgAccountId, 'idle');
+          return { sessionString };
+        });
+      },
+
+      async disconnect() {
+        try {
+          await client.disconnect();
+        } catch {
+          /* ignore */
+        }
+      },
+    };
+
+    return handle;
+  }
+}
+
+// ---------- helpers ----------
+
+interface GramJSModule {
+  TelegramClient: new (
+    session: unknown,
+    apiId: number,
+    apiHash: string,
+    opts: { connectionRetries: number },
+  ) => unknown;
+  StringSession: new (session: string) => unknown;
+  Api: {
+    channels: {
+      GetFullChannel: new (params: { channel: unknown }) => unknown;
+    };
+    auth: {
+      SignIn: new (params: {
+        phoneNumber: string;
+        phoneCodeHash: string;
+        phoneCode: string;
+      }) => unknown;
+      CheckPassword: new (params: { password: unknown }) => unknown;
+    };
+    account: {
+      GetPassword: new (params: Record<string, never>) => unknown;
+    };
+    MessageEntityUrl: new (...args: unknown[]) => unknown;
+    MessageEntityTextUrl: new (...args: unknown[]) => unknown;
+  };
+  errors: {
+    FloodWaitError?: new (...args: unknown[]) => Error;
+    RPCError?: new (...args: unknown[]) => Error;
+  };
+}
+
+let gramJsCache: GramJSModule | undefined;
+
+async function loadGramJS(): Promise<GramJSModule> {
+  if (gramJsCache) return gramJsCache;
+  // Dynamic import keeps GramJS out of the bundle for callers that never
+  // touch a real session (unit tests, lint, type-check).
+  const tg = (await import('telegram')) as unknown as {
+    TelegramClient: GramJSModule['TelegramClient'];
+    Api: GramJSModule['Api'];
+    errors: GramJSModule['errors'];
+  };
+  const sessions = (await import('telegram/sessions/index.js')) as unknown as {
+    StringSession: GramJSModule['StringSession'];
+  };
+  gramJsCache = {
+    TelegramClient: tg.TelegramClient,
+    StringSession: sessions.StringSession,
+    Api: tg.Api,
+    errors: tg.errors ?? {},
+  };
+  return gramJsCache;
+}
+
+function stringifyBigInt(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'bigint') {
+    return value.toString();
+  }
+  if (typeof value === 'object' && value !== null) {
+    const v = value as { toString?: () => string };
+    if (typeof v.toString === 'function') return v.toString();
+  }
+  return String(value);
+}
+
+function mapMessage(m: Record<string, unknown>): RecentPost {
+  const id =
+    typeof m.id === 'number'
+      ? m.id
+      : Number(stringifyBigInt(m.id) || '0');
+  const dateNum =
+    typeof m.date === 'number' ? m.date : Number(stringifyBigInt(m.date) || '0');
+  const dateIso = dateNum
+    ? new Date(dateNum * 1000).toISOString()
+    : new Date(0).toISOString();
+  const text =
+    typeof m.message === 'string'
+      ? m.message
+      : typeof m.text === 'string'
+        ? m.text
+        : '';
+
+  const urls: string[] = [];
+  const entities = Array.isArray(m.entities)
+    ? (m.entities as Array<Record<string, unknown>>)
+    : [];
+  for (const e of entities) {
+    const className =
+      typeof e.className === 'string' ? e.className : undefined;
+    const offset = typeof e.offset === 'number' ? e.offset : 0;
+    const length = typeof e.length === 'number' ? e.length : 0;
+    if (className === 'MessageEntityTextUrl' && typeof e.url === 'string') {
+      urls.push(e.url);
+    } else if (className === 'MessageEntityUrl' && text) {
+      urls.push(text.slice(offset, offset + length));
+    }
+  }
+
+  return { id, dateIso, text, urls };
+}
+
+/**
+ * Maps a thrown GramJS error into a typed AppError, updating durable
+ * account state on the way out.
+ */
+function mapTgError(
+  err: unknown,
+  tgAccountId: string,
+  loader: SessionLoader,
+): AppError {
+  const e = err as {
+    message?: string;
+    seconds?: number;
+    code?: number;
+    errorMessage?: string;
+    className?: string;
+    name?: string;
+  };
+  const msg = e?.message ?? e?.errorMessage ?? 'unknown TG error';
+
+  // FloodWait: GramJS exposes either `FloodWaitError` (with `seconds`)
+  // or a generic RPCError whose message starts with `FLOOD_WAIT_`.
+  const floodSeconds = extractFloodSeconds(e);
+  if (floodSeconds !== null) {
+    floodGuard.recordFloodWait(tgAccountId, floodSeconds, async (until) => {
+      await loader.markStatus(tgAccountId, 'cooldown');
+      await loader.setCooldownUntil(tgAccountId, until);
+    });
+    return new AppError('RATE_LIMITED', `FloodWait ${floodSeconds}s`, 429);
+  }
+
+  // 401/403 — session is dead.
+  if (e?.code === 401 || e?.code === 403) {
+    void loader.markStatus(tgAccountId, 'need_auth').catch(() => {
+      /* ignore */
+    });
+    return new AppError('UNAUTHORIZED', `TG: ${msg}`, 401);
+  }
+
+  // AUTH_KEY_UNREGISTERED / SESSION_REVOKED / USER_DEACTIVATED
+  if (
+    typeof msg === 'string' &&
+    /AUTH_KEY|SESSION_REVOKED|USER_DEACTIVATED/i.test(msg)
+  ) {
+    void loader.markStatus(tgAccountId, 'need_auth').catch(() => {
+      /* ignore */
+    });
+    return new AppError('UNAUTHORIZED', `TG: ${msg}`, 401);
+  }
+
+  return new AppError('UPSTREAM_ERROR', `tg: ${msg}`, 502);
+}
+
+function extractFloodSeconds(e: {
+  seconds?: number;
+  message?: string;
+  className?: string;
+  name?: string;
+}): number | null {
+  if (typeof e.seconds === 'number' && e.seconds >= 0) return e.seconds;
+  const sourceStrings = [e.message, e.className, e.name].filter(
+    (s): s is string => typeof s === 'string',
+  );
+  for (const s of sourceStrings) {
+    const m = /FLOOD_?WAIT(?:_|\s)?(\d+)/i.exec(s);
+    if (m && m[1]) {
+      const n = Number(m[1]);
+      if (Number.isFinite(n)) return n;
+    }
+  }
+  return null;
+}

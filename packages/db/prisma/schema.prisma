@@ -1,0 +1,449 @@
+// Prisma schema for Nosquare Outreach
+generator client {
+  provider = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============== ENUMS ===============
+
+enum UserRole {
+  admin
+  operator
+  viewer
+}
+
+enum Platform {
+  telegram
+  instagram
+  youtube
+}
+
+enum TgAccountStatus {
+  idle
+  active
+  cooldown
+  banned
+  need_auth
+}
+
+enum TgAccountRole {
+  parser
+  outreach
+  both
+}
+
+enum LLMProviderKind {
+  yandex
+  openrouter
+  openai_compat
+}
+
+enum ChannelStatus {
+  new
+  scraping
+  scraped
+  extracting
+  extracted
+  ready
+  done
+  failed
+}
+
+enum ContactType {
+  tg_username
+  tg_phone
+  tg_link
+  email
+  website
+  web_form
+  other
+}
+
+enum RoleGuess {
+  owner
+  ad_manager
+  generic
+  bot
+  unknown
+}
+
+enum Reachability {
+  reachable_tg
+  manual
+  unreachable
+}
+
+enum ContactStatus {
+  new
+  qualified
+  disqualified
+  contacted
+  active
+  finished
+  invalid
+  blocked
+}
+
+enum ExtractedBy {
+  regex
+  llm
+  both
+}
+
+enum CampaignStatus {
+  draft
+  running
+  paused
+  finished
+}
+
+enum ConversationMode {
+  auto
+  assisted
+  manual
+}
+
+enum ConversationStatus {
+  active
+  paused
+  done
+  failed
+}
+
+enum MessageDirection {
+  in_
+  out_
+}
+
+enum MessageSender {
+  contact
+  ai
+  operator
+  system
+}
+
+enum MessageStatus {
+  pending
+  sending
+  sent
+  failed
+  received
+}
+
+enum SuggestionStatus {
+  pending
+  approved
+  edited
+  rejected
+  sent
+  expired
+}
+
+enum AgentRunStatus {
+  ok
+  fallback
+  failed
+}
+
+// =============== MODELS ===============
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         UserRole @default(operator)
+  settings     Json     @default("{}")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  channelsAdded         Channel[]            @relation("ChannelAddedBy")
+  conversationsAssigned Conversation[]       @relation("ConversationOperator")
+  messages              Message[]
+  campaigns             Campaign[]
+  agentConfigsUpdated   AgentConfig[]        @relation("AgentConfigUpdatedBy")
+  agentConfigHistories  AgentConfigHistory[] @relation("AgentConfigHistoryChangedBy")
+  auditLogs             AuditLog[]
+}
+
+model TgAccount {
+  id                    String          @id @default(cuid())
+  label                 String
+  phone                 String          @unique
+  sessionEncrypted      String?
+  status                TgAccountStatus @default(need_auth)
+  role                  TgAccountRole   @default(both)
+  dailyMsgLimit         Int             @default(30)
+  dailyNewContactLimit  Int             @default(15)
+  sentTodayMsg          Int             @default(0)
+  sentTodayNew          Int             @default(0)
+  dayRolledAt           DateTime?
+  cooldownUntil         DateTime?
+  warmupStartedAt       DateTime?
+  warmupStage           Int             @default(0)
+  tags                  String[]        @default([])
+  notes                 String?
+  loginPhoneCodeHash    String?
+  deviceFingerprint     Json?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  conversations Conversation[]
+  opLogs        TgOpLog[]
+}
+
+model Integration {
+  id              String   @id @default(cuid())
+  kind            String   @unique
+  configEncrypted String
+  enabled         Boolean  @default(true)
+  status          String?
+  lastCheckAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Endpoint {
+  id              String          @id @default(cuid())
+  name            String          @unique
+  provider        LLMProviderKind
+  baseUrl         String
+  authEncrypted   String
+  defaultHeaders  Json            @default("{}")
+  rateLimitRpm    Int?
+  enabled         Boolean         @default(true)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  agentConfigsPrimary  AgentConfig[] @relation("AgentEndpointPrimary")
+  agentConfigsFallback AgentConfig[] @relation("AgentEndpointFallback")
+  agentRuns            AgentRun[]
+}
+
+model Channel {
+  id          String        @id @default(cuid())
+  platform    Platform
+  externalId  String?
+  handle      String
+  title       String?
+  description String?
+  links       String[]      @default([])
+  followers   Int?
+  language    String?
+  rawData     Json?
+  analysis    Json?
+  status      ChannelStatus @default(new)
+  source      String        @default("manual")
+  addedById   String?
+  addedBy     User?         @relation("ChannelAddedBy", fields: [addedById], references: [id], onDelete: SetNull)
+  scrapedAt   DateTime?
+  lastError   String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  contacts  Contact[]
+  agentRuns AgentRun[]
+
+  @@unique([platform, externalId])
+  @@unique([platform, handle])
+  @@index([status])
+}
+
+model Contact {
+  id           String        @id @default(cuid())
+  channelId    String
+  channel      Channel       @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  type         ContactType
+  value        String
+  rawValue     String
+  label        String?
+  roleGuess    RoleGuess     @default(unknown)
+  confidence   Decimal       @default(0)
+  extractedBy  ExtractedBy   @default(regex)
+  reachability Reachability  @default(manual)
+  status       ContactStatus @default(new)
+  tags         String[]      @default([])
+  tgUserId     String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  conversations Conversation[]
+  agentRuns     AgentRun[]
+
+  @@unique([channelId, type, value])
+  @@index([status, reachability])
+}
+
+model Campaign {
+  id                   String         @id @default(cuid())
+  name                 String
+  goalText             String
+  valueProp            String
+  targetFilter         Json           @default("{}")
+  agentOverrides       Json           @default("{}")
+  outreachAccountPool  String[]       @default([])
+  schedule             Json           @default("{}")
+  defaultMode          ConversationMode @default(assisted)
+  status               CampaignStatus @default(draft)
+  createdById          String?
+  createdBy            User?          @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  conversations Conversation[]
+}
+
+model Conversation {
+  id                   String             @id @default(cuid())
+  tgAccountId          String
+  tgAccount            TgAccount          @relation(fields: [tgAccountId], references: [id])
+  contactId            String
+  contact              Contact            @relation(fields: [contactId], references: [id])
+  campaignId           String?
+  campaign             Campaign?          @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  status               ConversationStatus @default(active)
+  mode                 ConversationMode   @default(assisted)
+  assignedOperatorId   String?
+  assignedOperator     User?              @relation("ConversationOperator", fields: [assignedOperatorId], references: [id], onDelete: SetNull)
+  lastInboundAt        DateTime?
+  lastOutboundAt       DateTime?
+  summary              String?
+  meta                 Json               @default("{}")
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  messages    Message[]
+  suggestions Suggestion[]
+  agentRuns   AgentRun[]
+
+  @@unique([tgAccountId, contactId])
+  @@index([lastInboundAt])
+}
+
+model Message {
+  id             String           @id @default(cuid())
+  conversationId String
+  conversation   Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  tgMsgId        String?
+  direction      MessageDirection
+  sender         MessageSender
+  text           String
+  attachments    Json             @default("[]")
+  status         MessageStatus    @default(pending)
+  suggestionId   String?
+  suggestion     Suggestion?      @relation(fields: [suggestionId], references: [id], onDelete: SetNull)
+  operatorId     String?
+  operator       User?            @relation(fields: [operatorId], references: [id], onDelete: SetNull)
+  sentAt         DateTime?
+  createdAt      DateTime         @default(now())
+
+  @@index([conversationId, createdAt])
+}
+
+model Suggestion {
+  id             String           @id @default(cuid())
+  conversationId String
+  conversation   Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  agentName      String
+  text           String
+  rationale      String           @default("")
+  score          Decimal          @default(0)
+  status         SuggestionStatus @default(pending)
+  meta           Json             @default("{}")
+  createdAt      DateTime         @default(now())
+  expiresAt      DateTime?
+
+  messages Message[]
+
+  @@index([conversationId, status])
+}
+
+model AgentConfig {
+  id                  String   @id @default(cuid())
+  name                String   @unique
+  role                String   @default("")
+  description         String   @default("")
+  endpointId          String?
+  endpoint            Endpoint? @relation("AgentEndpointPrimary", fields: [endpointId], references: [id], onDelete: SetNull)
+  fallbackEndpointId  String?
+  fallbackEndpoint    Endpoint? @relation("AgentEndpointFallback", fields: [fallbackEndpointId], references: [id], onDelete: SetNull)
+  model               String   @default("")
+  systemPrompt        String   @default("")
+  userPromptTemplate  String   @default("")
+  params              Json     @default("{}")
+  enabled             Boolean  @default(true)
+  version             Int      @default(1)
+  updatedById         String?
+  updatedBy           User?    @relation("AgentConfigUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedAt           DateTime @updatedAt
+  createdAt           DateTime @default(now())
+
+  history AgentConfigHistory[]
+}
+
+model AgentConfigHistory {
+  id            String      @id @default(cuid())
+  agentConfigId String
+  agentConfig   AgentConfig @relation(fields: [agentConfigId], references: [id], onDelete: Cascade)
+  version       Int
+  snapshot      Json
+  changedById   String?
+  changedBy     User?       @relation("AgentConfigHistoryChangedBy", fields: [changedById], references: [id], onDelete: SetNull)
+  changedAt     DateTime    @default(now())
+}
+
+model AgentRun {
+  id             String         @id @default(cuid())
+  agentName      String
+  channelId      String?
+  channel        Channel?       @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  contactId      String?
+  contact        Contact?       @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  conversationId String?
+  conversation   Conversation?  @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  endpointId     String?
+  endpoint       Endpoint?      @relation(fields: [endpointId], references: [id], onDelete: SetNull)
+  model          String?
+  input          Json
+  output         Json?
+  tokensIn       Int            @default(0)
+  tokensOut      Int            @default(0)
+  costUsd        Decimal        @default(0)
+  latencyMs      Int            @default(0)
+  status         AgentRunStatus @default(ok)
+  error          String?
+  createdAt      DateTime       @default(now())
+
+  @@index([agentName, createdAt])
+}
+
+model TgOpLog {
+  id           String     @id @default(cuid())
+  tgAccountId  String
+  tgAccount    TgAccount  @relation(fields: [tgAccountId], references: [id], onDelete: Cascade)
+  op           String
+  ok           Boolean
+  latencyMs    Int        @default(0)
+  error        String?
+  meta         Json       @default("{}")
+  createdAt    DateTime   @default(now())
+
+  @@index([tgAccountId, createdAt])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String
+  targetType String
+  targetId   String?
+  payload    Json     @default("{}")
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+}
