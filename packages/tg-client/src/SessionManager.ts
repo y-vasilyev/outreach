@@ -260,8 +260,39 @@ export class SessionManager {
     let pollAbort = false;
     let pollTimer: NodeJS.Timeout | null = null;
     const dispatchIncoming = (m: unknown): void => {
+      // DEBUG: when polling vs. push, the message shape is slightly
+      // different (no `isPrivate`, no `_sender`, etc.). Log the discriminating
+      // fields so we can tell if our filter rejects polled messages.
+      try {
+        const mm = m as {
+          className?: string;
+          out?: boolean;
+          peerId?: { className?: string; userId?: { toString?(): string } };
+          senderId?: { toString?(): string };
+          fromId?: { className?: string; userId?: { toString?(): string } };
+          message?: unknown;
+        };
+        console.log(
+          `[tg-client] dispatchIncoming tgAccountId=${tgAccountId} ` +
+            `cls=${mm?.className ?? '?'} out=${mm?.out === true} ` +
+            `peer=${mm?.peerId?.className ?? '?'} ` +
+            `peerUserId=${mm?.peerId?.userId?.toString?.() ?? '-'} ` +
+            `senderId=${mm?.senderId?.toString?.() ?? '-'} ` +
+            `fromId=${mm?.fromId?.userId?.toString?.() ?? '-'} ` +
+            `textType=${typeof mm?.message}`,
+        );
+      } catch {
+        /* never let logging break the handler */
+      }
       const msg = mapIncomingEvent({ message: m }, tgAccountId);
-      if (!msg) return;
+      if (!msg) {
+        console.log(`[tg-client] dispatchIncoming: filtered out (mapIncomingEvent → null)`);
+        return;
+      }
+      console.log(
+        `[tg-client] dispatchIncoming → forwarding to ${incomingSubs.size} sub(s) ` +
+          `fromTgUserId=${msg.fromTgUserId} textLen=${msg.text.length}`,
+      );
       for (const sub of incomingSubs) {
         try {
           void sub(msg);
