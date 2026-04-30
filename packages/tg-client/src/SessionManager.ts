@@ -183,10 +183,35 @@ export class SessionManager {
     if (sessionString && sessionString.length > 0) {
       try {
         await client.connect();
-        await client.getMe(); // healthcheck
-        isAuthorized = true;
+        // Healthcheck. Bounded by a hard timeout — through some MTProxy
+        // setups `getMe()` can stall for minutes, which delays binding
+        // the NewMessage event handler and causes us to miss every
+        // update pushed during the hang. If the call times out we trust
+        // the persisted session is still valid; the next real call
+        // (sendMessage/getEntity/etc.) will surface a real auth error
+        // if it isn't, and `markStatus('need_auth')` will fire then.
+        const HEALTHCHECK_MS = 10_000;
+        await Promise.race([
+          client.getMe().then(() => {
+            isAuthorized = true;
+          }),
+          new Promise<void>((_, reject) =>
+            setTimeout(
+              () => reject(new Error(`getMe healthcheck timed out after ${HEALTHCHECK_MS}ms`)),
+              HEALTHCHECK_MS,
+            ),
+          ),
+        ]).catch((err) => {
+          // Soft-fail the healthcheck. We still treat the session as
+          // authorized so the listener can bind. Real failures will
+          // surface on first use.
+          isAuthorized = true;
+          console.warn(
+            `[tg-client] healthcheck soft-failed for tgAccountId=${tgAccountId}: ${(err as Error).message} — proceeding anyway`,
+          );
+        });
       } catch (err) {
-        // Connection failed or session was revoked.
+        // Connection itself failed.
         await this.loader.markStatus(tgAccountId, 'need_auth');
         try {
           await client.disconnect();
