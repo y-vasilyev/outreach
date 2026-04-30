@@ -96,12 +96,32 @@ const saveMut = useMutation({
       confidence: confidence.value,
     });
   },
-  onSuccess: () => {
+  onSuccess: (updated) => {
+    // Patch every cached `['contacts', ...]` list with the server's truth
+    // (covers all open tab/filter combos). Then invalidate to refetch from
+    // server in the background so dependent fields (updatedAt, etc.) stay
+    // accurate even if the operator immediately switches tabs.
+    qc.setQueriesData<Contact[] | { items: Contact[] } | undefined>(
+      { queryKey: ['contacts'] },
+      (old) => {
+        if (!old) return old;
+        const items = Array.isArray(old) ? old : old.items;
+        if (!items) return old;
+        const next = items.map((c) => (c.id === updated.id ? { ...c, ...updated } : c));
+        return Array.isArray(old) ? next : { ...old, items: next };
+      },
+    );
     qc.invalidateQueries({ queryKey: ['contacts'] });
     toast.success('Контакт обновлён', 'Помечен как manual override');
     emit('updated');
   },
-  onError: (e: Error) => toast.error('Не удалось сохранить', e.message),
+  onError: (e: Error) => {
+    const ae = e as { code?: string; status?: number; message: string };
+    toast.error(
+      'Не удалось сохранить',
+      `${ae.code ?? ''}${ae.status ? ` ${ae.status}` : ''} ${ae.message}`.trim(),
+    );
+  },
 });
 
 const reExtractMut = useMutation({

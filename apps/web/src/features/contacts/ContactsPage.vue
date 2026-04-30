@@ -46,14 +46,53 @@ const reExtractMut = useMutation({
   onError: (e: Error) => toast.error('Не удалось перезапустить', e.message),
 });
 
+/**
+ * Optimistic status flip. Patches every cached `['contacts', ...]` list
+ * immediately so the row reflects the change without waiting for the
+ * round-trip; rollback on error. We *also* invalidate on settle so the
+ * server is the source of truth for any other field that might have moved
+ * (status downstream effects, updatedAt).
+ */
+type ContactsListData = Contact[] | { items: Contact[]; total?: number } | undefined;
+function patchListData(
+  data: ContactsListData,
+  id: string,
+  patch: Partial<Contact>,
+): ContactsListData {
+  if (!data) return data;
+  const items = Array.isArray(data) ? data : data.items;
+  if (!items) return data;
+  const next = items.map((c) => (c.id === id ? { ...c, ...patch } : c));
+  return Array.isArray(data) ? next : { ...data, items: next };
+}
+
 const setStatusMut = useMutation({
   mutationFn: (args: { id: string; status: 'qualified' | 'disqualified' | 'new' }) =>
     api.patch<Contact>(`/contacts/${args.id}`, { status: args.status }),
-  onSuccess: (_v, args) => {
-    qc.invalidateQueries({ queryKey: ['contacts'] });
-    toast.success(`Статус: ${args.status}`);
+  onMutate: async (args) => {
+    await qc.cancelQueries({ queryKey: ['contacts'] });
+    const snapshots = qc.getQueriesData<ContactsListData>({ queryKey: ['contacts'] });
+    qc.setQueriesData<ContactsListData>({ queryKey: ['contacts'] }, (old) =>
+      patchListData(old, args.id, { status: args.status }),
+    );
+    return { snapshots };
   },
-  onError: (e: Error) => toast.error('Не удалось изменить статус', e.message),
+  onError: (e: Error, _args, ctx) => {
+    if (ctx?.snapshots) {
+      for (const [key, data] of ctx.snapshots) qc.setQueryData(key, data);
+    }
+    const ae = e as { code?: string; status?: number; message: string };
+    toast.error(
+      'Не удалось изменить статус',
+      `${ae.code ?? ''}${ae.status ? ` ${ae.status}` : ''} ${ae.message}`.trim(),
+    );
+  },
+  onSuccess: (_v, args) => {
+    toast.success(`Статус → ${args.status}`);
+  },
+  onSettled: () => {
+    qc.invalidateQueries({ queryKey: ['contacts'] });
+  },
 });
 
 function rowActions(c: Contact) {
