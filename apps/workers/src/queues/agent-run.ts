@@ -57,10 +57,12 @@ export function startAgentRunWorker() {
           const last = [...messages].reverse().find((m) => m.direction === 'in_');
           if (!last) return { ok: true, skipped: 'no inbound' };
 
+          // Both intent_classifier and handoff_decider expect history_tail as
+          // string[] (one line per turn). Templates render arrays via
+          // JSON.stringify so the prompt still reads sensibly.
           const historyTail = messages
             .slice(-10)
-            .map((m) => `${m.direction === 'in_' ? '<<' : '>>'} ${m.text}`)
-            .join('\n');
+            .map((m) => `${m.direction === 'in_' ? '<<' : '>>'} ${m.text}`);
 
           const intent = await runner.run<IntentOut>('intent_classifier', {
             last_inbound: last.text,
@@ -68,10 +70,16 @@ export function startAgentRunWorker() {
           }, { conversationId: conv.id });
 
           const handoff = await runner.run<HandoffOut>('handoff_decider', {
-            mode: conv.mode,
-            summary: conv.summary ?? '',
-            history_tail: historyTail,
-            intent: intent.intent,
+            conversation: {
+              mode: conv.mode,
+              summary: conv.summary ?? '',
+              last_inbound: last.text,
+              history_tail: historyTail,
+            },
+            intent: {
+              intent: intent.intent,
+              confidence: intent.confidence,
+            },
             ai_recent_confidence: [intent.confidence],
             red_flags_total: 0,
           }, { conversationId: conv.id });

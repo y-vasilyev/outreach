@@ -486,8 +486,8 @@ export class SessionManager {
                 NewMessage: new (params?: { incoming?: boolean; outgoing?: boolean }) => unknown;
               };
               gramJsBuilder = new events.NewMessage({ incoming: true, outgoing: false });
-              gramJsHandler = (event: unknown) => {
-                const msg = mapIncomingEvent(event, tgAccountId);
+              gramJsHandler = async (event: unknown) => {
+                const msg = await mapIncomingEvent(event, tgAccountId);
                 if (!msg) return;
                 for (const sub of incomingSubs) {
                   try {
@@ -538,7 +538,16 @@ export class SessionManager {
  * Returns `null` for events we don't care about (group/channel chats, bots,
  * empty-text service messages, our own outgoing echoes).
  */
-function mapIncomingEvent(event: unknown, tgAccountId: string): IncomingMessage | null {
+interface SenderEntity {
+  username?: string;
+  firstName?: string;
+  lastName?: string;
+}
+
+async function mapIncomingEvent(
+  event: unknown,
+  tgAccountId: string,
+): Promise<IncomingMessage | null> {
   const e = event as {
     message?: {
       id?: number | { toString(): string };
@@ -550,22 +559,14 @@ function mapIncomingEvent(event: unknown, tgAccountId: string): IncomingMessage 
       senderId?: { toString(): string };
       fromId?: { userId?: { toString(): string } };
       date?: number;
-      sender?: {
-        username?: string;
-        firstName?: string;
-        lastName?: string;
-      } | null;
-      _sender?: {
-        username?: string;
-        firstName?: string;
-        lastName?: string;
-      } | null;
+      sender?: SenderEntity | null;
+      _sender?: SenderEntity | null;
+      // GramJS exposes a getSender() method that resolves the sender User
+      // from the entity cache. It's the reliable path when the sync
+      // properties aren't populated yet.
+      getSender?: () => Promise<SenderEntity | null | undefined>;
     };
-    _sender?: {
-      username?: string;
-      firstName?: string;
-      lastName?: string;
-    } | null;
+    _sender?: SenderEntity | null;
     isPrivate?: boolean;
   };
   const m = e.message;
@@ -596,8 +597,17 @@ function mapIncomingEvent(event: unknown, tgAccountId: string): IncomingMessage 
     ? new Date(dateNum * 1000).toISOString()
     : new Date().toISOString();
   // Sender entity hangs off the message in several places depending on
-  // the GramJS version / how the update was assembled. Try them all.
-  const sender = m.sender ?? m._sender ?? e._sender ?? null;
+  // the GramJS version. Try sync getters first, then await getSender()
+  // which resolves from the entity cache populated by the same Updates
+  // envelope (so it doesn't need an `access_hash` round-trip).
+  let sender: SenderEntity | null | undefined = m.sender ?? m._sender ?? e._sender;
+  if (!sender && typeof m.getSender === 'function') {
+    try {
+      sender = await m.getSender();
+    } catch {
+      /* entity cache miss — fall back to undefined sender below */
+    }
+  }
   const fromUsername =
     typeof sender?.username === 'string' && sender.username ? sender.username : undefined;
   const fromFirstName =

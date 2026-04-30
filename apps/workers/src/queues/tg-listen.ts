@@ -78,7 +78,12 @@ export function startTgListenWorker() {
 
       if (!contact) {
         logger.info(
-          { fromTgUserId: data.fromTgUserId, tgAccountId: data.tgAccountId },
+          {
+            fromTgUserId: data.fromTgUserId,
+            fromUsername: data.fromUsername ?? null,
+            fromFirstName: data.fromFirstName ?? null,
+            tgAccountId: data.tgAccountId,
+          },
           'inbound message has no matching contact; dropping',
         );
         return { ok: true, skipped: 'no contact' };

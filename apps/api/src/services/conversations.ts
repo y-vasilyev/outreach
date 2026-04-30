@@ -86,11 +86,14 @@ export const conversationsService = {
 
   async getSuggestions(id: string) {
     const prisma = getPrisma();
-    return prisma.suggestion.findMany({
+    const rows = await prisma.suggestion.findMany({
       where: { conversationId: id, status: 'pending' },
       orderBy: { createdAt: 'desc' },
       take: 10,
     });
+    // Prisma serialises Decimal columns as strings on the wire, but the
+    // UI's ConfBar expects a number (it renders the bar width arithmetically).
+    return rows.map((r) => ({ ...r, score: Number(r.score) }));
   },
 
   async setMode(id: string, mode: 'auto' | 'assisted' | 'manual') {
