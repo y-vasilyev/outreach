@@ -166,6 +166,106 @@ export const UrgencyCoerced = z.preprocess((v) => {
 }, UrgencyEnum);
 
 /**
+ * ReplyComposer's `intent_target` enum. Models love inventing their own
+ * verbs (`clarify_or_close`, `schedule_interview`, `provide_info`, …). Map
+ * the obvious synonyms to canonical tokens. Truly unknown values still
+ * fall through to a Zod validation error — the LLM JSON validator already
+ * has a retry loop, and we don't want to silently mis-tag suggestions.
+ */
+export const IntentTargetEnum = z.enum([
+  'qualify',
+  'schedule_call',
+  'answer_question',
+  'handle_objection',
+  'soft_close',
+  'small_talk',
+]);
+
+export const IntentTargetCoerced = z.preprocess((v) => {
+  if (typeof v !== 'string') return v;
+  const s = v.toLowerCase().trim();
+  if (
+    s === 'qualify' ||
+    s === 'schedule_call' ||
+    s === 'answer_question' ||
+    s === 'handle_objection' ||
+    s === 'soft_close' ||
+    s === 'small_talk'
+  ) {
+    return s;
+  }
+  // schedule_call: any "schedule … (call|meet|interview|chat|тайм…)"
+  if (
+    s.includes('schedule') ||
+    s.includes('book') ||
+    s.includes('встреч') ||
+    s.includes('созвон') ||
+    s.includes('договор') ||
+    s.includes('тайм') ||
+    s.includes('time') ||
+    s.includes('interview')
+  ) {
+    return 'schedule_call';
+  }
+  // soft_close: closing-without-pressure variants
+  if (
+    s.includes('clarify') ||
+    s.includes('close') ||
+    s.includes('finalize') ||
+    s.includes('wrap') ||
+    s.includes('закр') ||
+    s.includes('заверш')
+  ) {
+    return 'soft_close';
+  }
+  // handle_objection
+  if (
+    s.includes('object') ||
+    s.includes('refute') ||
+    s.includes('counter') ||
+    s.includes('возраж') ||
+    s.includes('отказ')
+  ) {
+    return 'handle_objection';
+  }
+  // qualify / discovery / probe
+  if (
+    s.includes('qualif') ||
+    s.includes('discover') ||
+    s.includes('probe') ||
+    s.includes('квалиф') ||
+    s.includes('узнать') ||
+    s.includes('исслед')
+  ) {
+    return 'qualify';
+  }
+  // answer_question / inform / explain
+  if (
+    s.includes('answer') ||
+    s.includes('inform') ||
+    s.includes('explain') ||
+    s.includes('clarif') ||
+    s.includes('ответ') ||
+    s.includes('объясн') ||
+    s.includes('расскаж')
+  ) {
+    return 'answer_question';
+  }
+  // small_talk / rapport / chit-chat
+  if (
+    s.includes('small') ||
+    s.includes('chat') ||
+    s.includes('rapport') ||
+    s.includes('болт') ||
+    s.includes('светск') ||
+    s.includes('warm')
+  ) {
+    return 'small_talk';
+  }
+  return v;
+}, IntentTargetEnum);
+
+/**
  * Integer score in `[min..max]`. Accepts qualitative strings (low/medium/
  * high/etc.) and numeric strings; clamps and rounds. Used by quality-review
  * style scoring agents that ask the LLM for a 1..5 rating.

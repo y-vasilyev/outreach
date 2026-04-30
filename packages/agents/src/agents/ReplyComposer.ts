@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import type { Agent } from '../types.js';
 import { invokeJson } from './_runtime.js';
+import { IntentTargetCoerced } from './_coerce.js';
 
 export const replyComposerInputSchema = z.object({
   channel_analysis: z.record(z.unknown()),
@@ -30,14 +31,11 @@ export const replyComposerOutputSchema = z.object({
     .array(
       z.object({
         text: z.string().max(600),
-        intent_target: z.enum([
-          'qualify',
-          'schedule_call',
-          'answer_question',
-          'handle_objection',
-          'soft_close',
-          'small_talk',
-        ]),
+        // Coerce — the LLM regularly invents its own verbs
+        // (`clarify_or_close`, `schedule_interview`, …). Tolerant mapper
+        // translates obvious synonyms; unknown values still fall through
+        // to a Zod error so we don't silently mis-tag the suggestion.
+        intent_target: IntentTargetCoerced,
         rationale: z.string(),
       }),
     )
