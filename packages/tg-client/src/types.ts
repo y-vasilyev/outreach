@@ -15,12 +15,15 @@ export type TgProxyConfig =
       port: number;
       username?: string;
       password?: string;
+      /** SOCKS connect timeout in seconds. GramJS defaults to 5 if omitted. */
+      timeoutSec?: number;
     }
   | {
       type: 'mtproxy';
       ip: string;
       port: number;
       secret: string;
+      timeoutSec?: number;
     };
 
 /**

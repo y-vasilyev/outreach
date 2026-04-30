@@ -15,6 +15,7 @@ const EnvZ = z.object({
   TG_PROXY_USERNAME: z.string().optional(),
   TG_PROXY_PASSWORD: z.string().optional(),
   TG_PROXY_SECRET: z.string().optional(),
+  TG_PROXY_TIMEOUT_SEC: z.coerce.number().int().min(1).max(120).optional(),
   LOG_LEVEL: z.string().default('info'),
 });
 

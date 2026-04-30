@@ -491,12 +491,14 @@ type GramJSProxy =
       port: number;
       username?: string;
       password?: string;
+      timeout?: number;
     }
   | {
       MTProxy: true;
       ip: string;
       port: number;
       secret: string;
+      timeout?: number;
     };
 
 function mapProxy(p: TgProxyConfig | undefined): GramJSProxy | undefined {
@@ -505,9 +507,12 @@ function mapProxy(p: TgProxyConfig | undefined): GramJSProxy | undefined {
     const out: GramJSProxy = { socksType: 5, ip: p.ip, port: p.port };
     if (p.username) (out as { username?: string }).username = p.username;
     if (p.password) (out as { password?: string }).password = p.password;
+    if (p.timeoutSec) (out as { timeout?: number }).timeout = p.timeoutSec;
     return out;
   }
-  return { MTProxy: true, ip: p.ip, port: p.port, secret: p.secret };
+  const out: GramJSProxy = { MTProxy: true, ip: p.ip, port: p.port, secret: p.secret };
+  if (p.timeoutSec) (out as { timeout?: number }).timeout = p.timeoutSec;
+  return out;
 }
 
 function stringifyBigInt(value: unknown): string {

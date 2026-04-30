@@ -12,6 +12,7 @@ export function tgProxyFromEnv(): TgProxyConfig | undefined {
       port: env.TG_PROXY_PORT,
       ...(env.TG_PROXY_USERNAME ? { username: env.TG_PROXY_USERNAME } : {}),
       ...(env.TG_PROXY_PASSWORD ? { password: env.TG_PROXY_PASSWORD } : {}),
+      ...(env.TG_PROXY_TIMEOUT_SEC ? { timeoutSec: env.TG_PROXY_TIMEOUT_SEC } : {}),
     };
   }
   return {
@@ -19,6 +20,7 @@ export function tgProxyFromEnv(): TgProxyConfig | undefined {
     ip: env.TG_PROXY_IP,
     port: env.TG_PROXY_PORT,
     secret: env.TG_PROXY_SECRET ?? '',
+    ...(env.TG_PROXY_TIMEOUT_SEC ? { timeoutSec: env.TG_PROXY_TIMEOUT_SEC } : {}),
   };
 }
 
