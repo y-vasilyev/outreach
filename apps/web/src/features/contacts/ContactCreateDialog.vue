@@ -21,6 +21,9 @@ const qc = useQueryClient();
 type Mode = 'single' | 'bulk';
 const mode = ref<Mode>('single');
 
+// "Cold lead" — contact without a channel. The backend stores channelId
+// as NULL and dedupes via a partial unique index on (type, value).
+const isColdLead = ref(false);
 const channelId = ref('');
 
 // Single-mode fields
@@ -41,6 +44,7 @@ watch(
   (v) => {
     if (!v) return;
     mode.value = 'single';
+    isColdLead.value = false;
     channelId.value = props.defaultChannelId ?? '';
     valueOne.value = '';
     typeOne.value = 'auto';
@@ -111,13 +115,17 @@ const bulkLines = computed(() =>
   bulkText.value.split(/\n+/).map((s) => s.trim()).filter(Boolean),
 );
 
-const canSubmitSingle = computed(() => !!channelId.value && !!valueOne.value.trim());
-const canSubmitBulk = computed(() => !!channelId.value && bulkLines.value.length > 0);
+const canSubmitSingle = computed(
+  () => (isColdLead.value || !!channelId.value) && !!valueOne.value.trim(),
+);
+const canSubmitBulk = computed(
+  () => (isColdLead.value || !!channelId.value) && bulkLines.value.length > 0,
+);
 
 const createMut = useMutation({
   mutationFn: () =>
     api.post<Contact>('/contacts', {
-      channelId: channelId.value,
+      ...(isColdLead.value ? {} : { channelId: channelId.value }),
       value: valueOne.value.trim(),
       ...(typeOne.value !== 'auto' && { type: typeOne.value }),
       roleGuess: roleOne.value,
@@ -147,7 +155,7 @@ const bulkMut = useMutation({
       created: { id: string }[];
       errors: { input: string; reason: string }[];
     }>('/contacts/bulk', {
-      channelId: channelId.value,
+      ...(isColdLead.value ? {} : { channelId: channelId.value }),
       items: bulkLines.value,
       defaults: {
         ...(bulkType.value !== 'auto' && { type: bulkType.value }),
@@ -213,7 +221,27 @@ function submit(): void {
         </button>
       </div>
 
-      <Field label="Канал" help="Контакт будет привязан к этому каналу.">
+      <div style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--paper-3); border: 1px solid var(--line); border-radius: var(--r-sm);">
+        <input
+          id="cold-lead-toggle"
+          v-model="isColdLead"
+          type="checkbox"
+          style="margin: 0;"
+        />
+        <label for="cold-lead-toggle" style="cursor: pointer; flex: 1; font-size: 12.5px;">
+          <strong>Холодный лид</strong> — контакт без канала
+          <div class="muted-2" style="font-size: 10.5px; margin-top: 2px;">
+            Полезно когда email / @handle получили со стороны и связывать с парсингом
+            канала не нужно.
+          </div>
+        </label>
+      </div>
+
+      <Field
+        v-if="!isColdLead"
+        label="Канал"
+        help="Контакт будет привязан к этому каналу."
+      >
         <TextInput
           v-model="channelSearch"
           placeholder="Поиск по handle / title…"

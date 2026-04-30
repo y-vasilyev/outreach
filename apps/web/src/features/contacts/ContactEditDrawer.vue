@@ -141,6 +141,7 @@ const reExtractMut = useMutation({
       <Tag v-if="contact.channel?.platform" :platform="contact.channel.platform" />
       <Pill v-if="isManual" cls="violet" label="manual override" :dot="false" />
       <button
+        v-if="contact.channelId"
         class="btn sm"
         :disabled="reExtractMut.isPending.value"
         @click="reExtractMut.mutate()"

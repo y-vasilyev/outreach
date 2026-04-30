@@ -30,6 +30,8 @@ const typeFilter = ref('');
 const roleFilter = ref('');
 const reachFilter = ref('');
 const minConf = ref('');
+// '' → all, 'cold' → only channelless, 'channel' → only channel-bound
+const sourceFilter = ref('');
 
 const selectedIds = ref<Set<string>>(new Set());
 const addToCampaignOpen = ref(false);
@@ -115,11 +117,17 @@ function rowActions(c: Contact) {
       icon: 'edit' as const,
       onClick: () => (editingContact.value = c),
     },
-    {
-      label: 'Обновить через ИИ',
-      icon: 'sparkle' as const,
-      onClick: () => reExtractMut.mutate(c.id),
-    },
+    // Re-extract re-runs the LLM extractor on the parent channel — N/A for
+    // cold leads (no parent channel to re-process).
+    ...(c.channelId
+      ? [
+          {
+            label: 'Обновить через ИИ',
+            icon: 'sparkle' as const,
+            onClick: () => reExtractMut.mutate(c.id),
+          },
+        ]
+      : []),
     { label: '', divider: true },
   ];
   if (c.status !== 'qualified') {
@@ -142,7 +150,13 @@ function rowActions(c: Contact) {
 
 const queryKey = computed(() => [
   'contacts',
-  { tab: tab.value, type: typeFilter.value, role: roleFilter.value, reach: reachFilter.value },
+  {
+    tab: tab.value,
+    type: typeFilter.value,
+    role: roleFilter.value,
+    reach: reachFilter.value,
+    source: sourceFilter.value,
+  },
 ] as const);
 
 const { data, isLoading } = useQuery({
@@ -153,6 +167,8 @@ const { data, isLoading } = useQuery({
     if (roleFilter.value) qs.set('roleGuess', roleFilter.value);
     if (reachFilter.value) qs.set('reachability', reachFilter.value);
     if (tab.value !== 'all') qs.set('status', tab.value);
+    if (sourceFilter.value === 'cold') qs.set('cold', 'true');
+    if (sourceFilter.value === 'channel') qs.set('cold', 'false');
     return api.get<{ items: Contact[]; total: number } | Contact[]>(`/contacts?${qs.toString()}`);
   },
 });
@@ -222,6 +238,11 @@ const confOptions = [
   { value: '0.5', label: '≥ 0.50' },
   { value: '0.7', label: '≥ 0.70' },
   { value: '0.85', label: '≥ 0.85' },
+];
+
+const sourceOptions = [
+  { value: 'channel', label: 'привязан к каналу' },
+  { value: 'cold', label: 'холодный лид' },
 ];
 
 const typeIcon: Record<string, IconName> = {
@@ -315,6 +336,7 @@ function exportCsv(): void {
     <FilterChipSelect v-model="typeFilter" label="Тип" :options="typeOptions" placeholder="любой" />
     <FilterChipSelect v-model="roleFilter" label="Роль" :options="roleOptions" placeholder="любая" />
     <FilterChipSelect v-model="reachFilter" label="Канал связи" :options="reachOptions" placeholder="любой" />
+    <FilterChipSelect v-model="sourceFilter" label="Источник" :options="sourceOptions" placeholder="любой" />
     <FilterChipSelect v-model="minConf" label="Confidence" :options="confOptions" placeholder="любая" tone="warn" />
     <template #right>
       <span class="muted-2">{{ filtered.length }} из {{ contacts.length }}</span>
@@ -380,8 +402,16 @@ function exportCsv(): void {
           </td>
           <td>
             <div style="display: flex; align-items: center; gap: 6px;">
-              <Tag v-if="c.channel?.platform" :platform="c.channel.platform" />
-              <span class="muted ellipsis" style="max-width: 200px;">{{ c.channel?.title || c.channel?.handle || '—' }}</span>
+              <template v-if="c.channel?.platform">
+                <Tag :platform="c.channel.platform" />
+                <span class="muted ellipsis" style="max-width: 200px;">{{ c.channel?.title || c.channel?.handle || '—' }}</span>
+              </template>
+              <span
+                v-else
+                class="mono"
+                title="Контакт не привязан к каналу"
+                style="font-size: 9.5px; padding: 1px 6px; background: var(--paper-3); color: var(--ink-3); border: 1px solid var(--line); border-radius: 3px;"
+              >cold lead</span>
             </div>
           </td>
           <td>

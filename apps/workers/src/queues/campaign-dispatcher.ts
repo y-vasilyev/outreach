@@ -130,7 +130,7 @@ export function startCampaignDispatcher() {
 
           try {
             const opener = await runner.run<OpenerOut>('opening_composer', {
-              channel_analysis: contact.channel.analysis,
+              channel_analysis: contact.channel?.analysis ?? {},
               contact: { value: contact.value, role: contact.roleGuess, type: contact.type },
               strategy: { approach: 'industry_fit' },
               campaign: { goal_text: c.goalText, value_prop: c.valueProp },
@@ -146,7 +146,7 @@ export function startCampaignDispatcher() {
             for (const v of opener.variants) {
               const safety = await runner.run<SafetyOut>('safety_filter', {
                 draft: v.text,
-                channel_analysis: contact.channel.analysis,
+                channel_analysis: contact.channel?.analysis ?? {},
                 contact: { id: contact.id },
                 campaign: { name: c.name },
               }, { conversationId: conv.id });

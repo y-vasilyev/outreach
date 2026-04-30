@@ -26,7 +26,7 @@ export const ExtractedByZ = z.enum(['regex', 'llm', 'both', 'manual']);
 
 export const ContactZ = z.object({
   id: z.string(),
-  channelId: z.string(),
+  channelId: z.string().nullable(),
   type: ContactTypeZ,
   value: z.string(),
   rawValue: z.string(),
@@ -48,16 +48,27 @@ export const ContactFiltersZ = z.object({
   reachability: ReachabilityZ.optional(),
   status: ContactStatusZ.optional(),
   q: z.string().optional(),
+  /**
+   * Filter by channel-attachment:
+   *   true  → only cold leads (channelId IS NULL)
+   *   false → only channel-bound contacts
+   *   omitted → both
+   */
+  cold: z
+    .union([z.boolean(), z.enum(['true', 'false'])])
+    .transform((v) => (typeof v === 'boolean' ? v : v === 'true'))
+    .optional(),
 });
 
 /**
- * Single manual-create input. Operator passes the channel + at least a value;
- * type can be omitted and the server will auto-detect (email regex, @handle,
- * t.me/ link, etc.). All operator-created contacts land with
- * `extractedBy='manual'` so the contact-extract worker won't clobber them.
+ * Single manual-create input. Operator passes a value (type optional —
+ * auto-detected by email/@handle/t.me/phone/URL). `channelId` is optional:
+ * omit it for "cold leads" that don't belong to a tracked channel.
+ * Manual entries always land with `extractedBy='manual'` so the
+ * contact-extract worker won't clobber them.
  */
 export const ContactCreateInputZ = z.object({
-  channelId: z.string().min(1),
+  channelId: z.string().min(1).nullable().optional(),
   type: ContactTypeZ.optional(),
   value: z.string().min(1).max(500),
   label: z.string().max(200).nullable().optional(),
@@ -68,12 +79,13 @@ export const ContactCreateInputZ = z.object({
 });
 
 /**
- * Bulk variant. One channelId + many lines. Each line is either a free-form
- * string (auto-detected) or a structured object. Defaults can be applied to
- * the whole batch via `defaults` (e.g. role=ad_manager, status=qualified).
+ * Bulk variant. Optional channelId + many lines. With `channelId` omitted
+ * the whole batch is created as cold leads. Each item is either a
+ * free-form string (auto-detected) or a structured object; `defaults`
+ * applies role/status/etc to the whole batch.
  */
 export const ContactBulkCreateInputZ = z.object({
-  channelId: z.string().min(1),
+  channelId: z.string().min(1).nullable().optional(),
   items: z
     .array(
       z.union([

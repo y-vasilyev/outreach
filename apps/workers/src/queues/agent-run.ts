@@ -95,7 +95,7 @@ export function startAgentRunWorker() {
 
           // generate replies + safety filter
           const reply = await runner.run<ReplyComposerOut>('reply_composer', {
-            channel_analysis: conv.contact.channel.analysis,
+            channel_analysis: conv.contact.channel?.analysis ?? {},
             contact: { id: conv.contact.id, value: conv.contact.value, role: conv.contact.roleGuess },
             campaign: { goal_text: '', value_prop: '' },
             conversation_history: messages.map((m) => ({
@@ -117,7 +117,7 @@ export function startAgentRunWorker() {
           for (const v of reply.variants) {
             const safety = await runner.run<SafetyOut>('safety_filter', {
               draft: v.text,
-              channel_analysis: conv.contact.channel.analysis,
+              channel_analysis: conv.contact.channel?.analysis ?? {},
               contact: { id: conv.contact.id },
               campaign: {},
             }, { conversationId: conv.id });
@@ -190,7 +190,7 @@ export function startAgentRunWorker() {
           const opener = await runner.run<OpenerOut>(
             'opening_composer',
             {
-              channel_analysis: conv.contact.channel.analysis,
+              channel_analysis: conv.contact.channel?.analysis ?? {},
               contact: {
                 value: conv.contact.value,
                 role: conv.contact.roleGuess,
@@ -215,7 +215,7 @@ export function startAgentRunWorker() {
               'safety_filter',
               {
                 draft: v.text,
-                channel_analysis: conv.contact.channel.analysis,
+                channel_analysis: conv.contact.channel?.analysis ?? {},
                 contact: { id: conv.contact.id },
                 campaign: { name: conv.campaign?.name ?? 'ad-hoc' },
               },

@@ -258,8 +258,11 @@ model Channel {
 
 model Contact {
   id           String        @id @default(cuid())
-  channelId    String
-  channel      Channel       @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  // Optional so the operator can paste cold leads that don't belong to a
+  // tracked channel. Cold-lead dedupe is handled by a partial unique index
+  // `(type, value) WHERE channelId IS NULL` defined in migration 2.
+  channelId    String?
+  channel      Channel?      @relation(fields: [channelId], references: [id], onDelete: Cascade)
   type         ContactType
   value        String
   rawValue     String

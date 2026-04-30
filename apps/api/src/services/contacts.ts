@@ -100,6 +100,9 @@ export const contactsService = {
     const rows = await prisma.contact.findMany({
       where: {
         ...(filters.channelId && { channelId: filters.channelId }),
+        // `cold=true` → only cold leads; `cold=false` → only channel-bound.
+        ...(filters.cold === true && { channelId: null }),
+        ...(filters.cold === false && { channelId: { not: null } }),
         ...(filters.type && { type: filters.type }),
         ...(filters.roleGuess && { roleGuess: filters.roleGuess }),
         ...(filters.reachability && { reachability: filters.reachability }),
@@ -135,29 +138,40 @@ export const contactsService = {
   async create(input: CreateInput) {
     const prisma = getPrisma();
 
-    const ch = await prisma.channel.findUnique({
-      where: { id: input.channelId },
-      select: { id: true },
-    });
-    if (!ch) throw Errors.notFound('channel', input.channelId);
+    const channelId = input.channelId ?? null;
+    if (channelId) {
+      const ch = await prisma.channel.findUnique({
+        where: { id: channelId },
+        select: { id: true },
+      });
+      if (!ch) throw Errors.notFound('channel', channelId);
+    }
 
     const type = input.type ?? detectContactType(input.value);
     const value = normalizeContactValue(type, input.value);
     if (!value) throw Errors.badRequest('contact value is empty after normalisation');
 
-    const existing = await prisma.contact.findUnique({
-      where: { channelId_type_value: { channelId: input.channelId, type, value } },
-      select: { id: true },
-    });
+    // Pre-flight dedupe so we surface a friendly 409. Channel-bound rows use
+    // the (channelId, type, value) unique key; cold leads (channelId NULL)
+    // use the partial unique index `Contact_type_value_no_channel_key`.
+    const existing = channelId
+      ? await prisma.contact.findUnique({
+          where: { channelId_type_value: { channelId, type, value } },
+          select: { id: true },
+        })
+      : await prisma.contact.findFirst({
+          where: { channelId: null, type, value },
+          select: { id: true },
+        });
     if (existing) {
       throw Errors.conflict(
-        `contact already exists on this channel (${type}=${value}) — id=${existing.id}`,
+        `contact already exists${channelId ? ' on this channel' : ' as cold lead'} (${type}=${value}) — id=${existing.id}`,
       );
     }
 
     const row = await prisma.contact.create({
       data: {
-        channelId: input.channelId,
+        channelId,
         type,
         value,
         rawValue: input.value,
@@ -187,11 +201,14 @@ export const contactsService = {
   }> {
     const prisma = getPrisma();
 
-    const ch = await prisma.channel.findUnique({
-      where: { id: input.channelId },
-      select: { id: true },
-    });
-    if (!ch) throw Errors.notFound('channel', input.channelId);
+    const channelId = input.channelId ?? null;
+    if (channelId) {
+      const ch = await prisma.channel.findUnique({
+        where: { id: channelId },
+        select: { id: true },
+      });
+      if (!ch) throw Errors.notFound('channel', channelId);
+    }
 
     const defaults = input.defaults ?? {};
     const created: { id: string; type: ContactType; value: string }[] = [];
@@ -212,7 +229,7 @@ export const contactsService = {
       try {
         const row = await prisma.contact.create({
           data: {
-            channelId: input.channelId,
+            channelId,
             type,
             value,
             rawValue,
@@ -228,12 +245,17 @@ export const contactsService = {
         });
         created.push({ id: row.id, type, value });
       } catch (e) {
-        // Prisma P2002 (unique constraint) → already on this channel; not an
-        // error from the operator's POV, just dedupe.
+        // Prisma P2002 → either the channel-bound unique
+        // (channelId, type, value) or the partial cold-lead unique
+        // (type, value WHERE channelId IS NULL) tripped — same outcome
+        // either way: dedupe, not error.
         const code = (e as { code?: string }).code;
         if (code === 'P2002') {
           skipped += 1;
-          errors.push({ input: rawValue, reason: 'duplicate on this channel' });
+          errors.push({
+            input: rawValue,
+            reason: channelId ? 'duplicate on this channel' : 'duplicate cold lead',
+          });
         } else {
           skipped += 1;
           errors.push({ input: rawValue, reason: (e as Error).message ?? 'create failed' });
@@ -308,6 +330,14 @@ export const contactsService = {
       select: { id: true, channelId: true },
     });
     if (!c) throw Errors.notFound('contact', contactId);
+    // Cold leads aren't tied to a channel — there's nothing for the
+    // contact-extract worker to re-run against. Surface this as a clean 400
+    // so the UI can hide / disable the action rather than 500.
+    if (!c.channelId) {
+      throw Errors.badRequest(
+        'cold leads are not tied to a channel — re-extract is not applicable',
+      );
+    }
 
     await prisma.channel.update({
       where: { id: c.channelId },
