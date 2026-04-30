@@ -33,6 +33,16 @@ export function startTgListenWorker() {
     async (job) => {
       const data = TgListenJobZ.parse(job.data);
       const prisma = getPrisma();
+      logger.info(
+        {
+          jobId: job.id,
+          fromTgUserId: data.fromTgUserId,
+          tgAccountId: data.tgAccountId,
+          fromUsername: data.fromUsername ?? null,
+          tgMsgId: data.tgMsgId,
+        },
+        'tg-listen: processing inbound job',
+      );
 
       // 1. Resolve contact. Strict tgUserId lookup first — that's what tg-send
       // now persists on first outbound. For contacts that were messaged
@@ -148,6 +158,10 @@ export function startTgListenWorker() {
           createdAt: message.createdAt.toISOString(),
         },
       });
+      logger.info(
+        { conversationId: conv.id, messageId: message.id },
+        'tg-listen: published message.new to realtime',
+      );
 
       // 6. Trigger the on_inbound agent pipeline (intent → handoff → reply
       // → safety → suggestion). agent-run reads the latest inbound from

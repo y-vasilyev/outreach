@@ -31,6 +31,13 @@ export interface ResolvedEndpoint {
   defaultHeaders?: Record<string, string>;
   /** Optional per-endpoint timeout override forwarded to ProviderConfig. */
   timeoutMs?: number;
+  /**
+   * Optional outbound HTTP/SOCKS proxy URL. Forwarded as-is to the
+   * provider's ProviderConfig so undici routes fetch() through it. The
+   * resolver is expected to have decrypted this from the endpoint auth
+   * envelope; the runner itself never touches the encrypted blob.
+   */
+  proxyUrl?: string;
 }
 
 /**
@@ -397,5 +404,6 @@ function toProviderConfig(r: ResolvedEndpoint): ProviderConfig {
   if (r.iamToken !== undefined) cfg.iamToken = r.iamToken;
   if (r.defaultHeaders !== undefined) cfg.defaultHeaders = r.defaultHeaders;
   if (r.timeoutMs !== undefined) cfg.timeoutMs = r.timeoutMs;
+  if (r.proxyUrl !== undefined) cfg.proxyUrl = r.proxyUrl;
   return cfg;
 }
