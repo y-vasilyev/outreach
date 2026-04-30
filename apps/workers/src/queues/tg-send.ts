@@ -49,6 +49,39 @@ export function startTgSendWorker() {
       await new Promise((r) => setTimeout(r, Math.min(5000, jitterMs())));
 
       const handle = await tg.for(tgAccountId);
+
+      // Resolve and persist the recipient's TG profile on the first send.
+      // Two reasons this matters:
+      //   1. tg-listen matches inbound replies via `Contact.tgUserId`;
+      //      without this we either drop the reply or attribute it to the
+      //      wrong contact.
+      //   2. The opener / reply LLM pipelines read first/last name off the
+      //      contact, so the prompt no longer hallucinates a name.
+      // We only resolve for TG-reachable contact types and skip if already
+      // populated.
+      if (!conv.contact.tgUserId && (conv.contact.type === 'tg_username' || conv.contact.type === 'tg_link')) {
+        try {
+          const resolved = await handle.resolveUser(target);
+          await prisma.contact.update({
+            where: { id: conv.contact.id },
+            data: {
+              tgUserId: resolved.id,
+              tgUsername: resolved.username ?? null,
+              tgFirstName: resolved.firstName ?? null,
+              tgLastName: resolved.lastName ?? null,
+            },
+          });
+        } catch (err) {
+          // Non-fatal: still try to send. Worst case we'll have to fall
+          // back to handle-based matching on inbound (which we don't, so
+          // the operator will need to pick up the conversation manually).
+          logger.warn(
+            { err: (err as Error).message, contactId: conv.contact.id },
+            'tg-send: resolveUser failed; sending without profile data',
+          );
+        }
+      }
+
       const r = await handle.sendMessage(target, message.text);
 
       await prisma.message.update({

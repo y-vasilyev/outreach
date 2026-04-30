@@ -6,6 +6,7 @@ import { getRunner } from '../services/runner.js';
 import { logger } from '../logger.js';
 import { publishRealtime } from '../services/realtime-emit.js';
 import { tryAutoApprove } from '../services/auto-approve.js';
+import { buildContactPromptInput } from '../services/agent-input.js';
 
 interface IntentOut {
   intent: string;
@@ -29,6 +30,7 @@ interface SafetyOut {
   rewrite_hint?: string;
   risk_score: number;
 }
+
 
 export function startAgentRunWorker() {
   const worker = new Worker(
@@ -96,7 +98,7 @@ export function startAgentRunWorker() {
           // generate replies + safety filter
           const reply = await runner.run<ReplyComposerOut>('reply_composer', {
             channel_analysis: conv.contact.channel?.analysis ?? {},
-            contact: { id: conv.contact.id, value: conv.contact.value, role: conv.contact.roleGuess },
+            contact: buildContactPromptInput(conv.contact),
             campaign: { goal_text: '', value_prop: '' },
             conversation_history: messages.map((m) => ({
               direction: m.direction,
@@ -191,11 +193,7 @@ export function startAgentRunWorker() {
             'opening_composer',
             {
               channel_analysis: conv.contact.channel?.analysis ?? {},
-              contact: {
-                value: conv.contact.value,
-                role: conv.contact.roleGuess,
-                type: conv.contact.type,
-              },
+              contact: buildContactPromptInput(conv.contact),
               strategy: { approach: 'industry_fit' },
               campaign: { goal_text: goalText, value_prop: valueProp },
             },

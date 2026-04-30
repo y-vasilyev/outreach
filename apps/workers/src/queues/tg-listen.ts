@@ -34,26 +34,15 @@ export function startTgListenWorker() {
       const data = TgListenJobZ.parse(job.data);
       const prisma = getPrisma();
 
-      // 1. Resolve contact. We don't have `tgUserId` populated everywhere
-      // yet (resolver runs at first send), so fall back to handle match.
-      let contact = await prisma.contact.findFirst({
+      // 1. Resolve contact strictly by tgUserId. Older code had a "pick the
+      // most recently updated tg_username contact" fallback, but that
+      // attributes the inbound to a *random* contact and corrupts threads.
+      // tg-send now resolves and persists tgUserId on the first outbound,
+      // so this lookup is reliable for every contact we've actually
+      // messaged.
+      const contact = await prisma.contact.findFirst({
         where: { tgUserId: data.fromTgUserId },
       });
-      if (!contact) {
-        contact = await prisma.contact.findFirst({
-          where: {
-            type: 'tg_username',
-            // Stored as bare handle, no leading `@`.
-            value: { not: '' },
-            // We don't know the username here; this branch is intentionally
-            // narrow — real resolution happens via tgUserId once known.
-          },
-          orderBy: { updatedAt: 'desc' },
-          take: 1,
-          // The unsafe path is matching by handle without verifying — skip
-          // unless we have a hard signal. For now, drop unmatched events.
-        });
-      }
       if (!contact) {
         logger.info(
           { fromTgUserId: data.fromTgUserId, tgAccountId: data.tgAccountId },
@@ -63,13 +52,6 @@ export function startTgListenWorker() {
       }
 
       // Persist tgUserId on the contact for next time.
-      if (!contact.tgUserId) {
-        await prisma.contact.update({
-          where: { id: contact.id },
-          data: { tgUserId: data.fromTgUserId },
-        });
-      }
-
       // 2. Find or create the conversation.
       let conv = await prisma.conversation.findUnique({
         where: {

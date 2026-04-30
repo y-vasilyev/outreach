@@ -3,6 +3,7 @@ import { getPrisma } from '@nosquare/db';
 import { getRunner } from '../services/runner.js';
 import { logger } from '../logger.js';
 import { tryAutoApprove } from '../services/auto-approve.js';
+import { buildContactPromptInput } from '../services/agent-input.js';
 
 interface OpenerOut {
   variants: Array<{ text: string; rationale: string; risk_score: number }>;
@@ -131,7 +132,7 @@ export function startCampaignDispatcher() {
           try {
             const opener = await runner.run<OpenerOut>('opening_composer', {
               channel_analysis: contact.channel?.analysis ?? {},
-              contact: { value: contact.value, role: contact.roleGuess, type: contact.type },
+              contact: buildContactPromptInput(contact),
               strategy: { approach: 'industry_fit' },
               campaign: { goal_text: c.goalText, value_prop: c.valueProp },
             }, { conversationId: conv.id, campaignId: c.id, contactId: contact.id });
