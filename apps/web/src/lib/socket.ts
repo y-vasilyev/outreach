@@ -4,17 +4,60 @@ import { getToken } from './api';
 
 let socket: Socket | null = null;
 
+/**
+ * Resolve the Socket.IO target URL. In dev we deliberately bypass the Vite
+ * dev-server's WS proxy (it ECONNREFUSEs on a cold start while the API
+ * isn't up yet, then refuses to restore the proxy session even after the
+ * API comes back) and talk to the API directly via CORS — `attachIo()`
+ * already permits `WEB_ORIGIN`. In prod we keep same-origin so the same
+ * reverse proxy that fronts the API also fronts /socket.io.
+ *
+ *   - VITE_PUBLIC_WS_URL  → explicit override (e.g. https://api.example.com)
+ *   - VITE_PUBLIC_API_URL → reused: socket lives at the same origin as REST
+ *   - else dev / undefined → http://localhost:4000
+ *   - prod → undefined → same-origin
+ */
+function getWsTarget(): string | undefined {
+  const env = (import.meta as unknown as {
+    env?: Record<string, string | undefined>;
+  }).env;
+  const explicit = env?.VITE_PUBLIC_WS_URL;
+  if (explicit) return explicit.replace(/\/$/, '');
+  const apiUrl = env?.VITE_PUBLIC_API_URL;
+  if (apiUrl) {
+    try {
+      return new URL(apiUrl).origin;
+    } catch {
+      /* fall through */
+    }
+  }
+  if (env?.DEV) return 'http://localhost:4000';
+  return undefined;
+}
+
 export function getSocket(): Socket {
   if (socket) return socket;
-  socket = io({
-    path: '/socket.io',
-    transports: ['websocket', 'polling'],
-    autoConnect: true,
-    auth: () => ({ token: getToken() ?? undefined }),
-    reconnection: true,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 5000,
-  });
+  const target = getWsTarget();
+  socket = target
+    ? io(target, {
+        path: '/socket.io',
+        transports: ['websocket', 'polling'],
+        autoConnect: true,
+        withCredentials: true,
+        auth: () => ({ token: getToken() ?? undefined }),
+        reconnection: true,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+      })
+    : io({
+        path: '/socket.io',
+        transports: ['websocket', 'polling'],
+        autoConnect: true,
+        auth: () => ({ token: getToken() ?? undefined }),
+        reconnection: true,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+      });
   return socket;
 }
 
