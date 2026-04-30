@@ -131,18 +131,73 @@ async function performFakeTlsHandshake(
 /**
  * Build a GramJS Connection class (i.e. a class compatible with the
  * `connection` constructor option of `TelegramClient`) that wraps the
- * legacy MTProxy obfuscation 2.0 handshake in a fake-TLS layer.
+ * legacy MTProxy obfuscation 2.0 handshake in a fake-TLS layer AND speaks
+ * Padded Intermediate transport (the only transport mtg-style fake-TLS
+ * proxies accept; GramJS' built-in MTProxy uses Abridged with tag
+ * `efefefef`, which mtg drops at the obfuscated handshake step).
  *
  * The base class is loaded dynamically so we can extend the JS prototype
  * GramJS exports — TypeScript can't see it at compile time.
  */
 export async function loadFakeTlsConnectionClass(): Promise<unknown> {
-  const mod = (await import('telegram/network/connection/TCPMTProxy.js')) as unknown as {
+  const mtproxyMod = (await import(
+    'telegram/network/connection/TCPMTProxy.js'
+  )) as unknown as {
     ConnectionTCPMTProxyAbridged: new (...args: unknown[]) => GramJsConnectionLike;
   };
-  const Base = mod.ConnectionTCPMTProxyAbridged;
+  const connMod = (await import(
+    'telegram/network/connection/Connection.js'
+  )) as unknown as { PacketCodec: new (...args: unknown[]) => unknown };
+  const Base = mtproxyMod.ConnectionTCPMTProxyAbridged;
+  const PacketCodec = connMod.PacketCodec;
+
+  /**
+   * Padded Intermediate transport.
+   *   - obfuscation connection_type (tag in the 64-byte handshake): dddddddd
+   *   - per-packet wire format: [len: u32 LE] [data + random pad 0..15]
+   *     where `len` = data.length + pad.length (multiple of 4, ≤ 2^31).
+   */
+  class PaddedIntermediatePacketCodec extends (PacketCodec as unknown as new (
+    ...args: unknown[]
+  ) => { tag?: Buffer; obfuscateTag?: Buffer }) {
+    constructor(props: unknown) {
+      super(props);
+      // No separate transport tag; connection_type inside obfuscation greeting carries it.
+      this.tag = undefined;
+      this.obfuscateTag = Buffer.from('dddddddd', 'hex');
+    }
+    encodePacket(data: Buffer): Buffer {
+      const padLen = Math.floor(Math.random() * 16); // 0..15
+      const totalLen = data.length + padLen;
+      const out = Buffer.alloc(4 + totalLen);
+      out.writeUInt32LE(totalLen, 0);
+      data.copy(out, 4);
+      if (padLen > 0) {
+        // crypto.randomBytes is fine but Math.random here is acceptable —
+        // Telegram only requires the pad to be unpredictable to a passive
+        // observer, and the bytes are encrypted by the obfuscation layer.
+        for (let i = 0; i < padLen; i++) {
+          out[4 + data.length + i] = Math.floor(Math.random() * 256);
+        }
+      }
+      return out;
+    }
+    async readPacket(reader: { read(n: number): Promise<Buffer> }): Promise<Buffer> {
+      const lenBuf = await reader.read(4);
+      const length = lenBuf.readUInt32LE(0);
+      return reader.read(length);
+    }
+  }
 
   class FakeTlsConnection extends (Base as unknown as new (...args: unknown[]) => GramJsConnectionLike) {
+    constructor(...args: unknown[]) {
+      super(...args);
+      // Override the packet codec class so we speak Padded Intermediate
+      // transport (mtg's fake-TLS only supports `dddddddd` connection type).
+      (this as unknown as { PacketCodecClass: unknown }).PacketCodecClass =
+        PaddedIntermediatePacketCodec;
+    }
+
     async _connect(): Promise<void> {
       // Replicate the parent's TCP-open path, but inject our handshake
       // before the obfuscation handshake.
