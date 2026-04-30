@@ -19,12 +19,12 @@ import { cn } from '../../lib/cn';
 
 interface DashboardData {
   channels: { total: number; new: number; scraping: number; extracted: number; failed: number };
-  contacts: { total: number; reachable_tg: number; manual: number };
+  contacts: { total: number; reachableTg: number; manual: number };
   conversations: { active: number; assisted: number; manual: number; auto: number };
   campaigns: { running: number; paused: number };
-  cost: { tokens_today: number; cost_today_usd: number; cost_7d_usd: number };
-  reply_rate_7d: number;
-  recent_activity: Array<{
+  cost: { tokensToday: number; costTodayUsd: number; cost7dUsd: number };
+  replyRate7d: number;
+  recentActivity: Array<{
     id: string;
     type: 'channel_extracted' | 'message_sent' | 'reply' | 'escalation' | 'failed';
     title: string;
@@ -35,12 +35,12 @@ interface DashboardData {
 
 const fallback: DashboardData = {
   channels: { total: 0, new: 0, scraping: 0, extracted: 0, failed: 0 },
-  contacts: { total: 0, reachable_tg: 0, manual: 0 },
+  contacts: { total: 0, reachableTg: 0, manual: 0 },
   conversations: { active: 0, assisted: 0, manual: 0, auto: 0 },
   campaigns: { running: 0, paused: 0 },
-  cost: { tokens_today: 0, cost_today_usd: 0, cost_7d_usd: 0 },
-  reply_rate_7d: 0,
-  recent_activity: [],
+  cost: { tokensToday: 0, costTodayUsd: 0, cost7dUsd: 0 },
+  replyRate7d: 0,
+  recentActivity: [],
 };
 
 export function DashboardPage() {
@@ -77,7 +77,7 @@ export function DashboardPage() {
               label="Контакты"
               value={formatNumber(d.contacts.total)}
               icon={<IdentificationIcon className="h-5 w-5" />}
-              hint={`${formatNumber(d.contacts.reachable_tg)} TG · ${formatNumber(d.contacts.manual)} manual`}
+              hint={`${formatNumber(d.contacts.reachableTg)} TG · ${formatNumber(d.contacts.manual)} manual`}
               tone="emerald"
               to="/contacts"
             />
@@ -91,9 +91,9 @@ export function DashboardPage() {
             />
             <StatCard
               label="Стоимость / 7 дн."
-              value={formatMoney(d.cost.cost_7d_usd)}
+              value={formatMoney(d.cost.cost7dUsd)}
               icon={<CurrencyDollarIcon className="h-5 w-5" />}
-              hint={`${formatMoney(d.cost.cost_today_usd)} сегодня`}
+              hint={`${formatMoney(d.cost.costTodayUsd)} сегодня`}
               tone="amber"
             />
           </div>
@@ -124,9 +124,9 @@ export function DashboardPage() {
                 <ArrowTrendingUpIcon className="h-4 w-4 text-slate-400" />
               </div>
               <ul className="mt-4 space-y-3">
-                <KpiRow label="Reply-rate (7д)" value={formatPct(d.reply_rate_7d)} tone="emerald" />
+                <KpiRow label="Reply-rate (7д)" value={formatPct(d.replyRate7d)} tone="emerald" />
                 <KpiRow label="Кампании running" value={formatNumber(d.campaigns.running)} tone="indigo" />
-                <KpiRow label="Tokens сегодня" value={formatNumber(d.cost.tokens_today)} tone="slate" />
+                <KpiRow label="Tokens сегодня" value={formatNumber(d.cost.tokensToday)} tone="slate" />
                 <KpiRow label="Conv. на оператора" value={formatNumber(d.conversations.manual)} tone="violet" />
               </ul>
             </div>
@@ -140,10 +140,10 @@ export function DashboardPage() {
               </Link>
             </div>
             <div className="mt-4 divide-y divide-slate-100">
-              {d.recent_activity.length === 0 ? (
+              {d.recentActivity.length === 0 ? (
                 <div className="py-10 text-center text-sm text-slate-500">Активности пока нет</div>
               ) : (
-                d.recent_activity.map((ev) => <ActivityRow key={ev.id} ev={ev} />)
+                d.recentActivity.map((ev) => <ActivityRow key={ev.id} ev={ev} />)
               )}
             </div>
           </div>
@@ -217,7 +217,7 @@ function KpiRow({ label, value, tone }: { label: string; value: string; tone: 'e
   );
 }
 
-function ActivityRow({ ev }: { ev: DashboardData['recent_activity'][number] }) {
+function ActivityRow({ ev }: { ev: DashboardData['recentActivity'][number] }) {
   const Icon =
     ev.type === 'message_sent'
       ? PaperAirplaneIcon

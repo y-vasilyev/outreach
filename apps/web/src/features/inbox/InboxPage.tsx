@@ -20,7 +20,7 @@ export function InboxPage() {
     queryKey: ['conversations', { search, mode, status }],
     queryFn: () => {
       const qs = new URLSearchParams();
-      if (search) qs.set('search', search);
+      if (search) qs.set('q', search);
       if (mode) qs.set('mode', mode);
       if (status) qs.set('status', status);
       return api.get<ConversationListItem[]>(`/conversations?${qs.toString()}`);

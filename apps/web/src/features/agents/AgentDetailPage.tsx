@@ -23,29 +23,29 @@ interface AgentConfig {
   name: string;
   role?: string;
   description?: string;
-  endpoint_id: string | null;
+  endpointId: string | null;
   endpoint?: { id: string; name: string };
-  fallback_endpoint_id: string | null;
+  fallbackEndpointId: string | null;
   model: string;
-  system_prompt: string;
-  user_prompt_template: string;
+  systemPrompt: string;
+  userPromptTemplate: string;
   params: Record<string, unknown>;
   enabled: boolean;
   variables?: string[];
   version: number;
-  updated_at: string;
+  updatedAt: string;
 }
 
 interface AgentRunHistory {
   id: string;
-  agent_name: string;
+  agentName: string;
   status: 'ok' | 'fallback' | 'failed';
-  tokens_in: number;
-  tokens_out: number;
-  cost_usd: number;
-  latency_ms: number;
-  created_at: string;
-  endpoint_id?: string;
+  tokensIn: number;
+  tokensOut: number;
+  costUsd: number;
+  latencyMs: number;
+  createdAt: string;
+  endpointId?: string;
   model?: string;
   error?: string | null;
 }
@@ -126,21 +126,21 @@ function ConfigForm({
   onSaved: () => void;
 }) {
   const toast = useToast();
-  const [endpointId, setEndpointId] = useState(agent.endpoint_id ?? '');
-  const [fallbackId, setFallbackId] = useState(agent.fallback_endpoint_id ?? '');
+  const [endpointId, setEndpointId] = useState(agent.endpointId ?? '');
+  const [fallbackId, setFallbackId] = useState(agent.fallbackEndpointId ?? '');
   const [model, setModel] = useState(agent.model);
-  const [systemPrompt, setSystemPrompt] = useState(agent.system_prompt);
-  const [userTemplate, setUserTemplate] = useState(agent.user_prompt_template);
+  const [systemPrompt, setSystemPrompt] = useState(agent.systemPrompt);
+  const [userTemplate, setUserTemplate] = useState(agent.userPromptTemplate);
   const [enabled, setEnabled] = useState(agent.enabled);
   const [paramsJson, setParamsJson] = useState(JSON.stringify(agent.params ?? {}, null, 2));
   const [paramsError, setParamsError] = useState<string | null>(null);
 
   useEffect(() => {
-    setEndpointId(agent.endpoint_id ?? '');
-    setFallbackId(agent.fallback_endpoint_id ?? '');
+    setEndpointId(agent.endpointId ?? '');
+    setFallbackId(agent.fallbackEndpointId ?? '');
     setModel(agent.model);
-    setSystemPrompt(agent.system_prompt);
-    setUserTemplate(agent.user_prompt_template);
+    setSystemPrompt(agent.systemPrompt);
+    setUserTemplate(agent.userPromptTemplate);
     setEnabled(agent.enabled);
     setParamsJson(JSON.stringify(agent.params ?? {}, null, 2));
   }, [agent]);
@@ -159,11 +159,11 @@ function ConfigForm({
         throw e;
       }
       return api.patch<AgentConfig>(`/agents/${agent.id}`, {
-        endpoint_id: endpointId || null,
-        fallback_endpoint_id: fallbackId || null,
+        endpointId: endpointId || null,
+        fallbackEndpointId: fallbackId || null,
         model,
-        system_prompt: systemPrompt,
-        user_prompt_template: userTemplate,
+        systemPrompt,
+        userPromptTemplate: userTemplate,
         enabled,
         params,
       });
@@ -255,7 +255,7 @@ function ConfigForm({
       </div>
 
       <div className="flex items-center justify-between gap-3">
-        <div className="text-xs text-slate-500">Обновлён: {formatDateTime(agent.updated_at)}</div>
+        <div className="text-xs text-slate-500">Обновлён: {formatDateTime(agent.updatedAt)}</div>
         <div className="flex items-center gap-2">
           <Button variant="secondary" onClick={() => window.location.reload()} leftIcon={<ArrowPathIcon className="h-4 w-4" />}>
             Сбросить
@@ -369,7 +369,7 @@ function HistoryPanel({ agentId, agentName }: { agentId: string; agentName: stri
         <tbody className="divide-y divide-slate-100 bg-white">
           {data.map((h) => (
             <tr key={h.id}>
-              <td className="px-4 py-3 text-sm text-slate-700">{formatDateTime(h.created_at)}</td>
+              <td className="px-4 py-3 text-sm text-slate-700">{formatDateTime(h.createdAt)}</td>
               <td className="px-4 py-3">
                 <Badge tone={h.status === 'ok' ? 'emerald' : h.status === 'fallback' ? 'amber' : 'rose'}>
                   {h.status}
@@ -377,10 +377,10 @@ function HistoryPanel({ agentId, agentName }: { agentId: string; agentName: stri
               </td>
               <td className="px-4 py-3 font-mono text-xs text-slate-700">{h.model ?? '—'}</td>
               <td className="px-4 py-3 text-right text-sm text-slate-700">
-                {formatNumber(h.tokens_in)} / {formatNumber(h.tokens_out)}
+                {formatNumber(h.tokensIn)} / {formatNumber(h.tokensOut)}
               </td>
-              <td className="px-4 py-3 text-right text-sm text-slate-700">{h.latency_ms} мс</td>
-              <td className="px-4 py-3 text-right text-sm text-slate-700">{formatMoney(h.cost_usd)}</td>
+              <td className="px-4 py-3 text-right text-sm text-slate-700">{h.latencyMs} мс</td>
+              <td className="px-4 py-3 text-right text-sm text-slate-700">{formatMoney(h.costUsd)}</td>
             </tr>
           ))}
         </tbody>

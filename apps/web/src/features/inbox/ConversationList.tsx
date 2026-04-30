@@ -8,16 +8,19 @@ export interface ConversationListItem {
   contact?: {
     id: string;
     value: string;
-    role_guess?: string;
+    roleGuess?: string;
     channel?: { handle?: string; title?: string };
   };
   status: 'active' | 'paused' | 'done' | 'failed';
   mode: 'auto' | 'assisted' | 'manual';
-  last_message_text?: string;
-  last_message_at?: string;
-  last_inbound_at?: string | null;
+  /**
+   * Server-derived fields (optional — not yet computed for the list response).
+   */
+  lastMessageText?: string;
+  lastMessageAt?: string;
+  lastInboundAt?: string | null;
   unread?: number;
-  pending_suggestions?: number;
+  pendingSuggestions?: number;
   campaign?: { id: string; name: string };
 }
 
@@ -70,20 +73,20 @@ export function ConversationList({ items, activeId, onPick }: Props) {
                   </div>
                   <div className="flex flex-shrink-0 flex-col items-end gap-1">
                     <span className="whitespace-nowrap text-[11px] text-slate-400">
-                      {formatRelative(c.last_message_at)}
+                      {formatRelative(c.lastMessageAt ?? c.lastInboundAt ?? undefined)}
                     </span>
                     <ModeBadge mode={c.mode} />
                   </div>
                 </div>
-                {c.last_message_text && (
+                {c.lastMessageText && (
                   <div className="mt-1 truncate text-xs text-slate-500">
-                    {truncate(c.last_message_text, 80)}
+                    {truncate(c.lastMessageText, 80)}
                   </div>
                 )}
-                {(c.pending_suggestions ?? 0) > 0 && (
+                {(c.pendingSuggestions ?? 0) > 0 && (
                   <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-brand-700">
                     <span className="h-1.5 w-1.5 rounded-full bg-brand-500 animate-pulse-dot" />
-                    {c.pending_suggestions} подсказки
+                    {c.pendingSuggestions} подсказки
                   </div>
                 )}
               </div>

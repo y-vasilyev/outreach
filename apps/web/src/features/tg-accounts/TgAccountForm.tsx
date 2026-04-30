@@ -31,8 +31,8 @@ export function TgAccountForm({ open, onClose, account, onSaved }: Props) {
       setLabel(account.label);
       setPhone(account.phone);
       setRole(account.role);
-      setDailyMsgLimit(account.daily_msg_limit);
-      setDailyNewLimit(account.daily_new_contact_limit);
+      setDailyMsgLimit(account.dailyMsgLimit);
+      setDailyNewLimit(account.dailyNewContactLimit);
       setTags((account.tags ?? []).join(', '));
       setNotes(account.notes ?? '');
     } else {
@@ -52,8 +52,8 @@ export function TgAccountForm({ open, onClose, account, onSaved }: Props) {
         label,
         phone,
         role,
-        daily_msg_limit: dailyMsgLimit,
-        daily_new_contact_limit: dailyNewLimit,
+        dailyMsgLimit,
+        dailyNewContactLimit: dailyNewLimit,
         tags: tags
           .split(',')
           .map((t) => t.trim())

@@ -15,12 +15,12 @@ export interface AgentSummary {
   role?: string;
   description?: string;
   endpoint?: { id: string; name: string; provider: string };
-  fallback_endpoint?: { id: string; name: string } | null;
+  fallbackEndpoint?: { id: string; name: string } | null;
   model: string;
   enabled: boolean;
   version: number;
   variables?: string[];
-  updated_at: string;
+  updatedAt: string;
 }
 
 const agentLabels: Record<string, string> = {
@@ -110,7 +110,7 @@ export function AgentsPage() {
                 <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
                   <Field label="Endpoint" value={a.endpoint?.name ?? '—'} />
                   <Field label="Модель" value={a.model} mono />
-                  <Field label="Fallback" value={a.fallback_endpoint?.name ?? '—'} />
+                  <Field label="Fallback" value={a.fallbackEndpoint?.name ?? '—'} />
                   <Field label="Версия" value={`v${a.version}`} />
                 </div>
                 <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-xs text-slate-500">
@@ -123,7 +123,7 @@ export function AgentsPage() {
                     />
                     {a.enabled ? 'enabled' : 'disabled'}
                     <span className="text-slate-300">·</span>
-                    <span>upd {formatDateTime(a.updated_at)}</span>
+                    <span>upd {formatDateTime(a.updatedAt)}</span>
                   </div>
                   <span className="inline-flex items-center gap-1 text-brand-600 group-hover:text-brand-500">
                     Открыть <ArrowRightIcon className="h-3.5 w-3.5" />

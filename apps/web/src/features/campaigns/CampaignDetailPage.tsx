@@ -16,10 +16,10 @@ import { formatNumber, formatPct } from '../../lib/format';
 import type { Campaign } from './CampaignsPage';
 
 interface PreviewItem {
-  contact_id: string;
-  contact_value: string;
-  channel_title?: string;
-  drafts: { text: string; risk_score?: number; rationale?: string }[];
+  contactId: string;
+  contactValue: string;
+  channelTitle?: string;
+  drafts: { text: string; riskScore?: number; rationale?: string }[];
   blocked?: { reasons: string[] };
 }
 
@@ -72,7 +72,7 @@ export function CampaignDetailPage() {
     <div>
       <PageHeader
         title={campaign.name}
-        description={campaign.goal_text}
+        description={campaign.goalText}
         breadcrumbs={
           <Link to="/campaigns" className="inline-flex items-center gap-1 text-slate-500 hover:text-slate-700">
             <ArrowLeftIcon className="h-3.5 w-3.5" />
@@ -104,25 +104,25 @@ export function CampaignDetailPage() {
         <div className="card-padded lg:col-span-2">
           <div className="flex items-center gap-2">
             <StatusDot status={campaign.status} />
-            <Badge tone={campaign.default_mode === 'auto' ? 'indigo' : campaign.default_mode === 'assisted' ? 'violet' : 'amber'}>
-              mode: {campaign.default_mode}
+            <Badge tone={campaign.defaultMode === 'auto' ? 'indigo' : campaign.defaultMode === 'assisted' ? 'violet' : 'amber'}>
+              mode: {campaign.defaultMode}
             </Badge>
           </div>
           <KeyValue
             className="mt-4"
             items={[
-              { label: 'Goal', value: campaign.goal_text },
-              { label: 'Value-prop', value: campaign.value_prop },
+              { label: 'Goal', value: campaign.goalText },
+              { label: 'Value-prop', value: campaign.valueProp },
               {
                 label: 'Outreach pool',
-                value: campaign.outreach_account_pool?.length
-                  ? `${campaign.outreach_account_pool.length} аккаунтов`
+                value: campaign.outreachAccountPool?.length
+                  ? `${campaign.outreachAccountPool.length} аккаунтов`
                   : 'не задан',
               },
               {
                 label: 'Schedule',
                 value: campaign.schedule
-                  ? `${campaign.schedule.work_hours ?? '—'} · ${campaign.schedule.tz ?? 'UTC'} · до ${campaign.schedule.max_per_day_per_account ?? '—'}/акк`
+                  ? `${campaign.schedule.workHours ? `${campaign.schedule.workHours.start}–${campaign.schedule.workHours.end}` : '—'} · ${campaign.schedule.tz ?? 'UTC'} · до ${campaign.schedule.maxPerDayPerAccount ?? '—'}/акк`
                   : '—',
               },
             ]}
@@ -130,18 +130,18 @@ export function CampaignDetailPage() {
           <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Stat label="Sent" value={formatNumber(campaign.metrics?.sent ?? 0)} />
             <Stat label="Replies" value={formatNumber(campaign.metrics?.replies ?? 0)} />
-            <Stat label="Reply-rate" value={formatPct(campaign.metrics?.reply_rate ?? 0)} />
+            <Stat label="Reply-rate" value={formatPct(campaign.metrics?.replyRate ?? 0)} />
             <Stat label="Qualified" value={formatNumber(campaign.metrics?.qualified ?? 0)} />
           </div>
         </div>
         <div className="card-padded">
           <h3 className="text-sm font-semibold text-slate-900">Target filter</h3>
           <pre className="mt-3 max-h-72 overflow-auto rounded-xl bg-slate-50 p-3 font-mono text-[11px] text-slate-700 ring-1 ring-slate-200 scrollbar-thin">
-            {JSON.stringify(campaign.target_filter ?? {}, null, 2)}
+            {JSON.stringify(campaign.targetFilter ?? {}, null, 2)}
           </pre>
           <h3 className="mt-5 text-sm font-semibold text-slate-900">Agent overrides</h3>
           <pre className="mt-3 max-h-48 overflow-auto rounded-xl bg-slate-50 p-3 font-mono text-[11px] text-slate-700 ring-1 ring-slate-200 scrollbar-thin">
-            {JSON.stringify(campaign.agent_overrides ?? {}, null, 2)}
+            {JSON.stringify(campaign.agentOverrides ?? {}, null, 2)}
           </pre>
         </div>
       </div>
@@ -174,20 +174,20 @@ export function CampaignDetailPage() {
             <div className="py-8 text-center text-sm text-slate-500">Нет кандидатов под текущий фильтр.</div>
           ) : (
             preview.map((p) => (
-              <div key={p.contact_id} className="rounded-xl border border-slate-200 p-4">
+              <div key={p.contactId} className="rounded-xl border border-slate-200 p-4">
                 <div className="flex items-center justify-between">
-                  <div className="font-mono text-sm font-semibold text-slate-900">{p.contact_value}</div>
-                  {p.channel_title && (
-                    <div className="text-xs text-slate-500">{p.channel_title}</div>
+                  <div className="font-mono text-sm font-semibold text-slate-900">{p.contactValue}</div>
+                  {p.channelTitle && (
+                    <div className="text-xs text-slate-500">{p.channelTitle}</div>
                   )}
                 </div>
                 <div className="mt-3 space-y-2">
                   {p.drafts.map((d, idx) => (
                     <div key={idx} className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
                       <div className="text-sm whitespace-pre-wrap text-slate-800">{d.text}</div>
-                      {d.risk_score !== undefined && (
+                      {d.riskScore !== undefined && (
                         <div className="mt-2 text-xs text-slate-500">
-                          risk: {(d.risk_score * 100).toFixed(0)}%
+                          risk: {(d.riskScore * 100).toFixed(0)}%
                           {d.rationale && ` · ${d.rationale}`}
                         </div>
                       )}

@@ -24,4 +24,15 @@ export async function endpointsRoutes(app: FastifyInstance) {
     await endpointsService.delete(params.id);
     return { ok: true };
   });
+
+  app.post('/endpoints/:id/test', async (req) => {
+    const params = z.object({ id: z.string() }).parse(req.params);
+    const started = Date.now();
+    try {
+      await endpointsService.resolve(params.id);
+      return { ok: true, latencyMs: Date.now() - started };
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
+  });
 }

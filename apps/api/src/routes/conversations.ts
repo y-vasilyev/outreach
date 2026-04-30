@@ -13,15 +13,17 @@ export async function conversationsRoutes(app: FastifyInstance) {
 
   app.get('/conversations/:id', async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
-    const c = await conversationsService.get(params.id);
-    const messages = await conversationsService.getMessages(params.id);
-    const suggestions = await conversationsService.getSuggestions(params.id);
-    return { conversation: c, messages, suggestions };
+    return conversationsService.get(params.id);
   });
 
   app.get('/conversations/:id/messages', async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
     return conversationsService.getMessages(params.id);
+  });
+
+  app.get('/conversations/:id/suggestions', async (req) => {
+    const params = z.object({ id: z.string() }).parse(req.params);
+    return conversationsService.getSuggestions(params.id);
   });
 
   app.post('/conversations/:id/messages', async (req) => {
@@ -38,15 +40,20 @@ export async function conversationsRoutes(app: FastifyInstance) {
   app.patch('/conversations/:id', async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
     const body = z
-      .object({ mode: z.enum(['auto', 'assisted', 'manual']).optional() })
+      .object({
+        mode: z.enum(['auto', 'assisted', 'manual']).optional(),
+        status: z.enum(['active', 'paused', 'done', 'failed']).optional(),
+      })
       .parse(req.body);
     if (body.mode) await conversationsService.setMode(params.id, body.mode);
+    if (body.status) await conversationsService.setStatus(params.id, body.status);
     return conversationsService.get(params.id);
   });
 
   app.post('/conversations/:id/suggestions/:sid/approve', async (req) => {
     const params = z.object({ id: z.string(), sid: z.string() }).parse(req.params);
-    return conversationsService.approveSuggestion(params.sid, req.user.id);
+    const body = z.object({ text: z.string().optional() }).parse(req.body ?? {});
+    return conversationsService.approveSuggestion(params.sid, req.user.id, body.text);
   });
 
   app.post('/conversations/:id/suggestions/:sid/reject', async (req) => {

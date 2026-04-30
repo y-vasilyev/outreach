@@ -21,14 +21,12 @@ interface Props {
 export function TgLoginDialog({ open, onClose, account, onDone }: Props) {
   const toast = useToast();
   const [step, setStep] = useState<Step>('phone');
-  const [phoneCodeHash, setPhoneCodeHash] = useState<string>('');
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
 
   const startMut = useMutation({
-    mutationFn: () => api.post<{ phone_code_hash: string }>(`/tg-accounts/${account.id}/login/start`, {}),
-    onSuccess: (r) => {
-      setPhoneCodeHash(r.phone_code_hash);
+    mutationFn: () => api.post<{ ok: boolean }>(`/tg-accounts/${account.id}/login/start`, {}),
+    onSuccess: () => {
       setStep('code');
       toast.info('Код отправлен в Telegram');
     },
@@ -37,12 +35,11 @@ export function TgLoginDialog({ open, onClose, account, onDone }: Props) {
 
   const codeMut = useMutation({
     mutationFn: () =>
-      api.post<{ requires_2fa?: boolean; ok?: boolean }>(`/tg-accounts/${account.id}/login/confirm-code`, {
-        phone_code_hash: phoneCodeHash,
+      api.post<{ ok?: boolean; needs2FA?: boolean }>(`/tg-accounts/${account.id}/login/confirm-code`, {
         code,
       }),
     onSuccess: (r) => {
-      if (r.requires_2fa) {
+      if (r.needs2FA) {
         setStep('password');
         toast.info('Введите пароль 2FA');
       } else {
@@ -66,7 +63,6 @@ export function TgLoginDialog({ open, onClose, account, onDone }: Props) {
     setStep('phone');
     setCode('');
     setPassword('');
-    setPhoneCodeHash('');
   }
 
   function handleClose(): void {

@@ -16,44 +16,63 @@ interface Props {
   onSaved: () => void;
 }
 
+const DEFAULT_FILTER_JSON = JSON.stringify(
+  { platforms: ['telegram'], roleGuess: ['ad_manager', 'owner'] },
+  null,
+  2,
+);
+const DEFAULT_OVERRIDES_JSON = '{}';
+const DEFAULT_SCHEDULE_JSON = JSON.stringify(
+  {
+    tz: 'Europe/Moscow',
+    workHours: { start: '10:00', end: '20:00' },
+    days: [1, 2, 3, 4, 5],
+    maxPerDayPerAccount: 25,
+  },
+  null,
+  2,
+);
+
 export function CampaignForm({ open, onClose, campaign, onSaved }: Props) {
   const toast = useToast();
   const [name, setName] = useState('');
   const [goal, setGoal] = useState('');
   const [valueProp, setValueProp] = useState('');
   const [mode, setMode] = useState<'auto' | 'assisted' | 'manual'>('assisted');
-  const [filterJson, setFilterJson] = useState('{\n  "platform": ["telegram"],\n  "role_guess": ["ad_manager", "owner"]\n}');
-  const [overridesJson, setOverridesJson] = useState('{}');
-  const [scheduleJson, setScheduleJson] = useState(
-    '{\n  "tz": "Europe/Moscow",\n  "work_hours": "10:00-19:00",\n  "days": ["mon","tue","wed","thu","fri"],\n  "max_per_day_per_account": 25\n}',
-  );
+  const [filterJson, setFilterJson] = useState(DEFAULT_FILTER_JSON);
+  const [overridesJson, setOverridesJson] = useState(DEFAULT_OVERRIDES_JSON);
+  const [scheduleJson, setScheduleJson] = useState(DEFAULT_SCHEDULE_JSON);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (campaign) {
       setName(campaign.name);
-      setGoal(campaign.goal_text);
-      setValueProp(campaign.value_prop);
-      setMode(campaign.default_mode);
-      setFilterJson(JSON.stringify(campaign.target_filter ?? {}, null, 2));
-      setOverridesJson(JSON.stringify(campaign.agent_overrides ?? {}, null, 2));
+      setGoal(campaign.goalText);
+      setValueProp(campaign.valueProp);
+      setMode(campaign.defaultMode);
+      setFilterJson(JSON.stringify(campaign.targetFilter ?? {}, null, 2));
+      setOverridesJson(JSON.stringify(campaign.agentOverrides ?? {}, null, 2));
       setScheduleJson(JSON.stringify(campaign.schedule ?? {}, null, 2));
     } else {
       setName('');
       setGoal('');
       setValueProp('');
       setMode('assisted');
+      setFilterJson(DEFAULT_FILTER_JSON);
+      setOverridesJson(DEFAULT_OVERRIDES_JSON);
+      setScheduleJson(DEFAULT_SCHEDULE_JSON);
     }
+    setError(null);
   }, [campaign, open]);
 
   const mut = useMutation({
     mutationFn: () => {
-      let target_filter: unknown = {};
-      let agent_overrides: unknown = {};
+      let targetFilter: unknown = {};
+      let agentOverrides: unknown = {};
       let schedule: unknown = {};
       try {
-        target_filter = JSON.parse(filterJson || '{}');
-        agent_overrides = JSON.parse(overridesJson || '{}');
+        targetFilter = JSON.parse(filterJson || '{}');
+        agentOverrides = JSON.parse(overridesJson || '{}');
         schedule = JSON.parse(scheduleJson || '{}');
         setError(null);
       } catch (e) {
@@ -62,11 +81,11 @@ export function CampaignForm({ open, onClose, campaign, onSaved }: Props) {
       }
       const body = {
         name,
-        goal_text: goal,
-        value_prop: valueProp,
-        default_mode: mode,
-        target_filter,
-        agent_overrides,
+        goalText: goal,
+        valueProp,
+        defaultMode: mode,
+        targetFilter,
+        agentOverrides,
         schedule,
       };
       if (campaign) return api.patch<Campaign>(`/campaigns/${campaign.id}`, body);
@@ -115,7 +134,7 @@ export function CampaignForm({ open, onClose, campaign, onSaved }: Props) {
           ]}
         />
         <Textarea
-          label="Цель / goal_text"
+          label="Цель / goalText"
           rows={3}
           placeholder="20 минут CustDev по продукту X с фаундерами B2B SaaS"
           className="sm:col-span-2"
@@ -140,7 +159,7 @@ export function CampaignForm({ open, onClose, campaign, onSaved }: Props) {
             rows={10}
             value={filterJson}
             onChange={(e) => setFilterJson(e.target.value)}
-            helpText="platform, role_guess, language, channel.analysis.topic, tags"
+            helpText="platforms, roleGuess, languages, topics, tags, minConfidence"
           />
         </div>
         <div>
@@ -160,7 +179,7 @@ export function CampaignForm({ open, onClose, campaign, onSaved }: Props) {
             rows={10}
             value={scheduleJson}
             onChange={(e) => setScheduleJson(e.target.value)}
-            helpText="tz, work_hours, days, лимиты на аккаунт"
+            helpText="tz, workHours: {start,end}, days: [1..5] (0=вс), maxPerDayPerAccount"
           />
         </div>
       </div>

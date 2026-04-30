@@ -16,10 +16,10 @@ interface AgentRef {
 
 interface TestResp {
   output: unknown;
-  tokens_in?: number;
-  tokens_out?: number;
-  latency_ms?: number;
-  cost_usd?: number;
+  tokensIn?: number;
+  tokensOut?: number;
+  latencyMs?: number;
+  costUsd?: number;
   status: 'ok' | 'fallback' | 'failed';
   error?: string;
 }
@@ -47,7 +47,7 @@ export function AgentTestPanel({ agent }: { agent: AgentRef }) {
         throw e;
       }
       setError(null);
-      return api.post<TestResp>(`/agents/${agent.id}/test`, { input: payload, dry_run: true });
+      return api.post<TestResp>(`/agents/${agent.id}/test`, { input: payload, dryRun: true });
     },
     onSuccess: (r) => {
       setResult(r);
@@ -96,13 +96,13 @@ export function AgentTestPanel({ agent }: { agent: AgentRef }) {
               <Badge tone={result.status === 'ok' ? 'emerald' : result.status === 'fallback' ? 'amber' : 'rose'}>
                 {result.status}
               </Badge>
-              {result.tokens_in !== undefined && (
+              {result.tokensIn !== undefined && (
                 <Badge tone="slate">
-                  tokens {formatNumber(result.tokens_in)}/{formatNumber(result.tokens_out ?? 0)}
+                  tokens {formatNumber(result.tokensIn)}/{formatNumber(result.tokensOut ?? 0)}
                 </Badge>
               )}
-              {result.latency_ms !== undefined && <Badge tone="slate">{result.latency_ms} мс</Badge>}
-              {result.cost_usd !== undefined && <Badge tone="slate">{formatMoney(result.cost_usd)}</Badge>}
+              {result.latencyMs !== undefined && <Badge tone="slate">{result.latencyMs} мс</Badge>}
+              {result.costUsd !== undefined && <Badge tone="slate">{formatMoney(result.costUsd)}</Badge>}
             </div>
             <pre className="mt-3 max-h-[420px] overflow-auto rounded-xl bg-slate-900 p-4 font-mono text-[12px] text-slate-100 scrollbar-thin">
               {JSON.stringify(result.output, null, 2)}

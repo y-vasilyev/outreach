@@ -14,10 +14,9 @@ import { formatDateTime } from '../../lib/format';
 export interface UserRow {
   id: string;
   email: string;
-  name?: string;
   role: 'admin' | 'operator' | 'viewer';
-  created_at: string;
-  updated_at: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export function UsersPage() {
@@ -51,8 +50,7 @@ export function UsersPage() {
             {u.email.slice(0, 2).toUpperCase()}
           </div>
           <div className="min-w-0">
-            <div className="truncate font-medium text-slate-900">{u.name || u.email}</div>
-            <div className="truncate text-xs text-slate-500">{u.email}</div>
+            <div className="truncate font-medium text-slate-900">{u.email}</div>
           </div>
         </div>
       ),
@@ -67,7 +65,7 @@ export function UsersPage() {
     {
       key: 'created',
       header: 'Создан',
-      cell: (u) => <span className="text-xs text-slate-500">{formatDateTime(u.created_at)}</span>,
+      cell: (u) => <span className="text-xs text-slate-500">{formatDateTime(u.createdAt)}</span>,
     },
     {
       key: 'actions',

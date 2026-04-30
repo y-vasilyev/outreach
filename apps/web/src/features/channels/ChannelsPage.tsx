@@ -29,12 +29,15 @@ export interface Channel {
   followers?: number;
   language?: string;
   status: string;
-  contacts_count?: number;
+  /** Prisma-style include from `findMany`. */
+  _count?: { contacts: number };
   source?: string;
-  scraped_at?: string;
-  added_at: string;
+  scrapedAt?: string;
+  createdAt: string;
+  updatedAt?: string;
+  /** `red_flags` is intentional snake_case in the analysis schema. */
   analysis?: { topic?: string; tone?: string; red_flags?: string[] } | null;
-  last_error?: string | null;
+  lastError?: string | null;
 }
 
 export function ChannelsPage() {
@@ -50,7 +53,7 @@ export function ChannelsPage() {
     queryKey: ['channels', { search, platform, status }],
     queryFn: () => {
       const qs = new URLSearchParams();
-      if (search) qs.set('search', search);
+      if (search) qs.set('q', search);
       if (platform) qs.set('platform', platform);
       if (status) qs.set('status', status);
       return api.get<{ items: Channel[]; total: number } | Channel[]>(`/channels?${qs.toString()}`);
@@ -124,13 +127,13 @@ export function ChannelsPage() {
       header: 'Контакты',
       align: 'right',
       cell: (r) => (
-        <span className="text-sm tabular-nums text-slate-700">{r.contacts_count ?? 0}</span>
+        <span className="text-sm tabular-nums text-slate-700">{r._count?.contacts ?? 0}</span>
       ),
     },
     {
       key: 'scraped',
       header: 'Скрейп',
-      cell: (r) => <span className="text-xs text-slate-500">{formatRelative(r.scraped_at)}</span>,
+      cell: (r) => <span className="text-xs text-slate-500">{formatRelative(r.scrapedAt)}</span>,
     },
     {
       key: 'actions',

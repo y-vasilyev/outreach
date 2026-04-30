@@ -16,14 +16,15 @@ import { cn } from '../../lib/cn';
 
 export interface Suggestion {
   id: string;
-  conversation_id: string;
-  agent_name: string;
+  conversationId: string;
+  agentName: string;
   text: string;
   rationale?: string;
   score?: number;
   status: 'pending' | 'approved' | 'edited' | 'rejected' | 'sent' | 'expired';
+  /** `intent_target` and `risk_score` are intentional snake_case keys inside agent meta. */
   meta?: { intent_target?: string; risk_score?: number; length?: string };
-  created_at: string;
+  createdAt: string;
 }
 
 interface Props {
@@ -185,7 +186,7 @@ function SuggestionCard({
       )}
     >
       <div className="mb-2 flex items-center justify-between gap-2">
-        <Badge tone="indigo">{s.agent_name}</Badge>
+        <Badge tone="indigo">{s.agentName}</Badge>
         {s.meta?.intent_target && <Badge tone="slate">{s.meta.intent_target}</Badge>}
         <Badge tone={riskTone} dot>
           risk {(risk * 100).toFixed(0)}%

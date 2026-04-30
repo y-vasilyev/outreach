@@ -34,7 +34,7 @@ export function ManualOutreachPage() {
     queryFn: () => {
       const qs = new URLSearchParams();
       qs.set('reachability', 'manual');
-      if (search) qs.set('search', search);
+      if (search) qs.set('q', search);
       if (type) qs.set('type', type);
       if (status) qs.set('status', status);
       return api.get<{ items: Contact[] } | Contact[]>(`/contacts?${qs.toString()}`);
@@ -181,7 +181,7 @@ function DraftPanel({ contact, onMark }: { contact: Contact; onMark: (status: st
           </div>
           <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
             <Badge tone="slate">{contact.type}</Badge>
-            <Badge tone="indigo">{contact.role_guess}</Badge>
+            <Badge tone="indigo">{contact.roleGuess}</Badge>
             <span className="font-mono">{contact.value}</span>
           </div>
         </div>
@@ -240,7 +240,7 @@ function DraftPanel({ contact, onMark }: { contact: Contact; onMark: (status: st
         </div>
       )}
 
-      <div className="mt-5 text-xs text-slate-500">Обновлён: {formatRelative(contact.updated_at)}</div>
+      <div className="mt-5 text-xs text-slate-500">Обновлён: {formatRelative(contact.updatedAt)}</div>
     </div>
   );
 }

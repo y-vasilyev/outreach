@@ -10,12 +10,12 @@ export interface DashboardData {
     extracted: number;
     failed: number;
   };
-  contacts: { total: number; reachable_tg: number; manual: number };
+  contacts: { total: number; reachableTg: number; manual: number };
   conversations: { active: number; assisted: number; manual: number; auto: number };
   campaigns: { running: number; paused: number };
-  cost: { tokens_today: number; cost_today_usd: number; cost_7d_usd: number };
-  reply_rate_7d: number;
-  recent_activity: Array<{
+  cost: { tokensToday: number; costTodayUsd: number; cost7dUsd: number };
+  replyRate7d: number;
+  recentActivity: Array<{
     id: string;
     type: 'channel_extracted' | 'message_sent' | 'reply' | 'escalation' | 'failed';
     title: string;
@@ -119,7 +119,7 @@ export const dashboardService = {
     const replyRate =
       messagesSent7d > 0 ? Math.min(1, messagesReplied7d / messagesSent7d) : 0;
 
-    const recent: DashboardData['recent_activity'] = [];
+    const recent: DashboardData['recentActivity'] = [];
     for (const ch of recentChannels) {
       recent.push({
         id: `channel:${ch.id}`,
@@ -152,7 +152,7 @@ export const dashboardService = {
       },
       contacts: {
         total: contactsTotal,
-        reachable_tg: contactsReachable,
+        reachableTg: contactsReachable,
         manual: contactsManual,
       },
       conversations: {
@@ -163,12 +163,12 @@ export const dashboardService = {
       },
       campaigns: { running: campaignsRunning, paused: campaignsPaused },
       cost: {
-        tokens_today: tokensTodayTotal,
-        cost_today_usd: costToday,
-        cost_7d_usd: cost7dUsd,
+        tokensToday: tokensTodayTotal,
+        costTodayUsd: costToday,
+        cost7dUsd: cost7dUsd,
       },
-      reply_rate_7d: replyRate,
-      recent_activity: recent.slice(0, 10),
+      replyRate7d: replyRate,
+      recentActivity: recent.slice(0, 10),
     };
   },
 };

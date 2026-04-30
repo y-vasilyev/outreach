@@ -12,20 +12,20 @@ import { formatRelative } from '../../lib/format';
 
 export interface Contact {
   id: string;
-  channel_id: string;
+  channelId: string;
   channel?: { id: string; title?: string; handle?: string; platform?: string };
   type: 'tg_username' | 'tg_phone' | 'tg_link' | 'email' | 'website' | 'web_form' | 'other';
   value: string;
-  raw_value?: string;
+  rawValue?: string;
   label?: string | null;
-  role_guess: 'owner' | 'ad_manager' | 'generic' | 'bot' | 'unknown';
+  roleGuess: 'owner' | 'ad_manager' | 'generic' | 'bot' | 'unknown';
   confidence: number;
   reachability: 'reachable_tg' | 'manual' | 'unreachable';
   status: 'new' | 'qualified' | 'disqualified' | 'contacted' | 'active' | 'finished' | 'invalid' | 'blocked';
   tags?: string[];
-  tg_user_id?: string | null;
-  created_at: string;
-  updated_at: string;
+  tgUserId?: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export function ContactsPage() {
@@ -39,9 +39,9 @@ export function ContactsPage() {
     queryKey: ['contacts', { search, type, role, status, reach }],
     queryFn: () => {
       const qs = new URLSearchParams();
-      if (search) qs.set('search', search);
+      if (search) qs.set('q', search);
       if (type) qs.set('type', type);
-      if (role) qs.set('role', role);
+      if (role) qs.set('roleGuess', role);
       if (status) qs.set('status', status);
       if (reach) qs.set('reachability', reach);
       return api.get<{ items: Contact[]; total: number } | Contact[]>(`/contacts?${qs.toString()}`);
@@ -73,7 +73,7 @@ export function ContactsPage() {
     {
       key: 'role',
       header: 'Роль',
-      cell: (c) => <Badge tone={roleTone(c.role_guess)}>{c.role_guess}</Badge>,
+      cell: (c) => <Badge tone={roleTone(c.roleGuess)}>{c.roleGuess}</Badge>,
     },
     {
       key: 'channel',
@@ -118,7 +118,7 @@ export function ContactsPage() {
     {
       key: 'updated',
       header: 'Обновлён',
-      cell: (c) => <span className="text-xs text-slate-500">{formatRelative(c.updated_at)}</span>,
+      cell: (c) => <span className="text-xs text-slate-500">{formatRelative(c.updatedAt)}</span>,
     },
   ];
 

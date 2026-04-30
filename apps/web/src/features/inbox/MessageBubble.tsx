@@ -5,16 +5,19 @@ import { cn } from '../../lib/cn';
 
 export interface ChatMessage {
   id: string;
-  direction: 'in' | 'out';
+  /**
+   * Prisma enum values are `in_` / `out_` (suffixed because `in`/`out` are reserved).
+   */
+  direction: 'in_' | 'out_';
   sender: 'contact' | 'ai' | 'operator' | 'system';
   text: string;
   status?: 'pending' | 'sending' | 'sent' | 'failed' | 'received';
-  created_at: string;
-  sent_at?: string | null;
+  createdAt: string;
+  sentAt?: string | null;
 }
 
 export function MessageBubble({ msg }: { msg: ChatMessage }) {
-  const isOut = msg.direction === 'out';
+  const isOut = msg.direction === 'out_';
   const senderLabel =
     msg.sender === 'ai' ? 'AI' : msg.sender === 'operator' ? 'Operator' : msg.sender === 'system' ? 'System' : '';
   return (
@@ -41,7 +44,7 @@ export function MessageBubble({ msg }: { msg: ChatMessage }) {
               {senderLabel}
             </Badge>
           )}
-          <span>{formatTime(msg.sent_at ?? msg.created_at)}</span>
+          <span>{formatTime(msg.sentAt ?? msg.createdAt)}</span>
           {isOut && msg.status && <StatusIcon status={msg.status} />}
         </div>
       </div>

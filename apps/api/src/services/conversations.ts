@@ -65,6 +65,11 @@ export const conversationsService = {
     return c;
   },
 
+  async setStatus(id: string, status: 'active' | 'paused' | 'done' | 'failed') {
+    const prisma = getPrisma();
+    return prisma.conversation.update({ where: { id }, data: { status } });
+  },
+
   async sendOperatorMessage(input: {
     conversationId: string;
     text: string;
@@ -106,13 +111,20 @@ export const conversationsService = {
     return message;
   },
 
-  async approveSuggestion(suggestionId: string, operatorId: string) {
+  async approveSuggestion(suggestionId: string, operatorId: string, overrideText?: string) {
     const prisma = getPrisma();
     const s = await prisma.suggestion.findUnique({ where: { id: suggestionId } });
     if (!s) throw Errors.notFound('suggestion', suggestionId);
+    const text = overrideText ?? s.text;
+    if (overrideText && overrideText !== s.text) {
+      await prisma.suggestion.update({
+        where: { id: s.id },
+        data: { status: 'edited', text: overrideText },
+      });
+    }
     return this.sendOperatorMessage({
       conversationId: s.conversationId,
-      text: s.text,
+      text,
       fromSuggestionId: s.id,
       operatorId,
     });

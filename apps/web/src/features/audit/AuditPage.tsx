@@ -11,13 +11,13 @@ import { formatDateTime } from '../../lib/format';
 
 interface AuditEntry {
   id: string;
-  user_id: string | null;
-  user?: { email: string; name?: string };
+  userId: string | null;
+  user?: { email: string };
   action: string;
-  target_type: string;
-  target_id: string;
+  targetType: string;
+  targetId: string | null;
   payload?: Record<string, unknown> | null;
-  created_at: string;
+  createdAt: string;
 }
 
 export function AuditPage() {
@@ -39,14 +39,14 @@ export function AuditPage() {
     {
       key: 'created',
       header: 'Когда',
-      cell: (e) => <span className="text-xs text-slate-500">{formatDateTime(e.created_at)}</span>,
+      cell: (e) => <span className="text-xs text-slate-500">{formatDateTime(e.createdAt)}</span>,
       width: '180px',
     },
     {
       key: 'user',
       header: 'Кто',
       cell: (e) => (
-        <span className="text-sm text-slate-700">{e.user?.email ?? e.user_id ?? 'system'}</span>
+        <span className="text-sm text-slate-700">{e.user?.email ?? e.userId ?? 'system'}</span>
       ),
     },
     {
@@ -59,8 +59,8 @@ export function AuditPage() {
       header: 'Объект',
       cell: (e) => (
         <div>
-          <div className="text-sm font-medium text-slate-700">{e.target_type}</div>
-          <div className="font-mono text-[11px] text-slate-500">{e.target_id}</div>
+          <div className="text-sm font-medium text-slate-700">{e.targetType}</div>
+          <div className="font-mono text-[11px] text-slate-500">{e.targetId ?? '—'}</div>
         </div>
       ),
     },

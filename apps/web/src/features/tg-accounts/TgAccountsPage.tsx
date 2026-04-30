@@ -20,17 +20,17 @@ export interface TgAccount {
   phone: string;
   status: 'idle' | 'active' | 'cooldown' | 'banned' | 'need_auth';
   role: 'parser' | 'outreach' | 'both';
-  daily_msg_limit: number;
-  daily_new_contact_limit: number;
-  sent_today_msg: number;
-  sent_today_new: number;
-  warmup_stage: number;
-  warmup_started_at: string | null;
-  cooldown_until: string | null;
+  dailyMsgLimit: number;
+  dailyNewContactLimit: number;
+  sentTodayMsg: number;
+  sentTodayNew: number;
+  warmupStage: number;
+  warmupStartedAt?: string | null;
+  cooldownUntil: string | null;
   tags: string[];
-  notes?: string;
-  created_at: string;
-  updated_at: string;
+  notes?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export function TgAccountsPage() {
@@ -87,8 +87,8 @@ export function TgAccountsPage() {
       cell: (r) => (
         <div className="flex items-center gap-2">
           <StatusDot status={r.status} />
-          {r.status === 'cooldown' && r.cooldown_until && (
-            <span className="text-xs text-slate-500">до {formatRelative(r.cooldown_until)}</span>
+          {r.status === 'cooldown' && r.cooldownUntil && (
+            <span className="text-xs text-slate-500">до {formatRelative(r.cooldownUntil)}</span>
           )}
         </div>
       ),
@@ -101,10 +101,10 @@ export function TgAccountsPage() {
           <div className="flex h-1.5 w-24 overflow-hidden rounded-full bg-slate-200">
             <div
               className="h-full bg-brand-500"
-              style={{ width: `${Math.min(100, ((r.warmup_stage || 0) / 4) * 100)}%` }}
+              style={{ width: `${Math.min(100, ((r.warmupStage || 0) / 4) * 100)}%` }}
             />
           </div>
-          <span className="text-xs text-slate-500">{r.warmup_stage}/4</span>
+          <span className="text-xs text-slate-500">{r.warmupStage}/4</span>
         </div>
       ),
     },
@@ -114,12 +114,12 @@ export function TgAccountsPage() {
       cell: (r) => (
         <div className="text-xs text-slate-600">
           <div>
-            msg <span className="font-medium text-slate-900">{formatNumber(r.sent_today_msg)}</span> /{' '}
-            {formatNumber(r.daily_msg_limit)}
+            msg <span className="font-medium text-slate-900">{formatNumber(r.sentTodayMsg)}</span> /{' '}
+            {formatNumber(r.dailyMsgLimit)}
           </div>
           <div>
-            new <span className="font-medium text-slate-900">{formatNumber(r.sent_today_new)}</span> /{' '}
-            {formatNumber(r.daily_new_contact_limit)}
+            new <span className="font-medium text-slate-900">{formatNumber(r.sentTodayNew)}</span> /{' '}
+            {formatNumber(r.dailyNewContactLimit)}
           </div>
         </div>
       ),
@@ -143,7 +143,7 @@ export function TgAccountsPage() {
     {
       key: 'updated',
       header: 'Обновлён',
-      cell: (r) => <span className="text-xs text-slate-500">{formatRelative(r.updated_at)}</span>,
+      cell: (r) => <span className="text-xs text-slate-500">{formatRelative(r.updatedAt)}</span>,
     },
     {
       key: 'actions',

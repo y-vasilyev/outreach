@@ -18,19 +18,16 @@ interface Props {
 export function UserForm({ open, onClose, user, onSaved }: Props) {
   const toast = useToast();
   const [email, setEmail] = useState('');
-  const [name, setName] = useState('');
   const [role, setRole] = useState<'admin' | 'operator' | 'viewer'>('operator');
   const [password, setPassword] = useState('');
 
   useEffect(() => {
     if (user) {
       setEmail(user.email);
-      setName(user.name ?? '');
       setRole(user.role);
       setPassword('');
     } else {
       setEmail('');
-      setName('');
       setRole('operator');
       setPassword('');
     }
@@ -38,7 +35,7 @@ export function UserForm({ open, onClose, user, onSaved }: Props) {
 
   const mut = useMutation({
     mutationFn: () => {
-      const body: Record<string, unknown> = { email, name, role };
+      const body: Record<string, unknown> = { email, role };
       if (password) body.password = password;
       if (user) return api.patch<UserRow>(`/users/${user.id}`, body);
       return api.post<UserRow>('/users', body);
@@ -69,7 +66,6 @@ export function UserForm({ open, onClose, user, onSaved }: Props) {
     >
       <div className="space-y-4">
         <Input label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-        <Input label="Имя" value={name} onChange={(e) => setName(e.target.value)} />
         <Select
           label="Роль"
           value={role}

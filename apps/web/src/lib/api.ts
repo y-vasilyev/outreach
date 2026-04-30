@@ -79,12 +79,15 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
   }
 
   if (!res.ok) {
-    const p = payload as { code?: string; message?: string; details?: unknown } | null;
+    const env = payload as
+      | { error?: { code?: string; message?: string; details?: unknown }; code?: string; message?: string; details?: unknown }
+      | null;
+    const e = env?.error ?? env ?? null;
     throw new ApiError(
-      p?.code || `HTTP_${res.status}`,
-      p?.message || res.statusText || 'Request failed',
+      e?.code || `HTTP_${res.status}`,
+      e?.message || res.statusText || 'Request failed',
       res.status,
-      p?.details,
+      e?.details,
     );
   }
 

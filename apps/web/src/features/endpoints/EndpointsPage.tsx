@@ -18,12 +18,12 @@ export interface LLMEndpoint {
   id: string;
   name: string;
   provider: 'yandex' | 'openrouter' | 'openai_compat';
-  base_url: string;
-  default_headers?: Record<string, string>;
-  rate_limit_rpm?: number | null;
+  baseUrl: string;
+  defaultHeaders?: Record<string, string>;
+  rateLimitRpm?: number | null;
   enabled: boolean;
-  created_at: string;
-  updated_at: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export function EndpointsPage() {
@@ -55,9 +55,9 @@ export function EndpointsPage() {
   });
 
   const testMut = useMutation({
-    mutationFn: (id: string) => api.post<{ ok: boolean; latency_ms?: number; error?: string }>(`/endpoints/${id}/test`, {}),
+    mutationFn: (id: string) => api.post<{ ok: boolean; latencyMs?: number; error?: string }>(`/endpoints/${id}/test`, {}),
     onSuccess: (r) => {
-      if (r.ok) toast.success('Endpoint отвечает', r.latency_ms ? `${r.latency_ms} мс` : undefined);
+      if (r.ok) toast.success('Endpoint отвечает', r.latencyMs ? `${r.latencyMs} мс` : undefined);
       else toast.error('Endpoint не отвечает', r.error);
     },
   });
@@ -100,7 +100,7 @@ export function EndpointsPage() {
                     <Badge tone={providerTone(e.provider)}>{e.provider}</Badge>
                     {!e.enabled && <Badge tone="gray">disabled</Badge>}
                   </div>
-                  <div className="mt-1 truncate font-mono text-xs text-slate-500">{e.base_url}</div>
+                  <div className="mt-1 truncate font-mono text-xs text-slate-500">{e.baseUrl}</div>
                 </div>
                 <Switch
                   checked={e.enabled}
@@ -109,9 +109,9 @@ export function EndpointsPage() {
               </div>
               <div className="mt-4 flex items-center gap-4 text-xs text-slate-500">
                 <div>
-                  RPM: <span className="font-medium text-slate-700">{e.rate_limit_rpm ?? '—'}</span>
+                  RPM: <span className="font-medium text-slate-700">{e.rateLimitRpm ?? '—'}</span>
                 </div>
-                <div>Обновлён: {formatDateTime(e.updated_at)}</div>
+                <div>Обновлён: {formatDateTime(e.updatedAt)}</div>
               </div>
               <div className="mt-5 flex items-center justify-end gap-2">
                 <Button

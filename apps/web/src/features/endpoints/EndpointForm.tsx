@@ -29,11 +29,11 @@ export function EndpointForm({ open, onClose, endpoint, onSaved }: Props) {
     if (endpoint) {
       setName(endpoint.name);
       setProvider(endpoint.provider);
-      setBaseUrl(endpoint.base_url);
+      setBaseUrl(endpoint.baseUrl);
       setApiKey('');
       setFolderId('');
       setIamToken('');
-      setRateLimit(endpoint.rate_limit_rpm ? String(endpoint.rate_limit_rpm) : '');
+      setRateLimit(endpoint.rateLimitRpm ? String(endpoint.rateLimitRpm) : '');
     } else {
       setName('');
       setProvider('yandex');
@@ -51,17 +51,15 @@ export function EndpointForm({ open, onClose, endpoint, onSaved }: Props) {
 
   const mut = useMutation({
     mutationFn: () => {
-      const auth: Record<string, string> = {};
-      if (apiKey) auth.api_key = apiKey;
-      if (folderId) auth.folder_id = folderId;
-      if (iamToken) auth.iam_token = iamToken;
-      const body = {
+      const body: Record<string, unknown> = {
         name,
         provider,
-        base_url: baseUrl,
-        auth: Object.keys(auth).length ? auth : undefined,
-        rate_limit_rpm: rateLimit ? Number(rateLimit) : null,
+        baseUrl,
       };
+      if (apiKey) body.apiKey = apiKey;
+      if (folderId) body.folderId = folderId;
+      if (iamToken) body.iamToken = iamToken;
+      if (rateLimit) body.rateLimitRpm = Number(rateLimit);
       if (endpoint) return api.patch<LLMEndpoint>(`/endpoints/${endpoint.id}`, body);
       return api.post<LLMEndpoint>('/endpoints', body);
     },

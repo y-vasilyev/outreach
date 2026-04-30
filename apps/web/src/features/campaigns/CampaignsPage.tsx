@@ -13,20 +13,27 @@ import { useToast } from '../../components/Toast';
 import { api } from '../../lib/api';
 import { formatNumber, formatRelative, formatPct, truncate } from '../../lib/format';
 
+export interface CampaignSchedule {
+  tz?: string;
+  workHours?: { start: string; end: string };
+  days?: number[];
+  maxPerDayPerAccount?: number;
+}
+
 export interface Campaign {
   id: string;
   name: string;
-  goal_text: string;
-  value_prop: string;
+  goalText: string;
+  valueProp: string;
   status: 'draft' | 'running' | 'paused' | 'finished';
-  default_mode: 'auto' | 'assisted' | 'manual';
-  target_filter?: Record<string, unknown>;
-  outreach_account_pool?: string[];
-  schedule?: { tz?: string; work_hours?: string; days?: string[]; max_per_day_per_account?: number };
-  agent_overrides?: Record<string, unknown>;
-  metrics?: { sent: number; replies: number; reply_rate: number; qualified: number };
-  created_at: string;
-  updated_at: string;
+  defaultMode: 'auto' | 'assisted' | 'manual';
+  targetFilter?: Record<string, unknown>;
+  outreachAccountPool?: string[];
+  schedule?: CampaignSchedule;
+  agentOverrides?: Record<string, unknown>;
+  metrics?: { sent: number; replies: number; replyRate: number; qualified: number };
+  createdAt: string;
+  updatedAt: string;
 }
 
 export function CampaignsPage() {
@@ -93,8 +100,8 @@ export function CampaignsPage() {
                   </Link>
                   <div className="mt-1 flex flex-wrap items-center gap-2">
                     <StatusDot status={c.status} />
-                    <Badge tone={c.default_mode === 'auto' ? 'indigo' : c.default_mode === 'assisted' ? 'violet' : 'amber'}>
-                      mode: {c.default_mode}
+                    <Badge tone={c.defaultMode === 'auto' ? 'indigo' : c.defaultMode === 'assisted' ? 'violet' : 'amber'}>
+                      mode: {c.defaultMode}
                     </Badge>
                   </div>
                 </div>
@@ -119,18 +126,18 @@ export function CampaignsPage() {
                   )}
                 </div>
               </div>
-              <p className="mt-3 line-clamp-2 text-sm text-slate-600">{c.goal_text}</p>
+              <p className="mt-3 line-clamp-2 text-sm text-slate-600">{c.goalText}</p>
               <div className="mt-2 text-xs text-slate-500">
-                value-prop: <span className="text-slate-700">{truncate(c.value_prop, 100)}</span>
+                value-prop: <span className="text-slate-700">{truncate(c.valueProp, 100)}</span>
               </div>
               <div className="mt-4 grid grid-cols-4 gap-3">
                 <Stat label="Sent" value={formatNumber(c.metrics?.sent ?? 0)} />
                 <Stat label="Replies" value={formatNumber(c.metrics?.replies ?? 0)} />
-                <Stat label="Reply-rate" value={formatPct(c.metrics?.reply_rate ?? 0)} />
+                <Stat label="Reply-rate" value={formatPct(c.metrics?.replyRate ?? 0)} />
                 <Stat label="Qualified" value={formatNumber(c.metrics?.qualified ?? 0)} />
               </div>
               <div className="mt-4 flex items-center justify-between text-xs text-slate-500">
-                <span>Обновлена {formatRelative(c.updated_at)}</span>
+                <span>Обновлена {formatRelative(c.updatedAt)}</span>
                 <Link to={`/campaigns/${c.id}`} className="font-medium text-brand-600 hover:text-brand-500">
                   Подробнее →
                 </Link>

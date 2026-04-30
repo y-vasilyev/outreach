@@ -9,14 +9,12 @@ import { Badge } from '../../components/Badge';
 import { useToast } from '../../components/Toast';
 import { api } from '../../lib/api';
 import { formatDateTime } from '../../lib/format';
-import { cn } from '../../lib/cn';
 
 interface Integration {
   kind: string;
   enabled: boolean;
   status: 'ok' | 'error' | 'unknown' | string;
-  last_check_at: string | null;
-  config: { api_key?: string; base_url?: string; quota_used?: number; quota_limit?: number };
+  lastCheckAt: string | null;
 }
 
 const kinds = [
@@ -24,7 +22,6 @@ const kinds = [
     key: 'scrapecreators',
     title: 'ScrapeCreators',
     description: 'REST API для скрейпа Instagram и YouTube. Используется адаптерами IG/YT.',
-    fields: ['api_key', 'base_url'] as const,
   },
 ];
 
@@ -57,8 +54,8 @@ function IntegrationCard({ kind, title, description }: { kind: string; title: st
 
   useEffect(() => {
     if (data) {
-      setApiKey(data.config?.api_key ?? '');
-      setBaseUrl(data.config?.base_url ?? 'https://api.scrapecreators.com');
+      // API never returns the secret back; keep field empty for new entries.
+      setBaseUrl('https://api.scrapecreators.com');
       setEnabled(data.enabled);
     }
   }, [data]);
@@ -66,8 +63,9 @@ function IntegrationCard({ kind, title, description }: { kind: string; title: st
   const saveMut = useMutation({
     mutationFn: () =>
       api.put<Integration>(`/integrations/${kind}`, {
+        apiKey,
+        baseUrl,
         enabled,
-        config: { api_key: apiKey, base_url: baseUrl },
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['integration', kind] });
@@ -77,10 +75,10 @@ function IntegrationCard({ kind, title, description }: { kind: string; title: st
   });
 
   const testMut = useMutation({
-    mutationFn: () => api.post<{ ok: boolean; latency_ms?: number; error?: string }>(`/integrations/${kind}/test`, {}),
+    mutationFn: () => api.post<{ ok: boolean; latencyMs?: number; error?: string }>(`/integrations/${kind}/test`, {}),
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ['integration', kind] });
-      if (r.ok) toast.success('Коннект OK', r.latency_ms ? `${r.latency_ms} мс` : undefined);
+      if (r.ok) toast.success('Коннект OK', r.latencyMs ? `${r.latencyMs} мс` : undefined);
       else toast.error('Коннект не прошёл', r.error);
     },
     onError: (e: Error) => toast.error('Ошибка проверки', e.message),
@@ -100,9 +98,9 @@ function IntegrationCard({ kind, title, description }: { kind: string; title: st
             </Badge>
           </div>
           <p className="mt-1 text-sm text-slate-500">{description}</p>
-          {data?.last_check_at && (
+          {data?.lastCheckAt && (
             <p className="mt-1 text-xs text-slate-400">
-              Последняя проверка: {formatDateTime(data.last_check_at)}
+              Последняя проверка: {formatDateTime(data.lastCheckAt)}
             </p>
           )}
         </div>
@@ -125,28 +123,6 @@ function IntegrationCard({ kind, title, description }: { kind: string; title: st
           onChange={(e) => setBaseUrl(e.target.value)}
         />
       </div>
-
-      {data?.config?.quota_limit && (
-        <div className="mt-4 rounded-xl bg-slate-50 p-4 ring-1 ring-slate-200">
-          <div className="flex items-center justify-between text-xs text-slate-600">
-            <span>Квота</span>
-            <span>
-              {data.config.quota_used ?? 0} / {data.config.quota_limit}
-            </span>
-          </div>
-          <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
-            <div
-              className={cn(
-                'h-full',
-                (data.config.quota_used ?? 0) / data.config.quota_limit > 0.8 ? 'bg-rose-500' : 'bg-brand-500',
-              )}
-              style={{
-                width: `${Math.min(100, ((data.config.quota_used ?? 0) / data.config.quota_limit) * 100)}%`,
-              }}
-            />
-          </div>
-        </div>
-      )}
 
       <div className="mt-5 flex items-center justify-end gap-2">
         <Button

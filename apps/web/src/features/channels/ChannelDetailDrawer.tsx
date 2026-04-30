@@ -98,7 +98,7 @@ export function ChannelDetailDrawer({ channel, onClose, onAction }: Props) {
                             { label: 'Подписчики', value: formatCompact(channel.followers ?? null) },
                             { label: 'Язык', value: channel.language ?? '—' },
                             { label: 'Источник', value: channel.source ?? '—' },
-                            { label: 'Скрейп', value: formatDateTime(channel.scraped_at ?? null) },
+                            { label: 'Скрейп', value: formatDateTime(channel.scrapedAt ?? null) },
                           ]}
                         />
                         {channel.analysis && (
@@ -148,7 +148,7 @@ export function ChannelDetailDrawer({ channel, onClose, onAction }: Props) {
                                 >
                                   <div className="min-w-0">
                                     <div className="flex items-center gap-2">
-                                      <Badge tone={roleTone(c.role_guess)}>{c.role_guess}</Badge>
+                                      <Badge tone={roleTone(c.roleGuess)}>{c.roleGuess}</Badge>
                                       <Badge tone="slate">{c.type}</Badge>
                                     </div>
                                     <div className="mt-1 truncate font-mono text-sm text-slate-900">{c.value}</div>
@@ -162,10 +162,10 @@ export function ChannelDetailDrawer({ channel, onClose, onAction }: Props) {
                             )}
                           </div>
                         </div>
-                        {channel.last_error && (
+                        {channel.lastError && (
                           <div className="mt-6 rounded-xl bg-rose-50 p-4 text-sm text-rose-700 ring-1 ring-rose-200">
                             <div className="font-semibold">Последняя ошибка</div>
-                            <div className="mt-1 whitespace-pre-wrap text-xs">{channel.last_error}</div>
+                            <div className="mt-1 whitespace-pre-wrap text-xs">{channel.lastError}</div>
                           </div>
                         )}
                       </div>

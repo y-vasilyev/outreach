@@ -95,12 +95,14 @@ export const agentsService = {
     return next;
   },
 
-  async history(id: string) {
+  async history(id: string, limit = 50) {
     const prisma = getPrisma();
-    return prisma.agentConfigHistory.findMany({
-      where: { agentConfigId: id },
-      orderBy: { changedAt: 'desc' },
-      take: 50,
+    const a = await prisma.agentConfig.findUnique({ where: { id }, select: { name: true } });
+    if (!a) throw Errors.notFound('agent', id);
+    return prisma.agentRun.findMany({
+      where: { agentName: a.name },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
     });
   },
 

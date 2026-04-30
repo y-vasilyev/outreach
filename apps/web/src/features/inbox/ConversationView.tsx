@@ -25,9 +25,9 @@ interface Props {
 }
 
 interface ConversationDetail extends ConversationListItem {
-  summary?: string;
+  summary?: string | null;
   meta?: Record<string, unknown>;
-  tg_account?: { label: string; phone: string };
+  tgAccount?: { label: string; phone: string };
   contact?: ConversationListItem['contact'];
 }
 
@@ -102,11 +102,11 @@ export function ConversationView({ conversation }: Props) {
             <div className="truncate text-sm font-semibold text-slate-900">{title}</div>
             <div className="flex items-center gap-2 text-xs text-slate-500">
               <span className="truncate font-mono">{handle}</span>
-              {c.contact?.role_guess && <Badge tone="slate">{c.contact.role_guess}</Badge>}
-              {c.tg_account && (
+              {c.contact?.roleGuess && <Badge tone="slate">{c.contact.roleGuess}</Badge>}
+              {c.tgAccount && (
                 <span className="flex items-center gap-1">
                   <span className="text-slate-300">·</span>
-                  <Badge tone="sky">{c.tg_account.label}</Badge>
+                  <Badge tone="sky">{c.tgAccount.label}</Badge>
                 </span>
               )}
             </div>
@@ -207,8 +207,8 @@ export function ConversationView({ conversation }: Props) {
         onModeChange={(m) => modeMut.mutate(m)}
       />
 
-      {c.last_inbound_at && (
-        <div className="hidden">last inbound: {formatRelative(c.last_inbound_at)}</div>
+      {c.lastInboundAt && (
+        <div className="hidden">last inbound: {formatRelative(c.lastInboundAt)}</div>
       )}
     </div>
   );
@@ -217,7 +217,7 @@ export function ConversationView({ conversation }: Props) {
 function groupByDay(msgs: ChatMessage[]): { day: string; items: ChatMessage[] }[] {
   const map = new Map<string, ChatMessage[]>();
   for (const m of msgs) {
-    const d = new Date(m.created_at);
+    const d = new Date(m.createdAt);
     const key = isNaN(d.getTime())
       ? 'без даты'
       : new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' }).format(d);
