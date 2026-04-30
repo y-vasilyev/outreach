@@ -179,10 +179,16 @@ export const conversationsService = {
   /**
    * Re-trigger AI suggestion generation for an existing conversation. Picks
    * the right pipeline based on conversation state:
-   *   - If there's at least one inbound message AND the latest message is
-   *     inbound (or no outbound exists yet) → `on_inbound` (ReplyComposer
-   *     based on the last reply).
-   *   - Otherwise → `outreach_first_message` (OpeningComposer).
+   *   - Conversation has zero messages on it → `outreach_first_message`
+   *     (OpeningComposer): we haven't reached out yet.
+   *   - Anything else → `on_inbound` (ReplyComposer): once a single message
+   *     exists, the opener phase is over. on_inbound itself handles the
+   *     "latest message is outbound, nothing new to reply to" case by
+   *     short-circuiting on `if (!last) return skipped: 'no inbound'`.
+   *
+   * Previously this checked "is the latest message inbound?" and fell back
+   * to opener whenever the latest was outbound, which re-fired the
+   * opening_composer over and over after the operator's own replies.
    *
    * Marks any existing `pending` suggestions as `expired` so the inbox
    * doesn't show stale ones from before the rerun.
@@ -199,17 +205,9 @@ export const conversationsService = {
     });
     if (!conv) throw Errors.notFound('conversation', conversationId);
 
-    const messages = await prisma.message.findMany({
-      where: { conversationId },
-      orderBy: { createdAt: 'desc' },
-      take: 5,
-      select: { id: true, direction: true },
-    });
-
-    const hasInbound = messages.some((m) => m.direction === 'in_');
-    const lastIsInbound = messages[0]?.direction === 'in_';
-    const pipeline =
-      hasInbound && lastIsInbound ? 'on_inbound' : 'outreach_first_message';
+    const messageCount = await prisma.message.count({ where: { conversationId } });
+    const pipeline: 'on_inbound' | 'outreach_first_message' =
+      messageCount === 0 ? 'outreach_first_message' : 'on_inbound';
 
     // Expire any stale pending suggestions so the inbox doesn't show old +
     // new mixed.

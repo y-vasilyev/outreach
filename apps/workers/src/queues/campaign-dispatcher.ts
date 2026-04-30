@@ -129,6 +129,24 @@ export function startCampaignDispatcher() {
             },
           });
 
+          // Don't re-run the opener if this conversation already has any
+          // messages — the candidate filter at line 81 is keyed on
+          // campaignId, so a contact with a *campaignId=null* (manually-
+          // started chat) or a different-campaign conversation can still
+          // make it here, and the upsert above will rebind it to this
+          // campaign. Without this guard the operator sees opening_composer
+          // suggestions popping up in the middle of an ongoing chat.
+          const existingMsgs = await prisma.message.count({
+            where: { conversationId: conv.id },
+          });
+          if (existingMsgs > 0) {
+            logger.debug(
+              { conversationId: conv.id, contactId: contact.id, campaignId: c.id },
+              'campaign-dispatcher: conversation already has messages; skipping opener',
+            );
+            continue;
+          }
+
           try {
             const opener = await runner.run<OpenerOut>('opening_composer', {
               channel_analysis: contact.channel?.analysis ?? {},
