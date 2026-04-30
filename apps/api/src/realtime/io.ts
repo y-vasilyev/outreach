@@ -36,11 +36,12 @@ export function attachIo(httpServer: HTTPServer): IOServer {
   });
 
   io.on('connection', (socket) => {
-    logger.debug({ sid: socket.id }, 'ws connect');
+    logger.info({ sid: socket.id }, 'ws connect');
     // Accept both naming conventions: the web client emits room:join /
     // room:leave; older code paths use subscribe / unsubscribe.
     const join = (room: RealtimeRoom): void => {
       socket.join(room);
+      logger.info({ sid: socket.id, room }, 'ws room joined');
     };
     const leave = (room: RealtimeRoom): void => {
       socket.leave(room);
@@ -49,6 +50,9 @@ export function attachIo(httpServer: HTTPServer): IOServer {
     socket.on('unsubscribe', leave);
     socket.on('room:join', join);
     socket.on('room:leave', leave);
+    socket.on('disconnect', (reason) => {
+      logger.info({ sid: socket.id, reason }, 'ws disconnect');
+    });
   });
 
   // Bridge: workers publish RealtimeEvents to Redis pub/sub on
@@ -63,9 +67,10 @@ export function attachIo(httpServer: HTTPServer): IOServer {
 
 function bridgeRedisToSocketIo(io: IOServer): void {
   const sub = getRedisRealtimeSub();
-  void sub.psubscribe(`${REALTIME_CHANNEL_PREFIX}*`).catch((err) => {
-    logger.error({ err }, 'realtime: failed to psubscribe');
-  });
+  sub
+    .psubscribe(`${REALTIME_CHANNEL_PREFIX}*`)
+    .then(() => logger.info({ pattern: `${REALTIME_CHANNEL_PREFIX}*` }, 'realtime: bridge psubscribed'))
+    .catch((err) => logger.error({ err }, 'realtime: failed to psubscribe'));
   sub.on('pmessage', (_pattern, channel, raw) => {
     const room = channel.slice(REALTIME_CHANNEL_PREFIX.length) as RealtimeRoom;
     if (!room) return;
@@ -77,7 +82,24 @@ function bridgeRedisToSocketIo(io: IOServer): void {
       return;
     }
     if (!event?.type) return;
-    io.to(room).emit(event.type, event);
+    // Count sockets in the target room so we can tell "no one's listening"
+    // apart from "broadcast went out but client missed it". `fetchSockets`
+    // returns the live list across all worker instances via the Redis
+    // adapter.
+    void io
+      .in(room)
+      .fetchSockets()
+      .then((sockets) => {
+        logger.info(
+          { room, type: event.type, recipients: sockets.length },
+          'realtime: bridge → io.emit',
+        );
+        io.to(room).emit(event.type, event);
+      })
+      .catch((err) => {
+        logger.warn({ err, room }, 'realtime: fetchSockets failed; emitting anyway');
+        io.to(room).emit(event.type, event);
+      });
   });
 }
 
