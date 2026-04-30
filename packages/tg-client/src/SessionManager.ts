@@ -513,15 +513,17 @@ export class SessionManager {
                 'telegram/events/index.js'
               )) as unknown as {
                 NewMessage: new (params?: { incoming?: boolean; outgoing?: boolean }) => unknown;
-                Raw: new () => unknown;
+                Raw: new (params: { types?: unknown[]; func?: unknown }) => unknown;
               };
               // DEBUG: a Raw handler fires for every update GramJS receives,
               // not just NewMessage. Lets us tell apart "GramJS isn't getting
               // updates from the DC at all" (raw silent) vs. "the
               // NewMessage filter is dropping our messages" (raw fires but
-              // NewMessage doesn't). Logged per delivery so it's loud.
+              // NewMessage doesn't). The Raw constructor requires the
+              // params object — { types: [], func: undefined } means "all
+              // updates, no extra predicate".
               try {
-                const rawBuilder = new events.Raw();
+                const rawBuilder = new events.Raw({ types: [], func: undefined });
                 client.addEventHandler((update: unknown) => {
                   const u = update as { className?: string };
                   console.log(
