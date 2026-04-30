@@ -82,3 +82,8 @@ export function truncate(s: string | null | undefined, max = 80): string {
   if (!s) return '';
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
+
+export function initials(s: string | null | undefined, fallback = '??'): string {
+  if (!s) return fallback;
+  return s.slice(0, 2).toUpperCase();
+}

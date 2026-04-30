@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { ref, computed, type Ref, type ComputedRef } from 'vue';
 import { api, setToken, getToken } from './api';
 
 export type UserRole = 'admin' | 'operator' | 'viewer';
@@ -17,87 +17,73 @@ interface LoginResp {
   user: User;
 }
 
-let cachedUser: User | null = null;
-const subscribers = new Set<(u: User | null) => void>();
+const userRef = ref<User | null>(null);
+const readyRef = ref<boolean>(false);
+let bootstrapPromise: Promise<void> | null = null;
 
-function notify(u: User | null): void {
-  cachedUser = u;
-  subscribers.forEach((fn) => fn(u));
+export function bootstrapAuth(): Promise<void> {
+  if (bootstrapPromise) return bootstrapPromise;
+  bootstrapPromise = (async () => {
+    const token = getToken();
+    if (!token) {
+      readyRef.value = true;
+      return;
+    }
+    try {
+      const u = await api.get<User>('/auth/me');
+      userRef.value = u;
+    } catch {
+      setToken(null);
+      userRef.value = null;
+    } finally {
+      readyRef.value = true;
+    }
+  })();
+  return bootstrapPromise;
+}
+
+export async function login(email: string, password: string): Promise<User> {
+  const resp = await api.post<LoginResp>('/auth/login', { email, password });
+  setToken(resp.token);
+  userRef.value = resp.user;
+  return resp.user;
+}
+
+export function logout(): void {
+  setToken(null);
+  userRef.value = null;
+  bootstrapPromise = null;
+  if (typeof window !== 'undefined') window.location.href = '/login';
+}
+
+export async function refresh(): Promise<void> {
+  try {
+    const u = await api.get<User>('/auth/me');
+    userRef.value = u;
+  } catch {
+    setToken(null);
+    userRef.value = null;
+  }
 }
 
 export function useAuth(): {
-  user: User | null;
-  isReady: boolean;
-  login: (email: string, password: string) => Promise<User>;
-  logout: () => void;
-  refresh: () => Promise<void>;
+  user: Ref<User | null>;
+  isReady: Ref<boolean>;
+  isAuthenticated: ComputedRef<boolean>;
+  login: typeof login;
+  logout: typeof logout;
+  refresh: typeof refresh;
 } {
-  const [user, setUser] = useState<User | null>(cachedUser);
-  const [isReady, setReady] = useState<boolean>(cachedUser !== null);
-
-  useEffect(() => {
-    const sub = (u: User | null): void => setUser(u);
-    subscribers.add(sub);
-    return () => {
-      subscribers.delete(sub);
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const token = getToken();
-    if (!token) {
-      setReady(true);
-      return;
-    }
-    if (cachedUser) {
-      setReady(true);
-      return;
-    }
-    api
-      .get<User>('/auth/me')
-      .then((u) => {
-        if (cancelled) return;
-        notify(u);
-        setReady(true);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setToken(null);
-        notify(null);
-        setReady(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const login = useCallback(async (email: string, password: string): Promise<User> => {
-    const resp = await api.post<LoginResp>('/auth/login', { email, password });
-    setToken(resp.token);
-    notify(resp.user);
-    return resp.user;
-  }, []);
-
-  const logout = useCallback((): void => {
-    setToken(null);
-    notify(null);
-    if (typeof window !== 'undefined') window.location.href = '/login';
-  }, []);
-
-  const refresh = useCallback(async (): Promise<void> => {
-    try {
-      const u = await api.get<User>('/auth/me');
-      notify(u);
-    } catch {
-      setToken(null);
-      notify(null);
-    }
-  }, []);
-
-  return { user, isReady, login, logout, refresh };
+  return {
+    user: userRef,
+    isReady: readyRef,
+    isAuthenticated: computed(() => userRef.value !== null),
+    login,
+    logout,
+    refresh,
+  };
 }
 
 export function getCurrentUser(): User | null {
-  return cachedUser;
+  return userRef.value;
 }

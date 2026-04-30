@@ -101,12 +101,3 @@ export const api = {
   patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body),
   del: <T>(path: string, body?: unknown) => request<T>('DELETE', path, body),
 };
-
-export function apiUnwrap<T>(p: Promise<{ data: T } | T>): Promise<T> {
-  return p.then((r) => {
-    if (r && typeof r === 'object' && 'data' in (r as Record<string, unknown>)) {
-      return (r as { data: T }).data;
-    }
-    return r as T;
-  });
-}

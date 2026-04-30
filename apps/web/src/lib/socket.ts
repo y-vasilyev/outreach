@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
 import { io, type Socket } from 'socket.io-client';
+import { onBeforeUnmount, onMounted } from 'vue';
 import { getToken } from './api';
 
 let socket: Socket | null = null;
@@ -36,23 +36,34 @@ export interface RealtimeEvents {
 }
 
 export function useRoom<E extends keyof RealtimeEvents>(
-  room: string | null | undefined,
+  room: string | (() => string | null | undefined),
   event: E,
   handler: (payload: RealtimeEvents[E]) => void,
 ): void {
-  useEffect(() => {
-    if (!room) return;
+  let joinedRoom: string | null = null;
+  const wrapped = (payload: RealtimeEvents[E]): void => handler(payload);
+
+  function resolve(): string | null {
+    const r = typeof room === 'function' ? room() : room;
+    return r ? r : null;
+  }
+
+  onMounted(() => {
+    const r = resolve();
+    if (!r) return;
+    joinedRoom = r;
     const s = getSocket();
-    s.emit('room:join', room);
-    const wrapped = (payload: RealtimeEvents[E]): void => handler(payload);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    s.on(event as string, wrapped as any);
-    return () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      s.off(event as string, wrapped as any);
-      s.emit('room:leave', room);
-    };
-  }, [room, event, handler]);
+    s.emit('room:join', r);
+    s.on(event as string, wrapped as (...args: unknown[]) => void);
+  });
+
+  onBeforeUnmount(() => {
+    if (!joinedRoom) return;
+    const s = getSocket();
+    s.off(event as string, wrapped as (...args: unknown[]) => void);
+    s.emit('room:leave', joinedRoom);
+    joinedRoom = null;
+  });
 }
 
 export function joinRoom(room: string): void {
