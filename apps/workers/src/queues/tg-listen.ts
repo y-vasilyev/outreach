@@ -37,59 +37,42 @@ export function startTgListenWorker() {
       // 1. Resolve contact. Strict tgUserId lookup first — that's what tg-send
       // now persists on first outbound. For contacts that were messaged
       // *before* the resolve-on-send fix landed (so tgUserId is empty),
-      // fall back to: resolve the inbound user's profile via TG, then
-      // match by tg_username — value or stored tgUsername. On hit, we
-      // back-fill tgUserId + profile fields so future inbounds use the
-      // fast path. The old "take any tg_username contact" fallback that
-      // mis-attributed messages is gone.
+      // fall back to matching by username taken straight off the GramJS
+      // event payload. We can't call `users.GetUsers` here because GramJS
+      // has no access_hash for these "stale" users (the call throws
+      // "Could not find the input entity"). The username from the inline
+      // sender entity is reliable when present. On hit we back-fill
+      // tgUserId + profile fields so future inbounds use the fast path.
       let contact = await prisma.contact.findFirst({
         where: { tgUserId: data.fromTgUserId },
       });
 
-      if (!contact) {
-        const tg = getTgClient();
-        if (tg) {
-          try {
-            const handle = await tg.for(data.tgAccountId);
-            const profile = await handle.resolveUser(data.fromTgUserId);
-            const username = profile.username?.toLowerCase();
-            if (username) {
-              // Match either by previously-resolved tgUsername (rare —
-              // some other code path may have populated it) or by the
-              // contact's normalized `value` (which is what we store as
-              // a bare lowercase handle for tg_username contacts).
-              contact = await prisma.contact.findFirst({
-                where: {
-                  type: 'tg_username',
-                  OR: [
-                    { tgUsername: { equals: username, mode: 'insensitive' } },
-                    { value: { equals: username, mode: 'insensitive' } },
-                  ],
-                },
-                orderBy: { updatedAt: 'desc' },
-              });
-              if (contact) {
-                contact = await prisma.contact.update({
-                  where: { id: contact.id },
-                  data: {
-                    tgUserId: data.fromTgUserId,
-                    tgUsername: profile.username ?? null,
-                    tgFirstName: profile.firstName ?? null,
-                    tgLastName: profile.lastName ?? null,
-                  },
-                });
-                logger.info(
-                  { contactId: contact.id, username, fromTgUserId: data.fromTgUserId },
-                  'tg-listen: back-filled tgUserId from username resolution',
-                );
-              }
-            }
-          } catch (err) {
-            logger.warn(
-              { err: (err as Error).message, fromTgUserId: data.fromTgUserId },
-              'tg-listen: resolveUser fallback failed',
-            );
-          }
+      if (!contact && data.fromUsername) {
+        const username = data.fromUsername.toLowerCase();
+        contact = await prisma.contact.findFirst({
+          where: {
+            type: 'tg_username',
+            OR: [
+              { tgUsername: { equals: username, mode: 'insensitive' } },
+              { value: { equals: username, mode: 'insensitive' } },
+            ],
+          },
+          orderBy: { updatedAt: 'desc' },
+        });
+        if (contact) {
+          contact = await prisma.contact.update({
+            where: { id: contact.id },
+            data: {
+              tgUserId: data.fromTgUserId,
+              tgUsername: data.fromUsername,
+              tgFirstName: data.fromFirstName ?? null,
+              tgLastName: data.fromLastName ?? null,
+            },
+          });
+          logger.info(
+            { contactId: contact.id, username, fromTgUserId: data.fromTgUserId },
+            'tg-listen: back-filled tgUserId from inline sender username',
+          );
         }
       }
 

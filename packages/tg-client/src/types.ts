@@ -84,6 +84,18 @@ export interface IncomingMessage {
   text: string;
   tgMsgId: string;
   receivedAt: string;
+  /**
+   * Sender profile fields lifted off the GramJS `NewMessage` event. They're
+   * usually present because the same Updates envelope ships the user entity
+   * alongside the message — so we read them sync without a separate
+   * `users.GetUsers` round-trip (which fails for users we haven't touched
+   * recently because GramJS doesn't have their access_hash cached). When
+   * absent (rare — bots, deleted accounts), the consumer falls back to a
+   * plain by-id lookup.
+   */
+  fromUsername?: string;
+  fromFirstName?: string;
+  fromLastName?: string;
 }
 
 export type IncomingHandler = (msg: IncomingMessage) => void | Promise<void>;

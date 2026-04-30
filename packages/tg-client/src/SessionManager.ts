@@ -550,7 +550,22 @@ function mapIncomingEvent(event: unknown, tgAccountId: string): IncomingMessage 
       senderId?: { toString(): string };
       fromId?: { userId?: { toString(): string } };
       date?: number;
+      sender?: {
+        username?: string;
+        firstName?: string;
+        lastName?: string;
+      } | null;
+      _sender?: {
+        username?: string;
+        firstName?: string;
+        lastName?: string;
+      } | null;
     };
+    _sender?: {
+      username?: string;
+      firstName?: string;
+      lastName?: string;
+    } | null;
     isPrivate?: boolean;
   };
   const m = e.message;
@@ -580,7 +595,25 @@ function mapIncomingEvent(event: unknown, tgAccountId: string): IncomingMessage 
   const receivedAt = dateNum
     ? new Date(dateNum * 1000).toISOString()
     : new Date().toISOString();
-  return { tgAccountId, fromTgUserId, text, tgMsgId, receivedAt };
+  // Sender entity hangs off the message in several places depending on
+  // the GramJS version / how the update was assembled. Try them all.
+  const sender = m.sender ?? m._sender ?? e._sender ?? null;
+  const fromUsername =
+    typeof sender?.username === 'string' && sender.username ? sender.username : undefined;
+  const fromFirstName =
+    typeof sender?.firstName === 'string' && sender.firstName ? sender.firstName : undefined;
+  const fromLastName =
+    typeof sender?.lastName === 'string' && sender.lastName ? sender.lastName : undefined;
+  return {
+    tgAccountId,
+    fromTgUserId,
+    text,
+    tgMsgId,
+    receivedAt,
+    ...(fromUsername !== undefined && { fromUsername }),
+    ...(fromFirstName !== undefined && { fromFirstName }),
+    ...(fromLastName !== undefined && { fromLastName }),
+  };
 }
 
 // ---------- helpers ----------

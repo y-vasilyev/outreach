@@ -32,6 +32,14 @@ export const TgListenJobZ = z.object({
   text: z.string(),
   tgMsgId: z.string(),
   receivedAt: z.string(),
+  // Sender profile pulled off the GramJS NewMessage event (often present
+  // because the Updates envelope ships the user entity inline). The
+  // tg-listen worker uses these to back-fill contacts that were
+  // outreached before resolve-on-send landed, without the failure-prone
+  // `users.GetUsers` round-trip (no access_hash → resolveUser throws).
+  fromUsername: z.string().optional(),
+  fromFirstName: z.string().optional(),
+  fromLastName: z.string().optional(),
 });
 
 export const AgentRunJobZ = z.object({
