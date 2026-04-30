@@ -1,0 +1,32 @@
+{
+  "name": "nosquare-outreach",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "dev:api": "turbo run dev --filter=@nosquare/api",
+    "dev:web": "turbo run dev --filter=@nosquare/web",
+    "dev:workers": "turbo run dev --filter=@nosquare/workers",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\"",
+    "test": "turbo run test",
+    "test:e2e": "turbo run test:e2e",
+    "db:migrate": "pnpm --filter @nosquare/db prisma:migrate:dev",
+    "db:migrate:deploy": "pnpm --filter @nosquare/db prisma:migrate:deploy",
+    "db:seed": "pnpm --filter @nosquare/db seed",
+    "db:studio": "pnpm --filter @nosquare/db prisma:studio",
+    "db:reset": "pnpm --filter @nosquare/db prisma:reset"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "prettier": "^3.2.5",
+    "turbo": "^2.0.6",
+    "typescript": "^5.4.5"
+  }
+}
