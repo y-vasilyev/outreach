@@ -185,7 +185,26 @@ export async function loadFakeTlsConnectionClass(): Promise<unknown> {
     async readPacket(reader: { read(n: number): Promise<Buffer> }): Promise<Buffer> {
       const lenBuf = await reader.read(4);
       const length = lenBuf.readUInt32LE(0);
-      return reader.read(length);
+      const body = await reader.read(length);
+
+      // Padded Intermediate appends 0..15 random bytes after the MTProto frame.
+      // For ENCRYPTED messages GramJS' MTProtoState.decryptMessageData runs
+      // AES-IGE on body[24:] and verifies SHA256 over the resulting plaintext —
+      // any trailing transport pad ends up inside the SHA256 input and breaks
+      // msg_key. Encrypted ciphertext must be a multiple of 16, so trim down
+      // to that. Plain (auth_key_id == 0) messages have an explicit
+      // msg_data_len field that the reader stops at, so trailing pad is
+      // harmless and we keep them as-is.
+      if (body.length >= 24) {
+        const isPlain =
+          body[0] === 0 && body[1] === 0 && body[2] === 0 && body[3] === 0 &&
+          body[4] === 0 && body[5] === 0 && body[6] === 0 && body[7] === 0;
+        if (!isPlain) {
+          const aligned = 24 + (((body.length - 24) >> 4) << 4);
+          if (aligned !== body.length) return body.subarray(0, aligned);
+        }
+      }
+      return body;
     }
   }
 
