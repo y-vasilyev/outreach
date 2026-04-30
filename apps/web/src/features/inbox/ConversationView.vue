@@ -32,14 +32,21 @@ const { data: details } = useQuery({
   queryFn: () => api.get<ConversationDetail>(`/conversations/${cId.value}`),
 });
 
+// Fall back to a short refetchInterval even though we also subscribe to
+// `message.new` over Socket.IO. In dev (and through some prod proxies)
+// the realtime channel can stall — without polling the open thread sits
+// stale until the operator reloads. 4s is short enough to feel live and
+// long enough not to spam the API.
 const { data: messages, isLoading: msgsLoading } = useQuery({
   queryKey: ['conversation-messages', cId],
   queryFn: () => api.get<ChatMessage[]>(`/conversations/${cId.value}/messages`),
+  refetchInterval: 4_000,
 });
 
 const { data: suggestions } = useQuery({
   queryKey: ['conversation-suggestions', cId],
   queryFn: () => api.get<Suggestion[]>(`/conversations/${cId.value}/suggestions`),
+  refetchInterval: 4_000,
 });
 
 const draft = ref('');

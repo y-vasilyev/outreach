@@ -103,13 +103,15 @@ export function startAgentRunWorker() {
             return { ok: true, action: 'operator_now' };
           }
 
-          // generate replies + safety filter
+          // generate replies + safety filter. The DB stores message
+          // direction as `in_`/`out_` (Prisma underscored enum); the agent
+          // schema wants `in`/`out`.
           const reply = await runner.run<ReplyComposerOut>('reply_composer', {
             channel_analysis: conv.contact.channel?.analysis ?? {},
             contact: buildContactPromptInput(conv.contact),
             campaign: { goal_text: '', value_prop: '' },
             conversation_history: messages.map((m) => ({
-              direction: m.direction,
+              direction: m.direction === 'in_' ? 'in' : 'out',
               sender: m.sender,
               text: m.text,
               at: m.createdAt.toISOString(),
