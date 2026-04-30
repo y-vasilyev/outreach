@@ -194,16 +194,20 @@ export const IntentTargetCoerced = z.preprocess((v) => {
   ) {
     return s;
   }
-  // schedule_call: any "schedule … (call|meet|interview|chat|тайм…)"
+  // schedule_call: any "schedule / book / meeting / confirm-meeting" variant
   if (
     s.includes('schedule') ||
     s.includes('book') ||
+    s.includes('meeting') ||
+    s.includes('meet') ||
+    s.includes('confirm') ||
     s.includes('встреч') ||
     s.includes('созвон') ||
     s.includes('договор') ||
     s.includes('тайм') ||
     s.includes('time') ||
-    s.includes('interview')
+    s.includes('interview') ||
+    s.includes('подтвер')
   ) {
     return 'schedule_call';
   }
