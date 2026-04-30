@@ -91,6 +91,7 @@ function endpointKv(e: LLMEndpoint): KvItem[] {
         <span style="display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 5px; background: var(--paper-3); color: var(--ink-3);"><Icon name="database" :size="12" /></span>
         <span style="font-weight: 500; flex: 1;">{{ e.name }}</span>
         <Pill :state="e.enabled ? 'ok' : 'standby'" :label="e.enabled ? 'enabled' : 'disabled'" />
+        <Pill v-if="e.hasProxy" cls="violet" label="proxy" />
         <div class="actions">
           <button class="btn ghost sm" :disabled="testMut.isPending.value" @click="testMut.mutate(e.id)">
             <span v-if="testMut.isPending.value" class="spinner" />

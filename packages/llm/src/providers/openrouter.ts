@@ -7,6 +7,7 @@ import type {
   ModelInfo,
   ProviderConfig,
 } from '../types.js';
+import { fetchProxyOpts } from './_proxy.js';
 
 const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
 const COMPLETION_PATH = '/chat/completions';
@@ -129,6 +130,9 @@ export async function doOpenAICompatCall(
       headers,
       body: JSON.stringify(body),
       signal: req.abortSignal,
+      // Route through ProxyAgent when `cfg.proxyUrl` is set. fetch() in
+      // Node 18+ honours undici's `dispatcher` option.
+      ...(fetchProxyOpts(cfg.proxyUrl) as RequestInit),
     });
   } catch (e) {
     throw Errors.upstream(`${opts.model}: network error`, {
@@ -228,6 +232,7 @@ export async function openAiCompatListModels(
         Authorization: `Bearer ${cfg.apiKey}`,
         ...(cfg.defaultHeaders ?? {}),
       },
+      ...(fetchProxyOpts(cfg.proxyUrl) as RequestInit),
     });
   } catch (e) {
     throw Errors.upstream(`${providerLabel}: models network error`, {

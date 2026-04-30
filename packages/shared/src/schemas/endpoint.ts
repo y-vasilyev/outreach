@@ -21,6 +21,16 @@ export const CreateEndpointInputZ = z.object({
   apiKey: z.string().min(1),
   folderId: z.string().optional(),
   iamToken: z.string().optional(),
+  /**
+   * Outbound proxy for the provider's API. Accepts http(s):// or socks5://.
+   * Empty string is allowed in PATCH to clear the previously stored proxy.
+   */
+  proxyUrl: z
+    .string()
+    .optional()
+    .refine((v) => !v || /^(https?|socks5):\/\//i.test(v), {
+      message: 'proxyUrl must start with http://, https://, or socks5://',
+    }),
   defaultHeaders: z.record(z.string()).default({}),
   rateLimitRpm: z.number().int().min(1).max(100000).optional(),
   enabled: z.boolean().default(true),

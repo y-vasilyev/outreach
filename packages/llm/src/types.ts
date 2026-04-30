@@ -82,6 +82,19 @@ export interface ProviderConfig {
   iamToken?: string;
   defaultHeaders?: Record<string, string>;
   timeoutMs?: number;
+  /**
+   * Optional outbound HTTP/HTTPS/SOCKS proxy for the provider's API calls.
+   * Examples:
+   *   - "http://user:pass@proxy.example.com:8080"
+   *   - "https://proxy.example.com:443"
+   *   - "socks5://user:pass@10.0.0.1:1080"
+   *
+   * Uses an undici ProxyAgent under the hood, applied to fetch() calls in
+   * each provider. Currently honoured by OpenRouter and OpenAI-compat
+   * providers (Yandex's API is geo-unrestricted from RU and we keep its
+   * client unchanged).
+   */
+  proxyUrl?: string;
 }
 
 export interface TokenAccountingRun {

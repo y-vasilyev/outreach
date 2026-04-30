@@ -18,6 +18,8 @@ const baseUrl = ref('');
 const apiKey = ref('');
 const folderId = ref('');
 const iamToken = ref('');
+const proxyUrl = ref('');
+const clearProxy = ref(false);
 const rateLimit = ref('');
 
 function defaultBaseUrl(p: typeof provider.value): string {
@@ -37,6 +39,8 @@ watch(
       apiKey.value = '';
       folderId.value = '';
       iamToken.value = '';
+      proxyUrl.value = '';
+      clearProxy.value = false;
       rateLimit.value = e.rateLimitRpm ? String(e.rateLimitRpm) : '';
     } else {
       name.value = '';
@@ -45,6 +49,8 @@ watch(
       apiKey.value = '';
       folderId.value = '';
       iamToken.value = '';
+      proxyUrl.value = '';
+      clearProxy.value = false;
       rateLimit.value = '';
     }
   },
@@ -65,6 +71,8 @@ const mut = useMutation({
     if (apiKey.value) body.apiKey = apiKey.value;
     if (folderId.value) body.folderId = folderId.value;
     if (iamToken.value) body.iamToken = iamToken.value;
+    if (proxyUrl.value) body.proxyUrl = proxyUrl.value;
+    else if (props.endpoint && clearProxy.value) body.proxyUrl = '';
     if (rateLimit.value) body.rateLimitRpm = Number(rateLimit.value);
     if (props.endpoint) return api.patch<LLMEndpoint>(`/endpoints/${props.endpoint.id}`, body);
     return api.post<LLMEndpoint>('/endpoints', body);
@@ -111,6 +119,26 @@ const mut = useMutation({
       </Field>
       <Field label="Rate limit (RPM)">
         <TextInput v-model="rateLimit" type="number" placeholder="например 60" />
+      </Field>
+      <Field
+        v-if="provider === 'openrouter' || provider === 'openai_compat'"
+        label="Outbound proxy (опционально)"
+        :help="
+          endpoint && endpoint.hasProxy
+            ? 'Прокси настроен. Введите новое значение, чтобы заменить, или отметьте «Очистить».'
+            : 'http(s):// или socks5:// — пример: http://user:pass@proxy.example.com:8080'
+        "
+        style="grid-column: 1 / -1;"
+      >
+        <TextInput
+          v-model="proxyUrl"
+          type="password"
+          :placeholder="endpoint && endpoint.hasProxy ? '•••• оставьте пустым, чтобы не менять' : 'http://user:pass@proxy.example.com:8080'"
+        />
+        <label v-if="endpoint && endpoint.hasProxy" style="display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 12px;">
+          <input v-model="clearProxy" type="checkbox" />
+          <span>Очистить прокси (отключить)</span>
+        </label>
       </Field>
     </div>
     <template #footer>
