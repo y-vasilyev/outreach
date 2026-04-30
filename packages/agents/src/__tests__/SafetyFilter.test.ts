@@ -4,21 +4,30 @@ import { safetyFilter } from '../agents/SafetyFilter.js';
 import { makeCtx, makeConfig, makeLLM } from './_mocks.js';
 
 describe('safety_filter — deterministic rules', () => {
-  it('blocks drafts containing forbidden topics without calling LLM', async () => {
-    const llm = makeLLM();
+  // Forbidden phrases are now SOFT signals: they raise risk_score but
+  // don't block. Operators see the suggestion in the inbox with a yellow
+  // bar. Previously we substring-matched single words like "реклама"
+  // which fired on virtually every CustDev opener.
+  it('flags drafts containing forbidden phrases but does not block', async () => {
+    const llm = makeLLM({
+      completeJsonImpl: () => ({ allow: true, reasons: [], risk_score: 0.2 }),
+    });
     const ctx = makeCtx({
       llm,
       config: makeConfig({
-        params: { forbidden_topics: ['реклама', 'оффер'], max_length: 600 },
+        params: {
+          forbidden_topics: ['купить рекламу', 'оффер'],
+          max_length: 600,
+        },
       }),
     });
     const out = await safetyFilter.run(
       { draft: 'Привет, хочу предложить оффер по вашему каналу.' },
       ctx,
     );
-    expect(out.allow).toBe(false);
-    expect(out.reasons.some((r) => r.startsWith('forbidden_topic:'))).toBe(true);
-    expect(llm._calls.completeJson).toBe(0);
+    expect(out.allow).toBe(true);
+    expect(out.reasons.some((r) => r.startsWith('forbidden_phrase:'))).toBe(true);
+    expect(out.risk_score).toBeGreaterThan(0);
   });
 
   it('blocks overly long drafts without calling LLM', async () => {
@@ -34,8 +43,12 @@ describe('safety_filter — deterministic rules', () => {
     expect(llm._calls.completeJson).toBe(0);
   });
 
-  it('blocks leading emoji without calling LLM', async () => {
-    const llm = makeLLM();
+  // Leading emoji is a stylistic warning, not a deal-breaker. Operator
+  // sees the suggestion with the warning surfaced.
+  it('flags leading emoji as a soft signal', async () => {
+    const llm = makeLLM({
+      completeJsonImpl: () => ({ allow: true, reasons: [], risk_score: 0.1 }),
+    });
     const ctx = makeCtx({
       llm,
       config: makeConfig({ params: { forbidden_topics: [] } }),
@@ -44,19 +57,24 @@ describe('safety_filter — deterministic rules', () => {
       { draft: '👋 Привет, давайте познакомимся.' },
       ctx,
     );
-    expect(out.allow).toBe(false);
+    expect(out.allow).toBe(true);
     expect(out.reasons).toContain('leading_emoji');
-    expect(llm._calls.completeJson).toBe(0);
+    expect(out.risk_score).toBeGreaterThan(0);
   });
 
-  it('blocks exclamation in first line', async () => {
-    const llm = makeLLM();
+  // Exclamation in the first line is normal in Russian greetings ("Здравствуйте,
+  // Иван!"). Flag it but never block — otherwise no opener variant ever
+  // makes it through.
+  it('does not block exclamation in first line', async () => {
+    const llm = makeLLM({
+      completeJsonImpl: () => ({ allow: true, reasons: [], risk_score: 0.05 }),
+    });
     const ctx = makeCtx({
       llm,
       config: makeConfig({ params: { forbidden_topics: [] } }),
     });
     const out = await safetyFilter.run({ draft: 'Привет! Как дела?' }, ctx);
-    expect(out.allow).toBe(false);
+    expect(out.allow).toBe(true);
     expect(out.reasons).toContain('exclamation_in_first_line');
   });
 
@@ -94,7 +112,8 @@ describe('safety_filter — deterministic rules', () => {
     expect(out.reasons).toContain('recipient_declined_earlier');
   });
 
-  it('falls through to LLM only when all hard rules pass', async () => {
+  // No hard violations AND no soft signals → skip LLM entirely (cheap path).
+  it('skips LLM on the clean happy path', async () => {
     const llm = makeLLM({
       completeJsonImpl: () => ({
         allow: true,
@@ -109,9 +128,23 @@ describe('safety_filter — deterministic rules', () => {
       }),
     });
     const out = await safetyFilter.run(
-      { draft: 'Здравствуйте. Хочу позвать вас на короткое 20-минутное интервью по нашему продукту.' },
+      { draft: 'Здравствуйте. Хочу позвать на короткое 20-минутное интервью.' },
       ctx,
     );
+    expect(out.allow).toBe(true);
+    expect(llm._calls.completeJson).toBe(0);
+  });
+
+  // Soft-signal present → LLM is asked for a nuance check.
+  it('calls LLM when soft signals are present', async () => {
+    const llm = makeLLM({
+      completeJsonImpl: () => ({ allow: true, reasons: [], risk_score: 0.2 }),
+    });
+    const ctx = makeCtx({
+      llm,
+      config: makeConfig({ params: { forbidden_topics: [] } }),
+    });
+    const out = await safetyFilter.run({ draft: 'Здравствуйте, Иван!' }, ctx);
     expect(out.allow).toBe(true);
     expect(llm._calls.completeJson).toBe(1);
   });

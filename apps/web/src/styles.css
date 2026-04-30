@@ -602,12 +602,17 @@ table.tbl tbody tr.selected td { background: var(--accent-bg); }
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--paper);
-  overflow: hidden;
+  /* No `overflow: hidden` — that clipped legitimate descendants (popovers,
+   * focus rings, the model combobox before we teleported it). Round-corner
+   * visual is preserved by rounding `.card-head` directly so its grey
+   * background fits inside the card border. */
 }
 .card-head {
   min-height: 36px;
   padding: 0 12px;
   border-bottom: 1px solid var(--line);
+  border-top-left-radius: calc(var(--r-md) - 1px);
+  border-top-right-radius: calc(var(--r-md) - 1px);
   display: flex;
   align-items: center;
   gap: 8px;
