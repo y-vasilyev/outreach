@@ -41,4 +41,12 @@ export async function campaignsRoutes(app: FastifyInstance) {
       .parse(req.body ?? {});
     return campaignsService.preview(params.id, body.limit);
   });
+
+  app.post('/campaigns/:id/contacts', async (req) => {
+    const params = z.object({ id: z.string() }).parse(req.params);
+    const body = z
+      .object({ contactIds: z.array(z.string()).min(1).max(1000) })
+      .parse(req.body);
+    return campaignsService.addContacts(params.id, body.contactIds);
+  });
 }

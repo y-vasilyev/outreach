@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { useQuery } from '@tanstack/vue-query';
+import { useQuery, useQueryClient } from '@tanstack/vue-query';
 import PageHead from '../../components/PageHead.vue';
 import Tabs from '../../components/Tabs.vue';
 import FilterBar from '../../components/FilterBar.vue';
@@ -11,17 +11,23 @@ import ConfBar from '../../components/ConfBar.vue';
 import Icon from '../../components/Icon.vue';
 import Spinner from '../../components/Spinner.vue';
 import EmptyState from '../../components/EmptyState.vue';
+import AddToCampaignDialog from './AddToCampaignDialog.vue';
 import { api } from '../../lib/api';
 import { toast } from '../../lib/toast';
 import { formatRelative } from '../../lib/format';
 import type { Contact } from './types';
 import type { IconName } from '../../lib/icons';
 
+const qc = useQueryClient();
+
 const tab = ref<'all' | 'new' | 'qualified' | 'contacted' | 'active'>('all');
 const typeFilter = ref('');
 const roleFilter = ref('');
 const reachFilter = ref('');
 const minConf = ref('');
+
+const selectedIds = ref<Set<string>>(new Set());
+const addToCampaignOpen = ref(false);
 
 const queryKey = computed(() => [
   'contacts',
@@ -116,6 +122,35 @@ const typeIcon: Record<string, IconName> = {
   other: 'user',
 };
 
+function toggleRow(id: string): void {
+  const next = new Set(selectedIds.value);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  selectedIds.value = next;
+}
+
+const allFilteredSelected = computed(
+  () => filtered.value.length > 0 && filtered.value.every((c) => selectedIds.value.has(c.id)),
+);
+
+function toggleAll(): void {
+  if (allFilteredSelected.value) {
+    const next = new Set(selectedIds.value);
+    for (const c of filtered.value) next.delete(c.id);
+    selectedIds.value = next;
+  } else {
+    const next = new Set(selectedIds.value);
+    for (const c of filtered.value) next.add(c.id);
+    selectedIds.value = next;
+  }
+}
+
+function clearSelection(): void {
+  selectedIds.value = new Set();
+}
+
+const selectedArray = computed(() => Array.from(selectedIds.value));
+
 function exportCsv(): void {
   const head = 'channel,type,value,role,confidence,reach,status\n';
   const lines = filtered.value.map((c) =>
@@ -144,11 +179,21 @@ function exportCsv(): void {
 </script>
 
 <template>
-  <PageHead title="Контакты" :sub="`${counts.all} контактов`">
+  <PageHead title="Контакты" :sub="`${counts.all} контактов${selectedIds.size ? ` · выбрано ${selectedIds.size}` : ''}`">
     <template #actions>
-      <button class="btn"><Icon name="eye" :size="12" /><span>Колонки</span></button>
+      <button v-if="selectedIds.size > 0" class="btn ghost" @click="clearSelection">
+        <Icon name="x" :size="12" /><span>Снять выделение</span>
+      </button>
       <button class="btn" @click="exportCsv"><Icon name="upload" :size="12" /><span>Экспорт CSV</span></button>
-      <button class="btn primary"><Icon name="zap" :size="12" /><span>В кампанию</span></button>
+      <button
+        class="btn primary"
+        :disabled="selectedIds.size === 0"
+        :title="selectedIds.size === 0 ? 'Сначала выделите контакты' : ''"
+        @click="addToCampaignOpen = true"
+      >
+        <Icon name="zap" :size="12" />
+        <span>В кампанию{{ selectedIds.size ? ` (${selectedIds.size})` : '' }}</span>
+      </button>
     </template>
   </PageHead>
   <Tabs :tabs="tabsList" :active="tab" @change="(id) => (tab = id as any)" />
@@ -173,7 +218,9 @@ function exportCsv(): void {
     <table class="tbl">
       <thead>
         <tr>
-          <th style="width: 28px;"><input type="checkbox" /></th>
+          <th style="width: 28px;">
+            <input type="checkbox" :checked="allFilteredSelected" @change="toggleAll" />
+          </th>
           <th>Контакт</th>
           <th>Тип</th>
           <th>Роль</th>
@@ -186,8 +233,14 @@ function exportCsv(): void {
         </tr>
       </thead>
       <tbody>
-        <tr v-for="c in filtered" :key="c.id">
-          <td><input type="checkbox" /></td>
+        <tr
+          v-for="c in filtered"
+          :key="c.id"
+          :class="selectedIds.has(c.id) ? 'selected' : ''"
+        >
+          <td>
+            <input type="checkbox" :checked="selectedIds.has(c.id)" @change="toggleRow(c.id)" />
+          </td>
           <td>
             <div style="display: flex; align-items: center; gap: 8px;">
               <span style="width: 22px; height: 22px; border-radius: 5px; background: var(--paper-3); border: 1px solid var(--line); display: inline-flex; align-items: center; justify-content: center; color: var(--ink-3);">
@@ -221,4 +274,16 @@ function exportCsv(): void {
       </tbody>
     </table>
   </div>
+
+  <AddToCampaignDialog
+    :open="addToCampaignOpen"
+    :contact-ids="selectedArray"
+    @close="addToCampaignOpen = false"
+    @done="() => {
+      addToCampaignOpen = false;
+      clearSelection();
+      qc.invalidateQueries({ queryKey: ['contacts'] });
+      qc.invalidateQueries({ queryKey: ['campaigns'] });
+    }"
+  />
 </template>

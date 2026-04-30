@@ -149,6 +149,48 @@ export const campaignsService = {
   },
 
   /**
+   * Add a fixed set of contacts to a campaign by tagging them with the
+   * campaign-specific tag (`cmp:<campaignId>`) and ensuring the campaign's
+   * `targetFilter.tags` includes that tag — so the worker picks them up at
+   * run-time without us having to pre-create conversations (which would
+   * require choosing a `tgAccount` here, a campaign concern).
+   */
+  async addContacts(id: string, contactIds: string[]) {
+    const prisma = getPrisma();
+    const c = await prisma.campaign.findUnique({ where: { id } });
+    if (!c) throw Errors.notFound('campaign', id);
+    const tag = `cmp:${id}`;
+
+    const contacts = await prisma.contact.findMany({
+      where: { id: { in: contactIds } },
+      select: { id: true, tags: true },
+    });
+
+    let added = 0;
+    await prisma.$transaction(async (tx) => {
+      for (const ct of contacts) {
+        if (ct.tags.includes(tag)) continue;
+        await tx.contact.update({
+          where: { id: ct.id },
+          data: { tags: [...ct.tags, tag] },
+        });
+        added += 1;
+      }
+
+      const filter = (c.targetFilter ?? {}) as { tags?: string[] } & Record<string, unknown>;
+      const tags = Array.isArray(filter.tags) ? filter.tags : [];
+      if (!tags.includes(tag)) {
+        await tx.campaign.update({
+          where: { id },
+          data: { targetFilter: { ...filter, tags: [...tags, tag] } as object },
+        });
+      }
+    });
+
+    return { added, requested: contactIds.length };
+  },
+
+  /**
    * Pick `limit` candidate contacts that match the campaign's `targetFilter`.
    * Drafts are returned empty for now — the UI shows the candidate set and a
    * note that draft generation runs once the campaign is started; we don't
