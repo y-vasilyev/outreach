@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import type { Agent } from '../types.js';
 import { invokeJson, readParams } from './_runtime.js';
+import { ConfidenceCoerced } from './_coerce.js';
 
 import { INTENTS } from './IntentClassifier.js';
 
@@ -14,9 +15,11 @@ export const handoffDeciderInputSchema = z.object({
   }),
   intent: z.object({
     intent: z.enum(INTENTS),
-    confidence: z.number().min(0).max(1),
+    // Defensive — caller usually passes a clean number, but if it ever
+    // forwards an LLM output we want the same coercion.
+    confidence: ConfidenceCoerced,
   }),
-  ai_recent_confidence: z.array(z.number().min(0).max(1)).default([]),
+  ai_recent_confidence: z.array(ConfidenceCoerced).default([]),
   red_flags_total: z.number().int().nonnegative().default(0),
 });
 

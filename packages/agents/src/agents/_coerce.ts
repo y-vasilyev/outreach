@@ -94,6 +94,31 @@ export const LengthCoerced = z.preprocess((v) => {
   return v;
 }, LengthEnum);
 
+/**
+ * Integer score in `[min..max]`. Accepts qualitative strings (low/medium/
+ * high/etc.) and numeric strings; clamps and rounds. Used by quality-review
+ * style scoring agents that ask the LLM for a 1..5 rating.
+ */
+export function IntScoreCoerced(min: number, max: number) {
+  return z.preprocess((v) => {
+    const span = max - min;
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      return Math.max(min, Math.min(max, Math.round(v)));
+    }
+    if (typeof v === 'string') {
+      const s = v.toLowerCase().trim();
+      if (s === 'high' || s === 'высок') return max;
+      if (s === 'medium' || s === 'mid' || s === 'mid-range' || s === 'средн') {
+        return Math.round(min + span * 0.5);
+      }
+      if (s === 'low' || s === 'низк') return min;
+      const n = Number(s);
+      if (Number.isFinite(n)) return Math.max(min, Math.min(max, Math.round(n)));
+    }
+    return v;
+  }, z.number().int().min(min).max(max));
+}
+
 // ─── helpers ───
 
 function qualitativeToNumber(v: unknown): number | undefined {

@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import type { Agent } from '../types.js';
 import { invokeJson, readParams } from './_runtime.js';
+import { ConfidenceCoerced } from './_coerce.js';
 
 const contactSchema = z.object({
   contact_id: z.string(),
@@ -15,7 +16,8 @@ const contactSchema = z.object({
     'other',
   ]),
   role_guess: z.enum(['owner', 'ad_manager', 'generic', 'bot', 'unknown']),
-  confidence: z.number().min(0).max(1),
+  // Tolerate qualitative LLM-emitted confidences ("medium"/"high"/percent).
+  confidence: ConfidenceCoerced,
   reachability: z
     .enum(['reachable_tg', 'manual', 'unreachable'])
     .optional(),

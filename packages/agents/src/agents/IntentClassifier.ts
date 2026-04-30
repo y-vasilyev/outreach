@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import type { Agent } from '../types.js';
 import { invokeJson } from './_runtime.js';
+import { ConfidenceCoerced } from './_coerce.js';
 
 export const INTENTS = [
   'interested',
@@ -26,7 +27,8 @@ export const intentClassifierInputSchema = z.object({
 
 export const intentClassifierOutputSchema = z.object({
   intent: z.enum(INTENTS),
-  confidence: z.number().min(0).max(1),
+  // Coerce qualitative confidence ("high"/"medium"/"низк") + 0..100 percent.
+  confidence: ConfidenceCoerced,
   signals: z.array(z.string()).default([]),
 });
 
