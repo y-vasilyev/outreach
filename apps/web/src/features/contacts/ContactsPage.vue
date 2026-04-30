@@ -14,6 +14,7 @@ import EmptyState from '../../components/EmptyState.vue';
 import Dropdown from '../../components/Dropdown.vue';
 import AddToCampaignDialog from './AddToCampaignDialog.vue';
 import ContactEditDrawer from './ContactEditDrawer.vue';
+import StartConversationDialog from './StartConversationDialog.vue';
 import { api } from '../../lib/api';
 import { useMutation } from '@tanstack/vue-query';
 import { toast } from '../../lib/toast';
@@ -32,6 +33,7 @@ const minConf = ref('');
 const selectedIds = ref<Set<string>>(new Set());
 const addToCampaignOpen = ref(false);
 const editingContact = ref<Contact | null>(null);
+const startChatFor = ref<Contact | null>(null);
 
 const reExtractMut = useMutation({
   mutationFn: (id: string) =>
@@ -44,8 +46,29 @@ const reExtractMut = useMutation({
   onError: (e: Error) => toast.error('Не удалось перезапустить', e.message),
 });
 
+const setStatusMut = useMutation({
+  mutationFn: (args: { id: string; status: 'qualified' | 'disqualified' | 'new' }) =>
+    api.patch<Contact>(`/contacts/${args.id}`, { status: args.status }),
+  onSuccess: (_v, args) => {
+    qc.invalidateQueries({ queryKey: ['contacts'] });
+    toast.success(`Статус: ${args.status}`);
+  },
+  onError: (e: Error) => toast.error('Не удалось изменить статус', e.message),
+});
+
 function rowActions(c: Contact) {
-  return [
+  const items: Array<{
+    label: string;
+    icon?: IconName;
+    onClick?: () => void;
+    variant?: 'default' | 'danger';
+    divider?: boolean;
+  }> = [
+    {
+      label: 'Начать ai-assisted чат',
+      icon: 'zap' as const,
+      onClick: () => (startChatFor.value = c),
+    },
     {
       label: 'Открыть / редактировать',
       icon: 'edit' as const,
@@ -56,7 +79,24 @@ function rowActions(c: Contact) {
       icon: 'sparkle' as const,
       onClick: () => reExtractMut.mutate(c.id),
     },
+    { label: '', divider: true },
   ];
+  if (c.status !== 'qualified') {
+    items.push({
+      label: 'Пометить qualified',
+      icon: 'check' as const,
+      onClick: () => setStatusMut.mutate({ id: c.id, status: 'qualified' }),
+    });
+  }
+  if (c.status !== 'disqualified') {
+    items.push({
+      label: 'Пометить disqualified',
+      icon: 'x' as const,
+      variant: 'danger' as const,
+      onClick: () => setStatusMut.mutate({ id: c.id, status: 'disqualified' }),
+    });
+  }
+  return items;
 }
 
 const queryKey = computed(() => [
@@ -335,5 +375,11 @@ function exportCsv(): void {
     :contact="editingContact"
     @close="editingContact = null"
     @updated="() => qc.invalidateQueries({ queryKey: ['contacts'] })"
+  />
+
+  <StartConversationDialog
+    :contact="startChatFor"
+    @close="startChatFor = null"
+    @started="() => { startChatFor = null; qc.invalidateQueries({ queryKey: ['contacts'] }); }"
   />
 </template>

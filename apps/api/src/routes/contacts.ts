@@ -43,4 +43,25 @@ export async function contactsRoutes(app: FastifyInstance) {
     const params = z.object({ id: z.string() }).parse(req.params);
     return contactsService.reExtract(params.id);
   });
+
+  /**
+   * Start a one-off ai-assisted conversation with this contact right now,
+   * without waiting for the campaign-dispatcher tick. Either pin to an
+   * existing campaign (we pull goal/value/mode from it) or pass goal/value
+   * inline. The opener generation is async; the response returns the
+   * conversation id so the UI can deep-link to /inbox/:id.
+   */
+  app.post('/contacts/:id/start-conversation', async (req) => {
+    const params = z.object({ id: z.string() }).parse(req.params);
+    const body = z
+      .object({
+        tgAccountId: z.string().min(1),
+        campaignId: z.string().optional(),
+        goalText: z.string().max(2000).optional(),
+        valueProp: z.string().max(2000).optional(),
+        mode: z.enum(['auto', 'assisted', 'manual']).optional(),
+      })
+      .parse(req.body);
+    return contactsService.startConversation(params.id, body);
+  });
 }

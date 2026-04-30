@@ -12,7 +12,7 @@ import Icon from '../../components/Icon.vue';
 import { api } from '../../lib/api';
 import { toast } from '../../lib/toast';
 import { formatDateTime } from '../../lib/format';
-import type { Contact, ContactRole, ContactType } from './types';
+import type { Contact, ContactRole, ContactType, ContactStatus } from './types';
 
 const props = defineProps<{ contact: Contact | null }>();
 const emit = defineEmits<{ (e: 'close'): void; (e: 'updated'): void }>();
@@ -23,6 +23,7 @@ const value = ref('');
 const label = ref('');
 const role = ref<ContactRole>('unknown');
 const type = ref<ContactType>('other');
+const status = ref<ContactStatus>('new');
 const confidence = ref(0);
 
 watch(
@@ -33,6 +34,7 @@ watch(
     label.value = c.label ?? '';
     role.value = c.roleGuess;
     type.value = c.type;
+    status.value = c.status;
     confidence.value = Number(c.confidence) || 0;
   },
   { immediate: true },
@@ -56,6 +58,17 @@ const TYPES = [
   { value: 'other', label: 'other' },
 ];
 
+const STATUSES = [
+  { value: 'new', label: 'new — ещё не вычитан оператором' },
+  { value: 'qualified', label: 'qualified — годится в кампанию' },
+  { value: 'disqualified', label: 'disqualified — отбраковать' },
+  { value: 'contacted', label: 'contacted — opener отправлен' },
+  { value: 'active', label: 'active — идёт диалог' },
+  { value: 'finished', label: 'finished — закрыт' },
+  { value: 'invalid', label: 'invalid — невалидный handle' },
+  { value: 'blocked', label: 'blocked — забанил/заблокировал' },
+];
+
 const isManual = computed(() => props.contact?.extractedBy === 'manual');
 
 const dirty = computed(() => {
@@ -66,6 +79,7 @@ const dirty = computed(() => {
     (label.value || null) !== (c.label ?? null) ||
     role.value !== c.roleGuess ||
     type.value !== c.type ||
+    status.value !== c.status ||
     Math.abs(confidence.value - Number(c.confidence)) > 1e-6
   );
 });
@@ -78,6 +92,7 @@ const saveMut = useMutation({
       label: label.value || null,
       roleGuess: role.value,
       type: type.value,
+      status: status.value,
       confidence: confidence.value,
     });
   },
@@ -123,6 +138,13 @@ const reExtractMut = useMutation({
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
             <Field label="Тип"><SelectInput v-model="type as string" :options="TYPES" /></Field>
             <Field label="Роль"><SelectInput v-model="role as string" :options="ROLES" /></Field>
+            <Field
+              label="Статус"
+              style="grid-column: 1 / -1;"
+              help="Кампания берёт только qualified-контакты. Поднимите статус до qualified, если уверены, что хотите по нему писать."
+            >
+              <SelectInput v-model="status as string" :options="STATUSES" />
+            </Field>
             <Field label="Value (handle / email / URL)" style="grid-column: 1 / -1;">
               <TextInput v-model="value" :mono="true" />
             </Field>

@@ -20,6 +20,9 @@ interface HandoffOut {
 interface ReplyComposerOut {
   variants: Array<{ text: string; intent_target: string; rationale: string }>;
 }
+interface OpenerOut {
+  variants: Array<{ text: string; rationale: string; risk_score?: number }>;
+}
 interface SafetyOut {
   allow: boolean;
   reasons: string[];
@@ -164,6 +167,111 @@ export function startAgentRunWorker() {
 
           return { ok: true, action: handoff.action };
         }
+
+        case 'outreach_first_message': {
+          // On-demand opener generation. Used by `POST
+          // /contacts/:id/start-conversation` so the operator can kick
+          // off a chat with a specific contact without waiting for the
+          // campaign-dispatcher tick. Mirrors the dispatcher's logic but
+          // runs as a discrete BullMQ job so the API can return fast.
+          if (!data.conversationId) throw new Error('conversationId required');
+          const conv = await prisma.conversation.findUnique({
+            where: { id: data.conversationId },
+            include: {
+              contact: { include: { channel: true } },
+              campaign: true,
+            },
+          });
+          if (!conv) throw new Error('conversation not found');
+
+          const goalText = conv.campaign?.goalText ?? '';
+          const valueProp = conv.campaign?.valueProp ?? '';
+
+          const opener = await runner.run<OpenerOut>(
+            'opening_composer',
+            {
+              channel_analysis: conv.contact.channel.analysis,
+              contact: {
+                value: conv.contact.value,
+                role: conv.contact.roleGuess,
+                type: conv.contact.type,
+              },
+              strategy: { approach: 'industry_fit' },
+              campaign: { goal_text: goalText, value_prop: valueProp },
+            },
+            {
+              conversationId: conv.id,
+              campaignId: conv.campaignId ?? undefined,
+              contactId: conv.contact.id,
+            },
+          );
+
+          let bestSuggestionId: string | null = null;
+          let bestScore = 0;
+          let bestText = '';
+
+          for (const v of opener.variants) {
+            const safety = await runner.run<SafetyOut>(
+              'safety_filter',
+              {
+                draft: v.text,
+                channel_analysis: conv.contact.channel.analysis,
+                contact: { id: conv.contact.id },
+                campaign: { name: conv.campaign?.name ?? 'ad-hoc' },
+              },
+              { conversationId: conv.id },
+            );
+            if (!safety.allow) continue;
+            const score = 1 - safety.risk_score;
+            const sug = await prisma.suggestion.create({
+              data: {
+                conversationId: conv.id,
+                agentName: 'opening_composer',
+                text: v.text,
+                rationale: v.rationale,
+                score,
+                status: 'pending',
+              },
+            });
+            await publishRealtime(`conversation:${conv.id}`, {
+              type: 'suggestion.new',
+              conversationId: conv.id,
+              suggestion: {
+                id: sug.id,
+                agentName: sug.agentName,
+                text: sug.text,
+                rationale: sug.rationale,
+                score: Number(sug.score),
+                status: sug.status,
+                createdAt: sug.createdAt.toISOString(),
+              },
+            });
+            if (score > bestScore) {
+              bestScore = score;
+              bestSuggestionId = sug.id;
+              bestText = v.text;
+            }
+          }
+
+          if (conv.contact.status === 'qualified' || conv.contact.status === 'new') {
+            await prisma.contact.update({
+              where: { id: conv.contact.id },
+              data: { status: 'contacted' },
+            });
+          }
+
+          if (bestSuggestionId) {
+            await tryAutoApprove({
+              conversationId: conv.id,
+              suggestionId: bestSuggestionId,
+              text: bestText,
+              score: bestScore,
+            });
+          }
+
+          return { ok: true, suggestions: opener.variants.length };
+        }
+
         default:
           logger.warn({ pipeline: data.pipeline }, 'pipeline not implemented yet');
           return { ok: false, reason: 'not implemented' };

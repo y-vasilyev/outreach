@@ -128,4 +128,116 @@ export const contactsService = {
     const job = await queues.contactExtract.add('extract', { channelId: c.channelId });
     return { ok: true, jobId: job.id ?? 'unknown', channelId: c.channelId };
   },
+
+  /**
+   * Bypass the campaign-dispatcher tick and start a one-off conversation
+   * with this contact right now. Either pin to an existing campaign (we
+   * pull goal/value/mode from it) or pass them inline. The opener is
+   * generated asynchronously by `agent-run` (`outreach_first_message`),
+   * so the call returns as soon as the conversation row exists and the
+   * job is queued — the operator can refresh the inbox to watch the
+   * suggestions land.
+   */
+  async startConversation(
+    contactId: string,
+    opts: {
+      tgAccountId: string;
+      campaignId?: string;
+      goalText?: string;
+      valueProp?: string;
+      mode?: 'auto' | 'assisted' | 'manual';
+    },
+  ): Promise<{ ok: true; conversationId: string; created: boolean }> {
+    const prisma = getPrisma();
+    const c = await prisma.contact.findUnique({
+      where: { id: contactId },
+      select: { id: true, value: true, type: true, reachability: true },
+    });
+    if (!c) throw Errors.notFound('contact', contactId);
+    if (c.reachability !== 'reachable_tg') {
+      throw Errors.badRequest(
+        'contact is not reachable via Telegram (use manual outreach instead)',
+      );
+    }
+
+    const acct = await prisma.tgAccount.findUnique({
+      where: { id: opts.tgAccountId },
+      select: { id: true, status: true, role: true },
+    });
+    if (!acct) throw Errors.notFound('tg-account', opts.tgAccountId);
+    if (acct.status !== 'active') {
+      throw Errors.badRequest(`tg-account is ${acct.status}; pick an active one`);
+    }
+    if (acct.role !== 'outreach' && acct.role !== 'both') {
+      throw Errors.badRequest('tg-account is not configured for outreach');
+    }
+
+    let mode: 'auto' | 'assisted' | 'manual' = opts.mode ?? 'assisted';
+    if (opts.campaignId) {
+      const cmp = await prisma.campaign.findUnique({
+        where: { id: opts.campaignId },
+        select: { defaultMode: true },
+      });
+      if (!cmp) throw Errors.notFound('campaign', opts.campaignId);
+      if (!opts.mode) mode = cmp.defaultMode;
+    }
+
+    // Upsert keeps this idempotent: clicking "Start chat" twice on the
+    // same contact + tg-account just refreshes the campaign binding and
+    // re-queues the opener.
+    const existing = await prisma.conversation.findUnique({
+      where: {
+        tgAccountId_contactId: { tgAccountId: opts.tgAccountId, contactId },
+      },
+      select: { id: true },
+    });
+
+    const conv = await prisma.conversation.upsert({
+      where: {
+        tgAccountId_contactId: { tgAccountId: opts.tgAccountId, contactId },
+      },
+      update: {
+        ...(opts.campaignId !== undefined && { campaignId: opts.campaignId ?? null }),
+        mode,
+        status: 'active',
+      },
+      create: {
+        tgAccountId: opts.tgAccountId,
+        contactId,
+        campaignId: opts.campaignId ?? null,
+        mode,
+        status: 'active',
+      },
+    });
+
+    // If the operator passed inline goal/value (no campaign), tuck them
+    // into the conversation `meta` so agent-run can pick them up. (We do
+    // this rather than mutating an existing Campaign — the goal here is
+    // a one-off chat, not a campaign edit.) Today the agent-run pipeline
+    // pulls from the linked campaign; until that path consumes meta the
+    // inline fields just live there for audit.
+    if (!opts.campaignId && (opts.goalText || opts.valueProp)) {
+      await prisma.conversation.update({
+        where: { id: conv.id },
+        data: {
+          meta: {
+            adHoc: {
+              goalText: opts.goalText ?? '',
+              valueProp: opts.valueProp ?? '',
+            },
+          } as object,
+        },
+      });
+    }
+
+    const queues = getQueues();
+    await queues.agentRun.add('outreach_first_message', {
+      pipeline: 'outreach_first_message',
+      conversationId: conv.id,
+      contactId,
+      ...(opts.campaignId ? { campaignId: opts.campaignId } : {}),
+    });
+
+    return { ok: true, conversationId: conv.id, created: !existing };
+  },
 };
