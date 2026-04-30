@@ -5,6 +5,7 @@ import { getPrisma } from '@nosquare/db';
 import { getRunner } from '../services/runner.js';
 import { logger } from '../logger.js';
 import { publishRealtime } from '../services/realtime-emit.js';
+import { tryAutoApprove } from '../services/auto-approve.js';
 
 interface IntentOut {
   intent: string;
@@ -103,6 +104,13 @@ export function startAgentRunWorker() {
             last_inbound: { text: last.text, intent: intent.intent, sentiment: 'neutral' },
           }, { conversationId: conv.id });
 
+          // Track the top variant so we can auto-approve it once at the end
+          // (rather than approving the first that clears safety, which may
+          // not be the best one).
+          let bestSuggestionId: string | null = null;
+          let bestScore = 0;
+          let bestText = '';
+
           for (const v of reply.variants) {
             const safety = await runner.run<SafetyOut>('safety_filter', {
               draft: v.text,
@@ -111,13 +119,14 @@ export function startAgentRunWorker() {
               campaign: {},
             }, { conversationId: conv.id });
             if (!safety.allow) continue;
+            const score = 1 - safety.risk_score;
             const sug = await prisma.suggestion.create({
               data: {
                 conversationId: conv.id,
                 agentName: 'reply_composer',
                 text: v.text,
                 rationale: v.rationale,
-                score: 1 - safety.risk_score,
+                score,
                 status: 'pending',
               },
             });
@@ -133,6 +142,23 @@ export function startAgentRunWorker() {
                 status: sug.status,
                 createdAt: sug.createdAt.toISOString(),
               },
+            });
+            if (score > bestScore) {
+              bestScore = score;
+              bestSuggestionId = sug.id;
+              bestText = v.text;
+            }
+          }
+
+          // Auto-mode reply: if conv.mode === 'auto' and the top suggestion
+          // is high-confidence + low-risk, send it without waiting for the
+          // operator. tryAutoApprove is a no-op for assisted/manual modes.
+          if (bestSuggestionId) {
+            await tryAutoApprove({
+              conversationId: conv.id,
+              suggestionId: bestSuggestionId,
+              text: bestText,
+              score: bestScore,
             });
           }
 

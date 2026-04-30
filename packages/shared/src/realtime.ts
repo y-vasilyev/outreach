@@ -77,9 +77,24 @@ export interface OperatorAssignmentEvent {
   urgency: 'low' | 'normal' | 'high';
 }
 
+/**
+ * Emitted when a suggestion is approved (manually by the operator OR
+ * automatically by `tryAutoApprove` in auto-mode conversations). The UI
+ * uses it to flip the suggestion's row from `pending` to `approved`
+ * without waiting for the next refetch.
+ */
+export interface SuggestionApprovedEvent {
+  type: 'suggestion.approved';
+  conversationId: string;
+  suggestionId: string;
+  /** True when the runtime approved without an operator click. */
+  auto?: boolean;
+}
+
 export type RealtimeEvent =
   | MessageEvent
   | SuggestionEvent
+  | SuggestionApprovedEvent
   | StatusChangedEvent
   | ModeChangedEvent
   | ChannelProgressEvent
