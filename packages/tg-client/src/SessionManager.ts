@@ -1,6 +1,8 @@
 import { AppError } from '@nosquare/shared/errors';
 import { floodGuard } from './FloodGuard.js';
 import type {
+  IncomingHandler,
+  IncomingMessage,
   RecentPost,
   ResolvedChannel,
   ResolvedUser,
@@ -51,6 +53,14 @@ type GramJSClient = {
     apiCreds: { apiId: number; apiHash: string },
     phone: string,
   ) => Promise<{ phoneCodeHash: string }>;
+  addEventHandler: (
+    handler: (event: unknown) => void | Promise<void>,
+    builder: unknown,
+  ) => void;
+  removeEventHandler: (
+    handler: (event: unknown) => void | Promise<void>,
+    builder: unknown,
+  ) => void;
 };
 
 export interface SessionLoader {
@@ -209,6 +219,14 @@ export class SessionManager {
     const creds = this.creds;
     // Per-handle login state shared between startLogin/confirmCode/confirmPassword.
     const loginState: { phone?: string; phoneCodeHash?: string } = {};
+
+    // Local fan-out for incoming-message subscribers. We register a single
+    // GramJS event handler the first time someone subscribes, then dispatch
+    // to local callbacks — keeps the surface independent of GramJS objects.
+    const incomingSubs = new Set<IncomingHandler>();
+    let gramJsBound = false;
+    let gramJsHandler: ((event: unknown) => void) | null = null;
+    let gramJsBuilder: unknown = null;
     const requireAuth = (): void => {
       if (!handle.isAuthorized) {
         throw new AppError(
@@ -454,6 +472,54 @@ export class SessionManager {
         });
       },
 
+      subscribeIncoming(cb: IncomingHandler) {
+        incomingSubs.add(cb);
+        if (!gramJsBound) {
+          // Lazy bind: only register the GramJS event handler when there's
+          // at least one subscriber. Filtering to incoming private messages
+          // keeps the volume low (no channel updates, no outgoing).
+          void (async () => {
+            try {
+              const events = (await import(
+                'telegram/events/index.js'
+              )) as unknown as {
+                NewMessage: new (params?: { incoming?: boolean; outgoing?: boolean }) => unknown;
+              };
+              gramJsBuilder = new events.NewMessage({ incoming: true, outgoing: false });
+              gramJsHandler = (event: unknown) => {
+                const msg = mapIncomingEvent(event, tgAccountId);
+                if (!msg) return;
+                for (const sub of incomingSubs) {
+                  try {
+                    void sub(msg);
+                  } catch {
+                    /* swallow — one subscriber's error must not stop others */
+                  }
+                }
+              };
+              client.addEventHandler(gramJsHandler, gramJsBuilder);
+              gramJsBound = true;
+            } catch {
+              // Listener bind failed — leave subs registered; nothing fires.
+              // Caller can retry by re-subscribing later.
+            }
+          })();
+        }
+        return () => {
+          incomingSubs.delete(cb);
+          if (incomingSubs.size === 0 && gramJsBound && gramJsHandler && gramJsBuilder) {
+            try {
+              client.removeEventHandler(gramJsHandler, gramJsBuilder);
+            } catch {
+              /* ignore */
+            }
+            gramJsBound = false;
+            gramJsHandler = null;
+            gramJsBuilder = null;
+          }
+        };
+      },
+
       async disconnect() {
         try {
           await client.disconnect();
@@ -465,6 +531,56 @@ export class SessionManager {
 
     return handle;
   }
+}
+
+/**
+ * Turn a GramJS `NewMessage` event into our wire-friendly `IncomingMessage`.
+ * Returns `null` for events we don't care about (group/channel chats, bots,
+ * empty-text service messages, our own outgoing echoes).
+ */
+function mapIncomingEvent(event: unknown, tgAccountId: string): IncomingMessage | null {
+  const e = event as {
+    message?: {
+      id?: number | { toString(): string };
+      message?: string;
+      text?: string;
+      out?: boolean;
+      isPrivate?: boolean;
+      peerId?: { className?: string; userId?: { toString(): string } };
+      senderId?: { toString(): string };
+      fromId?: { userId?: { toString(): string } };
+      date?: number;
+    };
+    isPrivate?: boolean;
+  };
+  const m = e.message;
+  if (!m) return null;
+  // Only private (1-1) chats. Group/channel updates also flow through but we
+  // don't manage them.
+  const isPrivate = m.isPrivate === true || e.isPrivate === true || m.peerId?.className === 'PeerUser';
+  if (!isPrivate) return null;
+  // Defensively skip our own outgoing echoes that GramJS sometimes redelivers.
+  if (m.out === true) return null;
+  const text = typeof m.message === 'string' ? m.message : typeof m.text === 'string' ? m.text : '';
+  if (!text) return null;
+  // `senderId` is most reliable; fallback to `peerId.userId` then `fromId`.
+  const fromTgUserId =
+    m.senderId?.toString?.() ??
+    m.peerId?.userId?.toString?.() ??
+    m.fromId?.userId?.toString?.() ??
+    '';
+  if (!fromTgUserId) return null;
+  const tgMsgId =
+    typeof m.id === 'number'
+      ? String(m.id)
+      : typeof m.id === 'object' && m.id
+        ? m.id.toString()
+        : '';
+  const dateNum = typeof m.date === 'number' ? m.date : 0;
+  const receivedAt = dateNum
+    ? new Date(dateNum * 1000).toISOString()
+    : new Date().toISOString();
+  return { tgAccountId, fromTgUserId, text, tgMsgId, receivedAt };
 }
 
 // ---------- helpers ----------

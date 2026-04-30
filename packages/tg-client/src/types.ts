@@ -141,6 +141,16 @@ export interface TelegramClientHandle {
   resolveUser(usernameOrId: string): Promise<ResolvedUser>;
   sendMessage(toUsernameOrId: string, text: string): Promise<SendMessageResult>;
 
+  /**
+   * Subscribe to incoming TG private messages on this session. Returns an
+   * unsubscribe function. Only fires for `direct` messages from users (not
+   * channels/groups). Call repeatedly to register multiple consumers.
+   *
+   * Implementation note: wires `GramJS.events.NewMessage({ incoming: true })`
+   * under the hood. No-op until the session is authorized.
+   */
+  subscribeIncoming(cb: IncomingHandler): () => void;
+
   // Auth flow.
   startLogin(phone: string): Promise<{ phoneCodeHash: string }>;
   confirmCode(

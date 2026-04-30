@@ -3,6 +3,10 @@ import { startContactExtractWorker } from './queues/contact-extract.js';
 import { startTgSendWorker } from './queues/tg-send.js';
 import { startAgentRunWorker } from './queues/agent-run.js';
 import { startCampaignDispatcher } from './queues/campaign-dispatcher.js';
+import {
+  startTgListenWorker,
+  startTgListenSubscribers,
+} from './queues/tg-listen.js';
 import { logger } from './logger.js';
 
 async function main() {
@@ -13,14 +17,26 @@ async function main() {
     startContactExtractWorker(),
     startTgSendWorker(),
     startAgentRunWorker(),
+    startTgListenWorker(),
   ];
   const dispatcher = startCampaignDispatcher();
+  // TG inbound subscribers connect to live sessions. Failures are logged
+  // but don't prevent boot — the queue worker still drains anything that
+  // was already enqueued by a previous run.
+  const subscribers = await startTgListenSubscribers().catch((err) => {
+    logger.warn(
+      { err: (err as Error).message },
+      'tg-listen subscribers failed to bind',
+    );
+    return { stop: async () => undefined };
+  });
 
   logger.info('Workers ready.');
 
   const shutdown = async () => {
     logger.info('Shutting down workers…');
     dispatcher.stop();
+    await subscribers.stop().catch(() => undefined);
     for (const w of workers) {
       await w.close().catch(() => undefined);
     }
