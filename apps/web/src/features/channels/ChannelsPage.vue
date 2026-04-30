@@ -12,6 +12,7 @@ import Bar from '../../components/Bar.vue';
 import Icon from '../../components/Icon.vue';
 import Spinner from '../../components/Spinner.vue';
 import EmptyState from '../../components/EmptyState.vue';
+import Dropdown from '../../components/Dropdown.vue';
 import ChannelImportDialog from './ChannelImportDialog.vue';
 import ChannelDetailDrawer from './ChannelDetailDrawer.vue';
 import { api } from '../../lib/api';
@@ -19,6 +20,7 @@ import { toast } from '../../lib/toast';
 import { formatCompact, initials, formatRelative } from '../../lib/format';
 import { avatarColor } from '../../lib/state';
 import type { Channel } from './types';
+import type { IconName } from '../../lib/icons';
 
 const qc = useQueryClient();
 
@@ -101,6 +103,43 @@ const scrapeAllMut = useMutation({
     qc.invalidateQueries({ queryKey: ['channels'] });
   },
 });
+
+/**
+ * Re-run the scrape on a single channel. Same endpoint as the bulk button —
+ * the service flips status to `new` and clears `lastError` before queueing,
+ * so a `failed` row immediately stops looking failed in the UI on refetch.
+ */
+const rescrapeOneMut = useMutation({
+  mutationFn: (id: string) => api.post<{ ok: true }>(`/channels/${id}/scrape`, {}),
+  onSuccess: (_v, id) => {
+    const ch = channels.value.find((c) => c.id === id);
+    toast.info('Скрейп поставлен в очередь', ch ? `@${ch.handle}` : id);
+    qc.invalidateQueries({ queryKey: ['channels'] });
+  },
+  onError: (e: Error) => toast.error('Не удалось перескрейпить', e.message),
+});
+
+function rowActions(c: Channel): Array<{
+  label: string;
+  icon?: IconName;
+  onClick?: () => void;
+  variant?: 'default' | 'danger';
+  divider?: boolean;
+}> {
+  const isError = c.status === 'failed';
+  return [
+    {
+      label: 'Открыть',
+      icon: 'edit',
+      onClick: () => (selected.value = c),
+    },
+    {
+      label: isError ? 'Повторить парсинг' : 'Перескрейпить',
+      icon: 'refresh',
+      onClick: () => rescrapeOneMut.mutate(c.id),
+    },
+  ];
+}
 
 const tabsList = computed(() => [
   { id: 'all', label: 'Все', count: counts.value.all },
@@ -196,7 +235,11 @@ const tabsList = computed(() => [
           <td><Pill :state="c.status" /></td>
           <td class="muted-2 mono" style="font-size: 10.5px;">{{ formatRelative(c.createdAt) }}</td>
           <td @click.stop>
-            <button class="btn ghost icon-only sm"><Icon name="more" :size="12" /></button>
+            <Dropdown :items="rowActions(c)" align="right">
+              <button class="btn ghost icon-only sm" :title="c.lastError ?? ''">
+                <Icon name="more" :size="12" />
+              </button>
+            </Dropdown>
           </td>
         </tr>
       </tbody>
