@@ -252,6 +252,164 @@ export class SessionManager {
     let gramJsBound = false;
     let gramJsHandler: ((event: unknown) => void) | null = null;
     let gramJsBuilder: unknown = null;
+    // Long-poll bookkeeping. With unidirectional MTProxy fake-TLS the DC
+    // never push-delivers updates to us; we have to actively pull via
+    // `updates.GetDifference`. Started lazily alongside the GramJS event
+    // handler. Both paths feed `dispatchIncoming`, and the worker dedupes
+    // by tgMsgId so duplicate deliveries are harmless.
+    let pollAbort = false;
+    let pollTimer: NodeJS.Timeout | null = null;
+    const dispatchIncoming = (m: unknown): void => {
+      const msg = mapIncomingEvent({ message: m }, tgAccountId);
+      if (!msg) return;
+      for (const sub of incomingSubs) {
+        try {
+          void sub(msg);
+        } catch {
+          /* swallow — one subscriber's error must not stop others */
+        }
+      }
+    };
+
+    /**
+     * Long-poll loop — the proxy-friendly receive path. Every 3s we ask the
+     * DC "what's new since `state`?" via `updates.GetDifference`. Returns a
+     * batch of new messages we then route through dispatchIncoming, same
+     * as a push-delivered NewMessage.
+     *
+     * Implementation notes:
+     * - Bookkeeping is `pts`/`date`/`qts` (channel `pts` we ignore — only
+     *   relevant for channel updates, which we don't process).
+     * - DifferenceTooLong means the diff is too big; we just bump pts and
+     *   continue, accepting that we missed an unspecified slice (operator
+     *   would refresh the inbox).
+     * - All errors are logged and the loop keeps going. Stopped only when
+     *   the last subscriber unsubscribes.
+     */
+    const startUpdatePoll = (): void => {
+      if (pollTimer) return;
+      pollAbort = false;
+      let pts = 0;
+      let date = 0;
+      let qts = 0;
+      let initialised = false;
+      const POLL_INTERVAL_MS = 3_000;
+
+      const init = async (): Promise<void> => {
+        try {
+          const tg = await loadGramJS();
+          // The base GramJSModule type only enumerates Api ctors we use
+          // elsewhere; for the polling path we reach into Api.updates ad-hoc.
+          const ApiU = (tg.Api as unknown as {
+            updates: {
+              GetState: new () => unknown;
+              GetDifference: new (params: {
+                pts: number;
+                date: number;
+                qts: number;
+              }) => unknown;
+            };
+          }).updates;
+          const state = (await client.invoke(new ApiU.GetState())) as {
+            pts?: number;
+            date?: number;
+            qts?: number;
+          };
+          pts = state.pts ?? 0;
+          date = state.date ?? 0;
+          qts = state.qts ?? 0;
+          initialised = true;
+          console.log(
+            `[tg-client] update-poll initialised tgAccountId=${tgAccountId} pts=${pts} qts=${qts}`,
+          );
+        } catch (err) {
+          console.warn(
+            `[tg-client] update-poll init failed tgAccountId=${tgAccountId}:`,
+            (err as Error).message,
+          );
+        }
+      };
+
+      const tickOnce = async (): Promise<void> => {
+        if (!initialised) {
+          await init();
+          return;
+        }
+        try {
+          const tg = await loadGramJS();
+          const ApiU = (tg.Api as unknown as {
+            updates: {
+              GetDifference: new (params: {
+                pts: number;
+                date: number;
+                qts: number;
+              }) => unknown;
+            };
+          }).updates;
+          const diff = (await client.invoke(
+            new ApiU.GetDifference({ pts, date, qts }),
+          )) as {
+            className?: string;
+            newMessages?: unknown[];
+            otherUpdates?: unknown[];
+            state?: { pts?: number; date?: number; qts?: number };
+            intermediateState?: { pts?: number; date?: number; qts?: number };
+            pts?: number;
+            date?: number;
+          };
+          const cls = diff.className;
+          if (cls === 'updates.DifferenceEmpty') {
+            if (typeof diff.date === 'number') date = diff.date;
+            return;
+          }
+          if (cls === 'updates.Difference' || cls === 'updates.DifferenceSlice') {
+            const messages = Array.isArray(diff.newMessages) ? diff.newMessages : [];
+            if (messages.length > 0) {
+              console.log(
+                `[tg-client] update-poll tgAccountId=${tgAccountId} batch=${messages.length}`,
+              );
+            }
+            for (const m of messages) {
+              try {
+                dispatchIncoming(m);
+              } catch (err) {
+                console.warn(
+                  `[tg-client] update-poll dispatch failed:`,
+                  (err as Error).message,
+                );
+              }
+            }
+            const next = diff.intermediateState ?? diff.state;
+            if (next) {
+              if (typeof next.pts === 'number') pts = next.pts;
+              if (typeof next.date === 'number') date = next.date;
+              if (typeof next.qts === 'number') qts = next.qts;
+            }
+            return;
+          }
+          if (cls === 'updates.DifferenceTooLong') {
+            if (typeof diff.pts === 'number') pts = diff.pts;
+            return;
+          }
+        } catch (err) {
+          console.warn(
+            `[tg-client] update-poll tick failed tgAccountId=${tgAccountId}:`,
+            (err as Error).message,
+          );
+        }
+      };
+
+      const loop = async (): Promise<void> => {
+        while (!pollAbort) {
+          await tickOnce();
+          if (pollAbort) break;
+          await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+        }
+      };
+      pollTimer = setTimeout(() => {
+        void loop();
+      }, 0);
+    };
     const requireAuth = (): void => {
       if (!handle.isAuthorized) {
         throw new AppError(
@@ -557,19 +715,19 @@ export class SessionManager {
                 } catch {
                   /* never let logging break the handler */
                 }
-                const msg = mapIncomingEvent(event, tgAccountId);
-                if (!msg) return;
-                for (const sub of incomingSubs) {
-                  try {
-                    void sub(msg);
-                  } catch {
-                    /* swallow — one subscriber's error must not stop others */
-                  }
-                }
+                const e = event as { message?: unknown };
+                if (e.message) dispatchIncoming(e.message);
               };
               client.addEventHandler(gramJsHandler, gramJsBuilder);
               gramJsBound = true;
               console.log(`[tg-client] addEventHandler bound for tgAccountId=${tgAccountId}`);
+
+              // Kick off the long-poll loop. Required because some MTProxy
+              // setups (notably fake-TLS) accept our outbound MTProto
+              // requests but never push updates back — so even a perfectly
+              // bound NewMessage handler stays silent. Polling
+              // updates.GetDifference is the unidirectional-friendly path.
+              startUpdatePoll();
             } catch (err) {
               console.error(
                 `[tg-client] subscribeIncoming bind failed for tgAccountId=${tgAccountId}:`,
@@ -589,6 +747,9 @@ export class SessionManager {
             gramJsBound = false;
             gramJsHandler = null;
             gramJsBuilder = null;
+            // Last subscriber gone — stop the long-poll loop too.
+            pollAbort = true;
+            pollTimer = null;
           }
         };
       },
