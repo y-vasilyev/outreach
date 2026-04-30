@@ -220,7 +220,14 @@ export class AgentRunner {
         startedAt: started,
         error: e instanceof Error ? e.message : String(e),
       });
-      log.error({ event: 'agent.runFailed', err: (e as Error).message }, 'agent run failed');
+      log.error(
+        {
+          event: 'agent.runFailed',
+          err: (e as Error).message,
+          ...(isAppError(e) ? { code: e.code, details: e.details } : {}),
+        },
+        'agent run failed',
+      );
       if (isAppError(e)) throw e;
       throw Errors.internal(`agent ${agentName} failed`, {
         message: (e as Error).message,

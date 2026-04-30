@@ -96,6 +96,9 @@ export function parseJsonStrict<T>(text: string, parser: (v: unknown) => T): T {
   } catch (e) {
     throw Errors.upstream('LLM JSON failed validation', {
       message: (e as Error).message,
+      // First 600 chars of the response is enough to tell whether the model
+      // returned the wrong schema, hallucinated fields, etc.
+      preview: json.slice(0, 600),
     });
   }
 }
