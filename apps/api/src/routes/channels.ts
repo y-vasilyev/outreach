@@ -18,7 +18,14 @@ export async function channelsRoutes(app: FastifyInstance) {
 
   app.post('/channels/import', async (req) => {
     const body = ImportChannelsInputZ.parse(req.body);
-    return channelsService.import({ ...body, addedById: req.user.id });
+    return channelsService.import({
+      platform: body.platform,
+      handles: body.handles,
+      items: body.items,
+      platformHint: body.platform_hint,
+      source: body.source,
+      addedById: (req.user as { id: string }).id,
+    });
   });
 
   app.post('/channels/:id/scrape', async (req) => {

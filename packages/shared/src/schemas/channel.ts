@@ -48,11 +48,25 @@ export const ChannelZ = z.object({
   createdAt: z.string(),
 });
 
-export const ImportChannelsInputZ = z.object({
-  platform: PlatformZ,
-  handles: z.array(z.string().min(2)).min(1).max(2000),
-  source: z.string().default('manual'),
-});
+/**
+ * Two accepted shapes:
+ *   - { platform, handles[] } — explicit single-platform import
+ *   - { items[], platform_hint? } — mixed list, server detects platform per line
+ */
+export const ImportChannelsInputZ = z
+  .object({
+    platform: PlatformZ.optional(),
+    handles: z.array(z.string().min(2)).max(2000).optional(),
+    items: z.array(z.string().min(2)).max(2000).optional(),
+    platform_hint: PlatformZ.optional(),
+    source: z.string().default('manual'),
+  })
+  .refine(
+    (v) =>
+      (Array.isArray(v.handles) && v.handles.length > 0) ||
+      (Array.isArray(v.items) && v.items.length > 0),
+    { message: 'Provide either handles[] or items[]', path: ['items'] },
+  );
 
 export const ChannelFiltersZ = z.object({
   platform: PlatformZ.optional(),
