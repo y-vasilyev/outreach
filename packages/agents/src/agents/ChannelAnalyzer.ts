@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import type { Agent } from '../types.js';
 import { invokeJson } from './_runtime.js';
+import { LanguageCoerced, ToneCoerced } from './_coerce.js';
 
 export const channelAnalyzerInputSchema = z.object({
   platform: z.enum(['telegram', 'instagram', 'youtube']),
@@ -22,11 +23,13 @@ export const channelAnalyzerInputSchema = z.object({
 });
 
 export const channelAnalyzerOutputSchema = z.object({
-  language: z.enum(['ru', 'en', 'other']),
+  // Coerce free-form values like "русский" / "English" → enum tokens.
+  language: LanguageCoerced,
   topic: z.string(),
   audience: z.string(),
   format: z.string(),
-  tone: z.enum(['formal', 'casual', 'edgy', 'neutral']),
+  // Coerce phrases like "неформальный, личный" → 'casual'.
+  tone: ToneCoerced,
   owner_signals: z.object({
     is_personal_brand: z.boolean(),
     owner_hint: z.string().optional(),

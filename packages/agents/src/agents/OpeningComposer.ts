@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import type { Agent } from '../types.js';
 import { invokeJson } from './_runtime.js';
+import { LengthCoerced, RiskScoreCoerced } from './_coerce.js';
 
 export const openingComposerInputSchema = z.object({
   channel_analysis: z.record(z.unknown()),
@@ -20,8 +21,10 @@ export const openingComposerOutputSchema = z.object({
       z.object({
         text: z.string().max(600, 'opening text must be ≤600 chars'),
         rationale: z.string(),
-        length: z.enum(['short', 'medium', 'long']),
-        risk_score: z.number().min(0).max(1),
+        // Coerce raw character counts → bucket; 'short'/'medium'/'long' pass through.
+        length: LengthCoerced,
+        // Coerce 0..100 percentages → 0..1; clamp out-of-range numbers.
+        risk_score: RiskScoreCoerced,
       }),
     )
     .min(1)

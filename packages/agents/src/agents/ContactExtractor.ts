@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import type { Agent } from '../types.js';
 import { invokeJson, readParams } from './_runtime.js';
+import { ConfidenceCoerced } from './_coerce.js';
 
 export const contactCandidateSchema = z.object({
   type: z.enum(['tg_username', 'tg_link', 'email', 'phone', 'website', 'other']),
@@ -32,7 +33,8 @@ export const extractedContactSchema = z.object({
   raw_value: z.string(),
   role_guess: z.enum(['owner', 'ad_manager', 'generic', 'bot', 'unknown']),
   label: z.string().optional(),
-  confidence: z.number().min(0).max(1),
+  // Coerce qualitative LLM outputs ("medium"/"high"/"низкая") → 0..1.
+  confidence: ConfidenceCoerced,
   rationale: z.string(),
 });
 
