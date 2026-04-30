@@ -478,6 +478,10 @@ export class SessionManager {
           // Lazy bind: only register the GramJS event handler when there's
           // at least one subscriber. Filtering to incoming private messages
           // keeps the volume low (no channel updates, no outgoing).
+          //
+          // We use console.* directly here because SessionManager doesn't
+          // own the parent app's logger — diagnostic visibility matters
+          // more than log shape during the bring-up of the listener path.
           void (async () => {
             try {
               const events = (await import(
@@ -487,6 +491,27 @@ export class SessionManager {
               };
               gramJsBuilder = new events.NewMessage({ incoming: true, outgoing: false });
               gramJsHandler = (event: unknown) => {
+                // Trace EVERY delivery so we can tell sync filtering
+                // (private/outgoing/text) apart from "GramJS never fired".
+                try {
+                  const e = event as {
+                    message?: {
+                      out?: boolean;
+                      isPrivate?: boolean;
+                      peerId?: { className?: string };
+                      message?: string;
+                    };
+                  };
+                  const m = e.message;
+                  console.log(
+                    `[tg-client] gramjs newmessage tgAccountId=${tgAccountId} ` +
+                      `out=${m?.out === true} isPrivate=${m?.isPrivate === true} ` +
+                      `peer=${m?.peerId?.className ?? '?'} ` +
+                      `textLen=${typeof m?.message === 'string' ? m.message.length : 0}`,
+                  );
+                } catch {
+                  /* never let logging break the handler */
+                }
                 const msg = mapIncomingEvent(event, tgAccountId);
                 if (!msg) return;
                 for (const sub of incomingSubs) {
@@ -499,9 +524,12 @@ export class SessionManager {
               };
               client.addEventHandler(gramJsHandler, gramJsBuilder);
               gramJsBound = true;
-            } catch {
-              // Listener bind failed — leave subs registered; nothing fires.
-              // Caller can retry by re-subscribing later.
+              console.log(`[tg-client] addEventHandler bound for tgAccountId=${tgAccountId}`);
+            } catch (err) {
+              console.error(
+                `[tg-client] subscribeIncoming bind failed for tgAccountId=${tgAccountId}:`,
+                err,
+              );
             }
           })();
         }
