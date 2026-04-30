@@ -395,9 +395,16 @@ export class SessionManager {
           }
           if (cls === 'updates.Difference' || cls === 'updates.DifferenceSlice') {
             const messages = Array.isArray(diff.newMessages) ? diff.newMessages : [];
-            if (messages.length > 0) {
+            const others = Array.isArray((diff as { otherUpdates?: unknown[] }).otherUpdates)
+              ? ((diff as { otherUpdates: unknown[] }).otherUpdates)
+              : [];
+            if (messages.length > 0 || others.length > 0) {
+              const otherTypes = others
+                .map((u) => (u as { className?: string })?.className ?? '?')
+                .join(',');
               console.log(
-                `[tg-client] update-poll tgAccountId=${tgAccountId} batch=${messages.length}`,
+                `[tg-client] update-poll tgAccountId=${tgAccountId} batch=${messages.length}` +
+                  (others.length > 0 ? ` other=${others.length}[${otherTypes}]` : ''),
               );
             }
             for (const m of messages) {
@@ -406,6 +413,19 @@ export class SessionManager {
               } catch (err) {
                 console.warn(
                   `[tg-client] update-poll dispatch failed:`,
+                  (err as Error).message,
+                );
+              }
+            }
+            // Some 1-1 inbound messages arrive via otherUpdates as
+            // UpdateNewMessage / UpdateShortMessage. Convert + dispatch.
+            for (const u of others) {
+              try {
+                const inner = extractMessageFromUpdate(u);
+                if (inner) dispatchIncoming(inner);
+              } catch (err) {
+                console.warn(
+                  `[tg-client] update-poll otherUpdate dispatch failed:`,
                   (err as Error).message,
                 );
               }
@@ -807,6 +827,66 @@ interface SenderEntity {
   username?: string;
   firstName?: string;
   lastName?: string;
+}
+
+/**
+ * GetDifference returns most messages in `newMessages`, but private 1-1
+ * inbound chats sometimes arrive as `UpdateShortMessage` /
+ * `UpdateShortChatMessage` / `UpdateNewMessage` in `otherUpdates`. Pull a
+ * Message-shaped object out so the same dispatch path handles them.
+ *
+ * UpdateShortMessage is the slim form: it has `userId` (the OTHER party in
+ * a private chat), `out` (true if we sent it), `message`, `id`, `date`. We
+ * synthesise `peerId.userId = userId`, and for `out=false` we set
+ * `senderId = userId` so mapIncomingEvent finds the sender. For `out=true`
+ * we leave senderId empty — mapIncomingEvent will still skip via the
+ * `m.out === true` check.
+ */
+function extractMessageFromUpdate(u: unknown): Record<string, unknown> | null {
+  const upd = u as {
+    className?: string;
+    message?: unknown;
+    userId?: { toString?(): string } | string | number | null;
+    fromId?: { userId?: { toString?(): string } } | null;
+    out?: boolean;
+    id?: number | { toString(): string };
+    date?: number;
+  };
+  const cls = upd.className;
+  if (cls === 'UpdateNewMessage' || cls === 'UpdateNewChannelMessage') {
+    // `message` here is the inner Message object — return it directly.
+    return upd.message && typeof upd.message === 'object'
+      ? (upd.message as Record<string, unknown>)
+      : null;
+  }
+  if (cls === 'UpdateShortMessage') {
+    // Slim 1-1 private inbound. Synthesise enough fields for mapIncomingEvent.
+    const otherId =
+      typeof upd.userId === 'object' && upd.userId !== null
+        ? (upd.userId as { toString?(): string }).toString?.()
+        : typeof upd.userId === 'string' || typeof upd.userId === 'number'
+          ? String(upd.userId)
+          : undefined;
+    if (!otherId) return null;
+    const out = upd.out === true;
+    return {
+      out,
+      message: upd.message,
+      id: upd.id,
+      date: upd.date,
+      peerId: { className: 'PeerUser', userId: { toString: () => otherId } },
+      // For inbound the sender IS the other user. For outbound we leave
+      // empty; mapIncomingEvent's `out` check filters that case anyway.
+      ...(out
+        ? {}
+        : {
+            senderId: { toString: () => otherId },
+            fromId: { className: 'PeerUser', userId: { toString: () => otherId } },
+          }),
+      isPrivate: true,
+    };
+  }
+  return null;
 }
 
 function mapIncomingEvent(event: unknown, tgAccountId: string): IncomingMessage | null {
