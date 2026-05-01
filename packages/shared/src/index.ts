@@ -4,3 +4,4 @@ export * from './types/index.js';
 export * from './redact.js';
 export * from './realtime.js';
 export * from './flags.js';
+export * from './scheduling.js';

@@ -30,18 +30,54 @@ const { data: campaigns, isLoading } = useQuery({
 
 const list = computed<Campaign[]>(() => campaigns.value ?? []);
 
+type AddContactsResponse = {
+  added: number;
+  requested: number;
+  chatsCreated: number;
+  blocker:
+    | 'campaign_not_running'
+    | 'no_accounts'
+    | 'outside_schedule'
+    | 'no_active_accounts'
+    | null;
+};
+
+const BLOCKER_HINT: Record<NonNullable<AddContactsResponse['blocker']>, string> = {
+  campaign_not_running: 'Кампания не в статусе running — запустите её, чтобы начались отправки.',
+  no_accounts: 'В кампании нет TG-аккаунтов — добавьте в настройках кампании.',
+  outside_schedule: 'Сейчас вне расписания кампании. Чаты создадутся в окно работы.',
+  no_active_accounts: 'Все TG-аккаунты в cooldown / need_auth. Проверьте на странице аккаунтов.',
+};
+
 const mut = useMutation({
   mutationFn: () =>
-    api.post<{ added: number; requested: number }>(
+    api.post<AddContactsResponse>(
       `/campaigns/${selectedId.value}/contacts`,
       { contactIds: props.contactIds },
     ),
   onSuccess: (r) => {
     const skipped = r.requested - r.added;
-    toast.success(
-      'Контакты добавлены в кампанию',
-      skipped > 0 ? `${r.added} новых, ${skipped} уже были в кампании` : `${r.added} контактов`,
-    );
+    if (r.blocker) {
+      // Tagging worked but dispatch is blocked — operator needs to fix.
+      toast.warning(
+        `Контакты добавлены: ${r.added}${skipped > 0 ? ` (${skipped} уже были)` : ''}`,
+        BLOCKER_HINT[r.blocker],
+      );
+    } else if (r.chatsCreated > 0) {
+      toast.success(
+        `Создано чатов: ${r.chatsCreated}`,
+        'Опенинги генерируются — увидите их в /inbox через несколько секунд.',
+      );
+    } else {
+      // Tagged but no new chats — usually means everyone already had a
+      // chat in this campaign (re-add).
+      toast.info(
+        'Контакты уже в кампании',
+        skipped > 0
+          ? `${r.added} новых тегов, ${skipped} уже были; чатов не создано (уже есть)`
+          : 'Чатов не создано (контакты уже в кампании или не TG-достижимы).',
+      );
+    }
     emit('done');
   },
   onError: (e: Error) => toast.error('Не удалось добавить', e.message),

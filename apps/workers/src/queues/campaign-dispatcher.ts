@@ -1,5 +1,6 @@
 import type { Prisma } from '@nosquare/db';
 import { getPrisma } from '@nosquare/db';
+import { type CampaignSchedule, isWithinSchedule } from '@nosquare/shared';
 import { getRunner } from '../services/runner.js';
 import { logger } from '../logger.js';
 import { tryAutoApprove } from '../services/auto-approve.js';
@@ -13,15 +14,11 @@ interface SafetyOut {
   risk_score: number;
 }
 
-interface CampaignSchedule {
-  tz?: string;
-  workHours?: { start?: string; end?: string };
-  /** ISO weekday numbers; 0=Sun..6=Sat to match `Date.getDay()`. */
-  days?: number[];
-  maxPerDayPerAccount?: number;
-}
-
-const DISPATCH_INTERVAL_MS = 30_000;
+// Tick every 10s (was 30) so a campaign that gets a fresh batch of
+// contacts via "В кампанию" reaches the operator within a minute even
+// for sizeable batches. Each tick still takes only `take` contacts so
+// the per-tick load stays bounded.
+const DISPATCH_INTERVAL_MS = 10_000;
 
 /**
  * Lightweight campaign dispatcher: every N seconds picks up to K qualified
@@ -102,7 +99,10 @@ export function startCampaignDispatcher() {
         const candidates = await prisma.contact.findMany({
           where,
           include: { channel: true },
-          take: 5,
+          // Higher take so a "В кампанию" of 50–100 contacts isn't paced
+          // out at 5/tick (= many minutes); each conversation still gets
+          // its own opener LLM call so this throttles itself naturally.
+          take: 25,
           orderBy: { confidence: 'desc' },
         });
 
@@ -255,47 +255,4 @@ export function startCampaignDispatcher() {
       clearInterval(handle);
     },
   };
-}
-
-/**
- * Returns true when the current wall-clock time falls inside `schedule.days`
- * AND `schedule.workHours`, both interpreted in `schedule.tz`.
- *
- * Missing fields = "no constraint": an empty schedule means "always on"
- * (preserves the prior behaviour for unscheduled campaigns). Time strings
- * must be `HH:MM` 24-hour format.
- *
- * Time-zone resolution uses `Intl.DateTimeFormat` with a numeric hour/minute
- * formatter — no third-party tz library needed.
- */
-function isWithinSchedule(s: CampaignSchedule): boolean {
-  const tz = s.tz || 'UTC';
-  const now = new Date();
-
-  if (Array.isArray(s.days) && s.days.length > 0) {
-    const dayName = new Intl.DateTimeFormat('en-US', {
-      weekday: 'short',
-      timeZone: tz,
-    }).format(now);
-    const map: Record<string, number> = {
-      Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
-    };
-    const wd = map[dayName] ?? -1;
-    if (!s.days.includes(wd)) return false;
-  }
-
-  if (s.workHours?.start && s.workHours.end) {
-    const fmt = new Intl.DateTimeFormat('en-GB', {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-      timeZone: tz,
-    });
-    const parts = fmt.formatToParts(now);
-    const h = parts.find((p) => p.type === 'hour')?.value ?? '00';
-    const m = parts.find((p) => p.type === 'minute')?.value ?? '00';
-    const cur = `${h}:${m}`;
-    if (cur < s.workHours.start || cur >= s.workHours.end) return false;
-  }
-  return true;
 }

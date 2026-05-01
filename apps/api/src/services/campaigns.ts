@@ -1,7 +1,9 @@
 import { getPrisma } from '@nosquare/db';
-import { Errors } from '@nosquare/shared';
+import { Errors, type CampaignSchedule, isWithinSchedule } from '@nosquare/shared';
 import type { z } from 'zod';
 import type { CreateCampaignInputZ } from '@nosquare/shared';
+
+import { getQueues } from '../queues.js';
 
 type CreateInput = z.infer<typeof CreateCampaignInputZ>;
 
@@ -149,11 +151,24 @@ export const campaignsService = {
   },
 
   /**
-   * Add a fixed set of contacts to a campaign by tagging them with the
-   * campaign-specific tag (`cmp:<campaignId>`) and ensuring the campaign's
-   * `targetFilter.tags` includes that tag — so the worker picks them up at
-   * run-time without us having to pre-create conversations (which would
-   * require choosing a `tgAccount` here, a campaign concern).
+   * Add a fixed set of contacts to a campaign and create conversations
+   * immediately so the operator sees the chats appear in /inbox right
+   * away, with the opener generation kicked off in the background.
+   *
+   * Three-step flow:
+   *   1. Tag contacts with `cmp:<campaignId>` (preserves the bridge to
+   *      the autonomous dispatcher's tags filter).
+   *   2. Pre-flight: detect the most common reasons we *can't* dispatch
+   *      now (campaign not running, no accounts, outside schedule) and
+   *      surface them in the response so the UI can show a clear
+   *      blocker instead of "ничего не появляется".
+   *   3. If unblocked: round-robin contacts across the campaign's
+   *      outreach pool, upsert conversations, enqueue
+   *      `outreach_first_message` jobs. The worker generates the opener
+   *      and posts suggestions to the conversation.
+   *
+   * The dispatcher tick still runs as a backstop and picks up anything
+   * we couldn't create here (e.g. accounts went online after add).
    */
   async addContacts(id: string, contactIds: string[]) {
     const prisma = getPrisma();
@@ -163,7 +178,7 @@ export const campaignsService = {
 
     const contacts = await prisma.contact.findMany({
       where: { id: { in: contactIds } },
-      select: { id: true, tags: true },
+      select: { id: true, tags: true, reachability: true },
     });
 
     let added = 0;
@@ -187,7 +202,62 @@ export const campaignsService = {
       }
     });
 
-    return { added, requested: contactIds.length };
+    // Pre-flight diagnostics for immediate dispatch.
+    let blocker: 'campaign_not_running' | 'no_accounts' | 'outside_schedule' | 'no_active_accounts' | null = null;
+    if (c.status !== 'running') blocker = 'campaign_not_running';
+    else if (!c.outreachAccountPool || c.outreachAccountPool.length === 0) blocker = 'no_accounts';
+    else if (!isWithinSchedule((c.schedule ?? {}) as CampaignSchedule)) blocker = 'outside_schedule';
+
+    let chatsCreated = 0;
+    if (!blocker) {
+      const accounts = await prisma.tgAccount.findMany({
+        where: { id: { in: c.outreachAccountPool }, status: 'active' },
+        orderBy: { sentTodayMsg: 'asc' },
+      });
+      if (accounts.length === 0) {
+        blocker = 'no_active_accounts';
+      } else {
+        // Only TG-reachable contacts get a chat now; manual/email/etc.
+        // stay tagged for the operator's manual outreach flow.
+        const reachable = await prisma.contact.findMany({
+          where: { id: { in: contactIds }, reachability: 'reachable_tg' },
+          include: { conversations: { where: { campaignId: id }, select: { id: true } } },
+        });
+
+        const queues = getQueues();
+        let i = 0;
+        for (const ct of reachable) {
+          if (ct.conversations.length > 0) continue;
+          const acct = accounts[i % accounts.length]!;
+          i += 1;
+          const conv = await prisma.conversation.upsert({
+            where: { tgAccountId_contactId: { tgAccountId: acct.id, contactId: ct.id } },
+            update: { campaignId: id, mode: c.defaultMode },
+            create: {
+              tgAccountId: acct.id,
+              contactId: ct.id,
+              campaignId: id,
+              status: 'active',
+              mode: c.defaultMode,
+            },
+          });
+          await queues.agentRun.add('outreach_first_message', {
+            pipeline: 'outreach_first_message',
+            conversationId: conv.id,
+            campaignId: id,
+            contactId: ct.id,
+          });
+          chatsCreated += 1;
+        }
+      }
+    }
+
+    return {
+      added,
+      requested: contactIds.length,
+      chatsCreated,
+      blocker,
+    };
   },
 
   /**
