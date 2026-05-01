@@ -63,22 +63,40 @@ export function startCampaignDispatcher() {
           tags?: string[];
         };
 
+        // The campaign-specific tag stamped by `addContacts` whenever an
+        // operator explicitly drops contacts into this campaign.
+        const manualTag = `cmp:${c.id}`;
+        const otherTags = (filter.tags ?? []).filter((t) => t !== manualTag);
+
+        // Two acceptance branches OR'd together:
+        //   manual: operator-tagged contacts skip status/roleGuess/
+        //     minConfidence — explicit selection wins. Otherwise an
+        //     operator who picks an `unknown`-role contact would never
+        //     get a chat ("очевидно что хочу написать").
+        //   auto:   the existing autonomous discovery filter.
+        // Physical reachability (`reachable_tg`), platform restriction
+        // and "no existing convo for this campaign" apply to BOTH.
         const where: Prisma.ContactWhereInput = {
-          status: 'qualified',
           reachability: 'reachable_tg',
-          ...(filter.roleGuess && filter.roleGuess.length > 0
-            ? { roleGuess: { in: filter.roleGuess as never[] } }
-            : {}),
-          ...(filter.minConfidence
-            ? { confidence: { gte: filter.minConfidence } }
-            : {}),
           ...(filter.platforms && filter.platforms.length > 0
             ? { channel: { platform: { in: filter.platforms as never[] } } }
             : {}),
-          ...(filter.tags && filter.tags.length > 0
-            ? { tags: { hasSome: filter.tags } }
-            : {}),
           conversations: { none: { campaignId: c.id } },
+          OR: [
+            { tags: { has: manualTag } },
+            {
+              AND: [
+                { status: 'qualified' as const },
+                ...(filter.roleGuess && filter.roleGuess.length > 0
+                  ? [{ roleGuess: { in: filter.roleGuess as never[] } }]
+                  : []),
+                ...(filter.minConfidence != null
+                  ? [{ confidence: { gte: filter.minConfidence } }]
+                  : []),
+                ...(otherTags.length > 0 ? [{ tags: { hasSome: otherTags } }] : []),
+              ],
+            },
+          ],
         };
 
         const candidates = await prisma.contact.findMany({

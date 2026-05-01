@@ -58,6 +58,20 @@ export const ContactFiltersZ = z.object({
     .union([z.boolean(), z.enum(['true', 'false'])])
     .transform((v) => (typeof v === 'boolean' ? v : v === 'true'))
     .optional(),
+  /**
+   * Page size. Default 1000 — operators routinely need to "select all"
+   * across hundreds of contacts and feed them into a campaign; a low cap
+   * silently breaks that workflow ("select all → only 200 ended up in the
+   * batch"). Hard ceiling 5000 to keep the response payload sane.
+   */
+  limit: z
+    .union([z.number(), z.string()])
+    .transform((v) => {
+      const n = typeof v === 'number' ? v : Number(v);
+      if (!Number.isFinite(n)) return undefined;
+      return Math.min(5000, Math.max(1, Math.floor(n)));
+    })
+    .optional(),
 });
 
 /**

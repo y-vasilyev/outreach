@@ -118,7 +118,10 @@ export const contactsService = {
         channel: { select: { id: true, handle: true, platform: true, title: true } },
       },
       orderBy: { createdAt: 'desc' },
-      take: filters.limit ?? 200,
+      // Default 1000 (was 200) so the contacts page can "select all" across
+      // a typical operator workload without silently truncating. Schema
+      // enforces a 5000 hard ceiling.
+      take: filters.limit ?? 1000,
     });
     // Prisma serialises `Decimal` columns as strings on the wire. Wire
     // contract (and the UI) expects a number (0..1).

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watchEffect } from 'vue';
 import { useQuery, useQueryClient } from '@tanstack/vue-query';
 import PageHead from '../../components/PageHead.vue';
 import Tabs from '../../components/Tabs.vue';
@@ -265,12 +265,30 @@ const allFilteredSelected = computed(
   () => filtered.value.length > 0 && filtered.value.every((c) => selectedIds.value.has(c.id)),
 );
 
+const someFilteredSelected = computed(
+  () => filtered.value.some((c) => selectedIds.value.has(c.id)) && !allFilteredSelected.value,
+);
+
+// Indeterminate is a property, not an attribute — Vue's `:checked` /
+// `:indeterminate` bindings work via DOM property setters, but only when
+// the checkbox actually has the binding. Older browsers + some Vue
+// minor versions occasionally drop the property between re-renders, so
+// we set it imperatively via a watchEffect to be bulletproof.
+const masterCheckbox = ref<HTMLInputElement | null>(null);
+watchEffect(() => {
+  if (masterCheckbox.value) {
+    masterCheckbox.value.indeterminate = someFilteredSelected.value;
+  }
+});
+
 function toggleAll(): void {
   if (allFilteredSelected.value) {
+    // Currently all selected — clicking unselects.
     const next = new Set(selectedIds.value);
     for (const c of filtered.value) next.delete(c.id);
     selectedIds.value = next;
   } else {
+    // None or some selected — clicking selects everything filtered.
     const next = new Set(selectedIds.value);
     for (const c of filtered.value) next.add(c.id);
     selectedIds.value = next;
@@ -355,7 +373,13 @@ function exportCsv(): void {
       <thead>
         <tr>
           <th style="width: 28px;">
-            <input type="checkbox" :checked="allFilteredSelected" @change="toggleAll" />
+            <input
+              ref="masterCheckbox"
+              type="checkbox"
+              :checked="allFilteredSelected"
+              :title="allFilteredSelected ? 'Снять выделение' : `Выделить все (${filtered.length})`"
+              @change="toggleAll"
+            />
           </th>
           <th>Контакт</th>
           <th>Тип</th>
