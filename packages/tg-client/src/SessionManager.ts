@@ -1150,8 +1150,51 @@ function mapMessage(m: Record<string, unknown>): RecentPost {
 }
 
 /**
+ * Telegram error names that mean "this specific peer is unreachable" — the
+ * SESSION is fine, but the message can't be delivered to this contact and
+ * never will be. The send worker translates these into a permanent failure
+ * (no BullMQ retry) and marks the contact as `unreachable`.
+ *
+ * Importantly: USER_DEACTIVATED ≠ INPUT_USER_DEACTIVATED.
+ *   - USER_DEACTIVATED → OUR account was deactivated (session-dead).
+ *   - INPUT_USER_DEACTIVATED → the recipient deleted their TG account.
+ * Only the former should kill the session.
+ */
+const PEER_PERMANENT_RE =
+  /^(?:CHAT_WRITE_FORBIDDEN|USER_PRIVACY_RESTRICTED|USER_IS_BLOCKED|YOU_BLOCKED_USER|USER_BANNED_IN_CHANNEL|USER_BANNED_IN_GROUP|INPUT_USER_DEACTIVATED|PEER_ID_INVALID|USER_NOT_MUTUAL_CONTACT|USER_INVALID|USERNAME_INVALID|USERNAME_NOT_OCCUPIED)\b/i;
+
+/** Errors that prove the SESSION itself is dead (re-auth required). */
+const SESSION_DEAD_RE =
+  /\b(?:AUTH_KEY_UNREGISTERED|AUTH_KEY_INVALID|SESSION_REVOKED|SESSION_EXPIRED|USER_DEACTIVATED_BAN|USER_DEACTIVATED|AUTH_KEY_DUPLICATED)\b/i;
+
+/**
+ * Classify a TG error message. Exported so tg-send can check
+ * `classifyTgError(err) === 'peer_permanent'` without reaching into
+ * AppError details.
+ */
+export function classifyTgError(
+  err: unknown,
+): 'flood' | 'session_dead' | 'peer_permanent' | 'transient' {
+  const e = err as { message?: string; errorMessage?: string };
+  const msg = e?.message ?? e?.errorMessage ?? '';
+  if (extractFloodSeconds(err as Parameters<typeof extractFloodSeconds>[0]) !== null) {
+    return 'flood';
+  }
+  if (PEER_PERMANENT_RE.test(msg)) return 'peer_permanent';
+  if (SESSION_DEAD_RE.test(msg)) return 'session_dead';
+  return 'transient';
+}
+
+/**
  * Maps a thrown GramJS error into a typed AppError, updating durable
  * account state on the way out.
+ *
+ * Crucially, peer-level 403s like `CHAT_WRITE_FORBIDDEN` (recipient
+ * blocked us / privacy-restricted / deactivated) MUST NOT mark the
+ * account as `need_auth` — the session is fine, just this conversation
+ * is undeliverable. They surface as `TG_PEER_FORBIDDEN` so the sender
+ * worker can degrade the contact + conversation without killing the
+ * whole TG account.
  */
 function mapTgError(
   err: unknown,
@@ -1179,19 +1222,27 @@ function mapTgError(
     return new AppError('RATE_LIMITED', `FloodWait ${floodSeconds}s`, 429);
   }
 
-  // 401/403 — session is dead.
-  if (e?.code === 401 || e?.code === 403) {
+  // Peer-permanent: the SESSION is fine, the SPECIFIC peer can't be
+  // messaged (blocked / privacy / deactivated / bad username / etc.).
+  // Do NOT touch account status here — that's exactly the bug we had
+  // before, where one blocked recipient nuked the whole account.
+  if (typeof msg === 'string' && PEER_PERMANENT_RE.test(msg)) {
+    return new AppError('TG_PEER_FORBIDDEN', `TG: ${msg}`, 403);
+  }
+
+  // Real session-dead errors (AUTH_KEY_*, SESSION_REVOKED, our account
+  // deactivated). These DO require re-auth.
+  if (typeof msg === 'string' && SESSION_DEAD_RE.test(msg)) {
     void loader.markStatus(tgAccountId, 'need_auth').catch(() => {
       /* ignore */
     });
     return new AppError('UNAUTHORIZED', `TG: ${msg}`, 401);
   }
 
-  // AUTH_KEY_UNREGISTERED / SESSION_REVOKED / USER_DEACTIVATED
-  if (
-    typeof msg === 'string' &&
-    /AUTH_KEY|SESSION_REVOKED|USER_DEACTIVATED/i.test(msg)
-  ) {
+  // 401 from MTProto without a known message pattern — treat as session
+  // dead (conservative). 403 alone is no longer enough — the
+  // peer-permanent check above already caught the legit per-peer cases.
+  if (e?.code === 401) {
     void loader.markStatus(tgAccountId, 'need_auth').catch(() => {
       /* ignore */
     });
