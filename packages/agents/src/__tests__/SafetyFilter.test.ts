@@ -83,4 +83,21 @@ describe('safety_filter — hard policy guards', () => {
     expect(out.risk_score).toBeGreaterThanOrEqual(0);
     expect(out.risk_score).toBeLessThanOrEqual(1);
   });
+
+  // Regression: LLM emits `null` for optional fields. The runtime strips
+  // null → undefined before zod validation so optional() works.
+  it('accepts rewrite_hint: null on the LLM side', async () => {
+    const llm = makeLLM({
+      completeJsonImpl: () => ({
+        allow: true,
+        reasons: [],
+        rewrite_hint: null,
+        risk_score: 0,
+      }),
+    });
+    const ctx = makeCtx({ llm, config: makeConfig({}) });
+    const out = await safetyFilter.run({ draft: 'обычный текст' }, ctx);
+    expect(out.allow).toBe(true);
+    expect(out.rewrite_hint).toBeUndefined();
+  });
 });

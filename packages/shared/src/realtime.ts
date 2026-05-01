@@ -78,6 +78,22 @@ export interface OperatorAssignmentEvent {
 }
 
 /**
+ * Emitted when an agent in a conversation pipeline fails and the runtime
+ * degrades the conversation into `assisted` mode (per CLAUDE.md "Не ронять
+ * оператору диалог"). The UI uses this to show a banner with the agent
+ * name and reason so the operator knows why suggestions are missing.
+ */
+export interface AgentFailedEvent {
+  type: 'agent.failed';
+  conversationId: string;
+  agentName: string;
+  /** Error code from AppError when known (LLM_SCHEMA_FAILED, LLM_TRANSIENT, …). */
+  code?: string;
+  /** Short, operator-readable reason. */
+  reason: string;
+}
+
+/**
  * Emitted when a suggestion is approved (manually by the operator OR
  * automatically by `tryAutoApprove` in auto-mode conversations). The UI
  * uses it to flip the suggestion's row from `pending` to `approved`
@@ -100,4 +116,5 @@ export type RealtimeEvent =
   | ChannelProgressEvent
   | CampaignTickEvent
   | DashboardEvent
-  | OperatorAssignmentEvent;
+  | OperatorAssignmentEvent
+  | AgentFailedEvent;

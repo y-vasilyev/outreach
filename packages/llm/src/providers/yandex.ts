@@ -98,14 +98,14 @@ export class YandexProvider implements LLMProvider {
         signal: req.abortSignal,
       });
     } catch (e) {
-      throw Errors.upstream('yandex: network error', {
+      throw Errors.llmTransient('yandex: network error', {
         message: (e as Error).message,
       });
     }
 
     if (!res.ok) {
       const errText = await safeReadText(res);
-      throw Errors.upstream(`yandex: HTTP ${res.status}`, {
+      throw Errors.llmTransient(`yandex: HTTP ${res.status}`, {
         status: res.status,
         body: errText.slice(0, 500),
       });
@@ -115,7 +115,7 @@ export class YandexProvider implements LLMProvider {
     try {
       json = (await res.json()) as YandexResponse;
     } catch (e) {
-      throw Errors.upstream('yandex: invalid JSON response', {
+      throw Errors.llmTransient('yandex: invalid JSON response', {
         message: (e as Error).message,
       });
     }
@@ -123,7 +123,7 @@ export class YandexProvider implements LLMProvider {
     const alt = json.result?.alternatives?.[0];
     const text = alt?.message?.text;
     if (typeof text !== 'string') {
-      throw Errors.upstream('yandex: missing alternatives[0].message.text', {
+      throw Errors.llmTransient('yandex: missing alternatives[0].message.text', {
         modelVersion: json.result?.modelVersion,
       });
     }

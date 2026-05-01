@@ -135,14 +135,14 @@ export async function doOpenAICompatCall(
       ...(fetchProxyOpts(cfg.proxyUrl) as RequestInit),
     });
   } catch (e) {
-    throw Errors.upstream(`${opts.model}: network error`, {
+    throw Errors.llmTransient(`${opts.model}: network error`, {
       message: (e as Error).message,
     });
   }
 
   if (!res.ok) {
     const errText = await safeReadText(res);
-    throw Errors.upstream(`${opts.model}: HTTP ${res.status}`, {
+    throw Errors.llmTransient(`${opts.model}: HTTP ${res.status}`, {
       status: res.status,
       body: errText.slice(0, 500),
     });
@@ -152,14 +152,14 @@ export async function doOpenAICompatCall(
   try {
     json = (await res.json()) as OpenAIResponse;
   } catch (e) {
-    throw Errors.upstream(`${opts.model}: invalid JSON response`, {
+    throw Errors.llmTransient(`${opts.model}: invalid JSON response`, {
       message: (e as Error).message,
     });
   }
 
   const text = json.choices?.[0]?.message?.content;
   if (typeof text !== 'string') {
-    throw Errors.upstream(`${opts.model}: missing choices[0].message.content`);
+    throw Errors.llmTransient(`${opts.model}: missing choices[0].message.content`);
   }
 
   const usage = json.usage ?? {};

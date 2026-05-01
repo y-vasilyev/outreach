@@ -80,24 +80,55 @@ async function main() {
     orderBy: { createdAt: 'asc' },
   });
 
+  // Versioned upsert for agent configs:
+  //   - new record  → insert with seed.version
+  //   - existing AND db.version < seed.version → overwrite prompts + bump
+  //   - existing AND db.version >= seed.version → leave alone (operator
+  //     has likely edited via UI; UI bumps the version on save).
+  // We never touch `enabled` (operator-controlled) or `endpointId` (set
+  // once at create; rebinding is a separate operation).
   for (const seed of defaultAgentSeeds) {
-    await prisma.agentConfig.upsert({
+    const existing = await prisma.agentConfig.findUnique({
       where: { name: seed.name },
-      update: {},
-      create: {
-        name: seed.name,
-        role: seed.role,
-        description: seed.description,
-        endpointId: defaultEndpoint?.id ?? null,
-        model: seed.model,
-        systemPrompt: seed.systemPrompt,
-        userPromptTemplate: seed.userPromptTemplate,
-        params: seed.params as object,
-        enabled: true,
-        version: 1,
-      },
+      select: { version: true },
     });
-    console.log(`✓ agent_config: ${seed.name}`);
+    if (!existing) {
+      await prisma.agentConfig.create({
+        data: {
+          name: seed.name,
+          role: seed.role,
+          description: seed.description,
+          endpointId: defaultEndpoint?.id ?? null,
+          model: seed.model,
+          systemPrompt: seed.systemPrompt,
+          userPromptTemplate: seed.userPromptTemplate,
+          params: seed.params as object,
+          enabled: true,
+          version: seed.version,
+        },
+      });
+      console.log(`✓ agent_config: ${seed.name} (created v${seed.version})`);
+    } else if (existing.version < seed.version) {
+      await prisma.agentConfig.update({
+        where: { name: seed.name },
+        data: {
+          role: seed.role,
+          description: seed.description,
+          model: seed.model,
+          systemPrompt: seed.systemPrompt,
+          userPromptTemplate: seed.userPromptTemplate,
+          params: seed.params as object,
+          version: seed.version,
+        },
+      });
+      console.log(
+        `✓ agent_config: ${seed.name} (upgraded v${existing.version} → v${seed.version})`,
+      );
+    } else {
+      console.log(
+        `· agent_config: ${seed.name} (kept v${existing.version}, seed v${seed.version})`,
+      );
+    }
   }
 
   console.log('\nSeed complete.');

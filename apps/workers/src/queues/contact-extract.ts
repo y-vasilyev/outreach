@@ -2,7 +2,7 @@ import { Worker } from 'bullmq';
 import { getRedis } from '../redis.js';
 import { ContactExtractJobZ, QueueNames } from '@nosquare/shared';
 import { getPrisma } from '@nosquare/db';
-import { runRegexCandidates } from '@nosquare/agents';
+import { runRegexCandidates, inferDenyReason } from '@nosquare/agents';
 import { getRunner } from '../services/runner.js';
 import { logger } from '../logger.js';
 import { publishRealtime } from '../services/realtime-emit.js';
@@ -103,9 +103,29 @@ export function startContactExtractWorker() {
         logger.warn({ channelId, err: (e as Error).message }, 'channel_analyzer failed; continuing');
       }
 
-      // 2. Regex pre-candidates
+      // 2. Regex pre-candidates with deterministic role/deny annotations.
       const text = [ch.description ?? '', postsText, ...(ch.links ?? [])].join('\n');
-      const candidates = runRegexCandidates(text);
+      const channelHandle = ch.handle.replace(/^@/, '').toLowerCase();
+      const allCandidates = runRegexCandidates(text, { channelHandle });
+
+      // Pre-LLM filter: drop candidates with a deny_reason. Logging the
+      // dropped ones makes it easy to tune the deny-list as the corpus
+      // grows. Self-handle and regulator domains are the most common.
+      const denied = allCandidates.filter((c) => c.deny_reason);
+      const candidates = allCandidates.filter((c) => !c.deny_reason);
+      if (denied.length > 0) {
+        logger.info(
+          {
+            channelId,
+            denied: denied.map((c) => ({
+              type: c.type,
+              value: c.raw_value,
+              reason: c.deny_reason,
+            })),
+          },
+          'contact-extract: dropped junk candidates pre-LLM',
+        );
+      }
 
       // 3. Contact extraction (LLM)
       let extracted: ContactExtractorOut = { contacts: [] };
@@ -113,24 +133,63 @@ export function startContactExtractWorker() {
         extracted = await runner.run<ContactExtractorOut>('contact_extractor', {
           platform: ch.platform,
           channel_title: ch.title ?? ch.handle,
+          channel_handle: channelHandle,
           description: ch.description,
           links: ch.links,
           recent_posts_text: postsText,
           regex_candidates: candidates,
         }, { channelId });
       } catch (e) {
-        // Fallback: at least save regex candidates as low-confidence
+        // Fallback: at least save regex candidates as low-confidence,
+        // using the deterministic role_hint (better than 'unknown').
         logger.warn({ channelId, err: (e as Error).message }, 'contact_extractor failed; using regex only');
         extracted = {
           contacts: candidates.map((c) => ({
             type: mapContactType(c.type),
             value: c.raw_value.replace(/^@/, '').replace(/^https?:\/\//, ''),
             raw_value: c.raw_value,
-            role_guess: 'unknown' as const,
-            confidence: 0.3,
-            rationale: 'regex-only fallback',
+            role_guess: c.role_hint,
+            confidence: c.role_hint === 'unknown' ? 0.25 : 0.45,
+            rationale: `regex-only fallback (role_hint=${c.role_hint})`,
           })),
         };
+      }
+
+      // Post-LLM filter: even with the new prompt, models occasionally
+      // "rescue" denied candidates by re-listing them (especially the
+      // channel's own handle). Re-apply the deny rules on each LLM output.
+      const beforeFilter = extracted.contacts.length;
+      extracted.contacts = extracted.contacts.filter((c) => {
+        const value = (c.value || c.raw_value || '').toLowerCase();
+        // Self-handle catch — covers @value, t.me/value, bare value.
+        const handle = value
+          .replace(/^@/, '')
+          .replace(/^https?:\/\/t\.me\//, '')
+          .replace(/^t\.me\//, '');
+        if (channelHandle && handle === channelHandle) {
+          logger.info({ channelId, value }, 'post-filter: dropped self-handle');
+          return false;
+        }
+        // Regulator/payment/etc. domains. Synthesise a snippet from rationale
+        // so the same inferDenyReason works on LLM output as on regex output.
+        const reason = inferDenyReason(
+          // Map back to RegexCandidateType (web_form → website for filter purposes).
+          c.type === 'web_form' ? 'website' : (c.type as 'tg_username' | 'tg_link' | 'email' | 'phone' | 'website' | 'other'),
+          c.raw_value || c.value,
+          c.rationale ?? '',
+          channelHandle,
+        );
+        if (reason) {
+          logger.info({ channelId, value, reason }, 'post-filter: dropped LLM contact');
+          return false;
+        }
+        return true;
+      });
+      if (extracted.contacts.length !== beforeFilter) {
+        logger.info(
+          { channelId, before: beforeFilter, after: extracted.contacts.length },
+          'contact-extract: post-LLM filter removed contacts',
+        );
       }
 
       // 4. Persist contacts

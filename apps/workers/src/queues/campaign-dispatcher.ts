@@ -147,12 +147,25 @@ export function startCampaignDispatcher() {
             continue;
           }
 
+          // Pull recent posts for the "one concrete hook" prompt rule —
+          // without them the LLM falls back to generic openings.
+          const rawPosts =
+            ((contact.channel?.rawData as
+              | { posts?: { text?: string; date?: string }[] }
+              | null
+              | undefined)?.posts ?? []).slice(0, 5);
+          const recentPosts = rawPosts.map((p) => ({
+            ...(p.date ? { date: p.date } : {}),
+            text: p.text ?? '',
+          }));
+
           try {
             const opener = await runner.run<OpenerOut>('opening_composer', {
               channel_analysis: contact.channel?.analysis ?? {},
               contact: buildContactPromptInput(contact),
               strategy: { approach: 'industry_fit' },
               campaign: { goal_text: c.goalText, value_prop: c.valueProp },
+              recent_posts: recentPosts,
             }, { conversationId: conv.id, campaignId: c.id, contactId: contact.id });
 
             // Track the highest-scoring variant after the safety loop, so

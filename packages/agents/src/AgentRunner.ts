@@ -6,6 +6,7 @@ import { Errors, isAppError, AppError } from '@nosquare/shared/errors';
 import {
   createProvider,
   withFallback,
+  withRetry,
   withTokenAccounting,
   type LLMProvider,
   type ProviderConfig,
@@ -337,19 +338,27 @@ export class AgentRunner {
     runId: string,
   ): Promise<LLMProvider> {
     const primaryRes = await this.endpointResolver(config.endpointId ?? null);
-    const primary = createProvider(primaryRes.provider, toProviderConfig(primaryRes));
+    const primaryRaw = createProvider(primaryRes.provider, toProviderConfig(primaryRes));
+    // One backoff retry on the primary endpoint before falling over. Without
+    // this, a single 5xx from Yandex flips us straight to OpenRouter (the
+    // typical fallback) — way more expensive than waiting 100ms and trying
+    // again. Schema/JSON failures aren't retried here (isTransient says no);
+    // those are handled by the repair-loop in `wrap.completeJson` instead.
+    const primary = withRetry(primaryRaw, { maxAttempts: 2, baseMs: 200 });
 
     let provider: LLMProvider;
     if (config.fallbackEndpointId) {
       const fbRes = await this.endpointResolver(config.fallbackEndpointId);
-      const fallback = createProvider(fbRes.provider, toProviderConfig(fbRes));
+      const fallbackRaw = createProvider(fbRes.provider, toProviderConfig(fbRes));
+      const fallback = withRetry(fallbackRaw, { maxAttempts: 2, baseMs: 200 });
       provider = withFallback(primary, fallback);
     } else {
       provider = primary;
     }
 
-    // Token accounting wraps last so every call (primary or fallback) is
-    // counted into the same runId-scoped accumulator.
+    // Token accounting wraps last so every call (primary, retry, fallback,
+    // and repair-loop pass) is counted into the same runId-scoped
+    // accumulator.
     return withTokenAccounting(provider, makeAccountingHook(runId));
   }
 

@@ -2,11 +2,11 @@ import { Worker } from 'bullmq';
 import { getRedis } from '../redis.js';
 import { AgentRunJobZ, QueueNames } from '@nosquare/shared';
 import { getPrisma } from '@nosquare/db';
-import { getRunner } from '../services/runner.js';
 import { logger } from '../logger.js';
 import { publishRealtime } from '../services/realtime-emit.js';
 import { tryAutoApprove } from '../services/auto-approve.js';
 import { buildContactPromptInput } from '../services/agent-input.js';
+import { runAgentSafe } from '../services/run-agent-safe.js';
 
 interface IntentOut {
   intent: string;
@@ -38,7 +38,6 @@ export function startAgentRunWorker() {
     async (job) => {
       const data = AgentRunJobZ.parse(job.data);
       const prisma = getPrisma();
-      const runner = getRunner();
 
       switch (data.pipeline) {
         case 'on_inbound': {
@@ -64,25 +63,43 @@ export function startAgentRunWorker() {
             .slice(-10)
             .map((m) => `${m.direction === 'in_' ? '<<' : '>>'} ${m.text}`);
 
-          const intent = await runner.run<IntentOut>('intent_classifier', {
-            last_inbound: last.text,
-            history_tail: historyTail,
-          }, { conversationId: conv.id });
+          // Each agent step uses runAgentSafe — a failure flips the
+          // conversation into `assisted` (so the operator drives), publishes
+          // an `agent.failed` event, and returns null. Per CLAUDE.md "не
+          // ронять оператору диалог". We never re-throw to BullMQ from
+          // these advisory steps; otherwise the whole pipeline retries and
+          // we burn quota on the steps that already succeeded.
 
-          const handoff = await runner.run<HandoffOut>('handoff_decider', {
-            conversation: {
-              mode: conv.mode,
-              summary: conv.summary ?? '',
-              last_inbound: last.text,
-              history_tail: historyTail,
+          const intent = await runAgentSafe<IntentOut>(
+            'intent_classifier',
+            { last_inbound: last.text, history_tail: historyTail },
+            { conversationId: conv.id },
+          );
+          if (!intent) {
+            return { ok: true, degraded: 'intent_classifier_failed' };
+          }
+
+          const handoff = await runAgentSafe<HandoffOut>(
+            'handoff_decider',
+            {
+              conversation: {
+                mode: conv.mode,
+                summary: conv.summary ?? '',
+                last_inbound: last.text,
+                history_tail: historyTail,
+              },
+              intent: { intent: intent.intent, confidence: intent.confidence },
+              ai_recent_confidence: [intent.confidence],
+              red_flags_total: 0,
             },
-            intent: {
-              intent: intent.intent,
-              confidence: intent.confidence,
-            },
-            ai_recent_confidence: [intent.confidence],
-            red_flags_total: 0,
-          }, { conversationId: conv.id });
+            { conversationId: conv.id },
+          );
+          // No handoff = degrade to assisted (already done by runAgentSafe)
+          // and stop. The operator now sees the conversation with the
+          // banner and can write the reply themselves.
+          if (!handoff) {
+            return { ok: true, degraded: 'handoff_decider_failed' };
+          }
 
           // Handoff=operator_now flips the conversation into manual mode and
           // pings the operator room — but we still run ReplyComposer below
@@ -110,18 +127,25 @@ export function startAgentRunWorker() {
           // generate replies + safety filter. The DB stores message
           // direction as `in_`/`out_` (Prisma underscored enum); the agent
           // schema wants `in`/`out`.
-          const reply = await runner.run<ReplyComposerOut>('reply_composer', {
-            channel_analysis: conv.contact.channel?.analysis ?? {},
-            contact: buildContactPromptInput(conv.contact),
-            campaign: { goal_text: '', value_prop: '' },
-            conversation_history: messages.map((m) => ({
-              direction: m.direction === 'in_' ? 'in' : 'out',
-              sender: m.sender,
-              text: m.text,
-              at: m.createdAt.toISOString(),
-            })),
-            last_inbound: { text: last.text, intent: intent.intent, sentiment: 'neutral' },
-          }, { conversationId: conv.id });
+          const reply = await runAgentSafe<ReplyComposerOut>(
+            'reply_composer',
+            {
+              channel_analysis: conv.contact.channel?.analysis ?? {},
+              contact: buildContactPromptInput(conv.contact),
+              campaign: { goal_text: '', value_prop: '' },
+              conversation_history: messages.map((m) => ({
+                direction: m.direction === 'in_' ? 'in' : 'out',
+                sender: m.sender,
+                text: m.text,
+                at: m.createdAt.toISOString(),
+              })),
+              last_inbound: { text: last.text, intent: intent.intent, sentiment: 'neutral' },
+            },
+            { conversationId: conv.id },
+          );
+          if (!reply) {
+            return { ok: true, degraded: 'reply_composer_failed', action: handoff.action };
+          }
 
           // Track the top variant so we can auto-approve it once at the end
           // (rather than approving the first that clears safety, which may
@@ -131,12 +155,19 @@ export function startAgentRunWorker() {
           let bestText = '';
 
           for (const v of reply.variants) {
-            const safety = await runner.run<SafetyOut>('safety_filter', {
-              draft: v.text,
-              channel_analysis: conv.contact.channel?.analysis ?? {},
-              contact: { id: conv.contact.id },
-              campaign: {},
-            }, { conversationId: conv.id });
+            const safety = await runAgentSafe<SafetyOut>(
+              'safety_filter',
+              {
+                draft: v.text,
+                channel_analysis: conv.contact.channel?.analysis ?? {},
+                contact: { id: conv.contact.id },
+                campaign: {},
+              },
+              { conversationId: conv.id },
+            );
+            // safety_filter null → skip this variant only; don't kill the
+            // batch. Other variants may still pass and reach the operator.
+            if (!safety) continue;
             if (!safety.allow) continue;
             const score = 1 - safety.risk_score;
             const sug = await prisma.suggestion.create({
@@ -203,27 +234,46 @@ export function startAgentRunWorker() {
           const goalText = conv.campaign?.goalText ?? '';
           const valueProp = conv.campaign?.valueProp ?? '';
 
-          const opener = await runner.run<OpenerOut>(
+          // Recent posts are required for the new prompt's "one concrete
+          // hook" rule. Without them OpeningComposer falls back to generic
+          // intros — exactly the AI-style "разнообразные темы: от X до Y"
+          // we're trying to kill. Pull from channel.rawData (set by the
+          // scrape worker) and pass as a typed array.
+          const rawPosts =
+            ((conv.contact.channel?.rawData as
+              | { posts?: { text?: string; date?: string }[] }
+              | null
+              | undefined)?.posts ?? []).slice(0, 5);
+          const recentPosts = rawPosts.map((p) => ({
+            ...(p.date ? { date: p.date } : {}),
+            text: p.text ?? '',
+          }));
+
+          const opener = await runAgentSafe<OpenerOut>(
             'opening_composer',
             {
               channel_analysis: conv.contact.channel?.analysis ?? {},
               contact: buildContactPromptInput(conv.contact),
               strategy: { approach: 'industry_fit' },
               campaign: { goal_text: goalText, value_prop: valueProp },
+              recent_posts: recentPosts,
             },
             {
               conversationId: conv.id,
-              campaignId: conv.campaignId ?? undefined,
+              ...(conv.campaignId ? { campaignId: conv.campaignId } : {}),
               contactId: conv.contact.id,
             },
           );
+          if (!opener) {
+            return { ok: true, degraded: 'opening_composer_failed' };
+          }
 
           let bestSuggestionId: string | null = null;
           let bestScore = 0;
           let bestText = '';
 
           for (const v of opener.variants) {
-            const safety = await runner.run<SafetyOut>(
+            const safety = await runAgentSafe<SafetyOut>(
               'safety_filter',
               {
                 draft: v.text,
@@ -233,6 +283,7 @@ export function startAgentRunWorker() {
               },
               { conversationId: conv.id },
             );
+            if (!safety) continue;
             if (!safety.allow) continue;
             const score = 1 - safety.risk_score;
             const sug = await prisma.suggestion.create({

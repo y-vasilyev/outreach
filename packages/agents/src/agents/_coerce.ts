@@ -1,50 +1,34 @@
 /**
- * Tolerant coercers for LLM JSON outputs.
+ * Coercers for LLM JSON outputs.
  *
- * The system prompts ask for a strict shape, but in practice models
- * (especially YandexGPT) return:
- *   - free-form Russian instead of enum tokens (`"русский"` for language,
- *     `"неформальный, личный"` for tone)
- *   - qualitative confidence (`"medium"`/`"high"`) instead of a number
- *   - char counts (`120`) for `length` instead of `'short'/'medium'/'long'`
- *   - risk scores in 0..100 (or even >100) instead of 0..1
+ * Two tiers, on purpose:
  *
- * Wrapping schema fields with these `z.preprocess(...)` helpers normalises
- * those before validation so a perfectly serviceable answer doesn't waste a
- * full retry cycle. They never *invent* values — they only translate clear
- * synonyms; anything ambiguous falls through to Zod and surfaces as a real
- * validation error.
+ * 1. **Soft fields** — `tone`, `length`, `urgency`, `language`, `intent_target`.
+ *    These are labels on otherwise valid output (analytics / UI / advisory).
+ *    A wrong label is recoverable; a failed turn isn't. We apply
+ *    `z.catch(<safe-default>)` so the agent never dies over a label.
+ *    Vocabulary the LLM should aim for is enumerated automatically in the
+ *    system prompt by `renderSchemaHints` — no substring matchers needed.
+ *
+ * 2. **Hard fields** — `HandoffAction`, `confidence`, `risk_score`, IntScore.
+ *    These change system behaviour (routing, gating, scoring). They stay
+ *    strict; a parse failure triggers the repair-loop in
+ *    `wrap.completeJson`. For `HandoffAction` we keep substring synonyms
+ *    because the consequences of falling through are highest (operator
+ *    not getting paged), and over-triggering `operator_now` is the safest
+ *    failure mode.
  */
 
 import { z } from 'zod';
 
 export const LanguageEnum = z.enum(['ru', 'en', 'other']);
-
-export const LanguageCoerced = z.preprocess((v) => {
-  if (typeof v !== 'string') return v;
-  const s = v.toLowerCase().trim();
-  if (s === 'ru' || s === 'en' || s === 'other') return s;
-  if (s.startsWith('ru') || s.includes('русск') || s.includes('rus')) return 'ru';
-  if (s.startsWith('en') || s.includes('англ') || s.includes('eng')) return 'en';
-  return 'other';
-}, LanguageEnum);
+// Soft field — language label. Schema-hints in the system prompt enumerate
+// the legal tokens; any non-matching value falls back to 'other'.
+export const LanguageCoerced = LanguageEnum.catch('other');
 
 export const ToneEnum = z.enum(['formal', 'casual', 'edgy', 'neutral']);
-
-export const ToneCoerced = z.preprocess((v) => {
-  if (typeof v !== 'string') return v;
-  const s = v.toLowerCase();
-  if (s === 'formal' || s === 'casual' || s === 'edgy' || s === 'neutral') return s;
-  // Order matters: check «неформ» before «форм» so we don't tag an
-  // informal Russian description as formal.
-  if (s.includes('неформ') || s.includes('информ') || s.includes('casual') || s.includes('личн') || s.includes('дружел') || s.includes('тёпл') || s.includes('тепл'))
-    return 'casual';
-  if (s.includes('форм') || s.includes('официал') || s.includes('строг'))
-    return 'formal';
-  if (s.includes('резк') || s.includes('агрес') || s.includes('edgy') || s.includes('сарказ') || s.includes('провок'))
-    return 'edgy';
-  return 'neutral';
-}, ToneEnum);
+// Soft field — descriptor on channel analysis. 'neutral' is the safe default.
+export const ToneCoerced = ToneEnum.catch('neutral');
 
 /**
  * Numeric confidence 0..1. Accepts qualitative strings ("low"/"medium"/"high"
@@ -73,26 +57,24 @@ export const RiskScoreCoerced = z.preprocess((v) => {
 }, z.number().min(0).max(1));
 
 /**
- * `length` is a categorical bucket but the LLM tends to emit raw character
- * counts. Map: <120 → short, <300 → medium, ≥300 → long.
+ * `length` is a categorical bucket but the LLM still occasionally emits a
+ * raw character count. We keep the number→bucket mapping as a preprocess
+ * (it's a deterministic translation, not a vocabulary guess) and wrap the
+ * whole thing in `.catch('medium')` so an unrecognised label never kills
+ * the turn. 'medium' is the neutral default for ranking.
  */
 export const LengthEnum = z.enum(['short', 'medium', 'long']);
 
-export const LengthCoerced = z.preprocess((v) => {
-  if (typeof v === 'number' && Number.isFinite(v)) {
-    if (v < 120) return 'short';
-    if (v < 300) return 'medium';
-    return 'long';
-  }
-  if (typeof v === 'string') {
-    const s = v.toLowerCase().trim();
-    if (s === 'short' || s === 'medium' || s === 'long') return s;
-    if (s.includes('кратк') || s.includes('коротк') || s.startsWith('s') || s.includes('brief')) return 'short';
-    if (s.includes('сред') || s.startsWith('m')) return 'medium';
-    if (s.includes('длинн') || s.includes('развёрн') || s.includes('развёрн') || s.startsWith('l') || s.includes('full')) return 'long';
-  }
-  return v;
-}, LengthEnum);
+export const LengthCoerced = z
+  .preprocess((v) => {
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      if (v < 120) return 'short';
+      if (v < 300) return 'medium';
+      return 'long';
+    }
+    return v;
+  }, LengthEnum)
+  .catch('medium');
 
 /**
  * Handoff action enum + tolerant coercer. The LLM tends to invent its own
@@ -149,125 +131,41 @@ export const HandoffActionCoerced = z.preprocess((v) => {
 }, HandoffActionEnum);
 
 /**
- * Urgency enum + tolerant coercer. Same story — models emit synonyms.
+ * Urgency is a soft field — it bumps an alert badge in the UI but doesn't
+ * gate routing (HandoffAction does). Catch unknown values as 'normal' to
+ * avoid false-high alarms from creative model vocabulary.
  */
 export const UrgencyEnum = z.enum(['low', 'normal', 'high']);
-
-export const UrgencyCoerced = z.preprocess((v) => {
-  if (typeof v !== 'string') return v;
-  const s = v.toLowerCase().trim();
-  if (s === 'low' || s === 'normal' || s === 'high') return s;
-  if (s.includes('urgent') || s.includes('срочн') || s.includes('критич') || s === 'critical')
-    return 'high';
-  if (s.includes('низк') || s.includes('небольш') || s.includes('minor')) return 'low';
-  if (s.includes('средн') || s.includes('обычн') || s === 'medium' || s === 'med' || s === 'mid')
-    return 'normal';
-  return v;
-}, UrgencyEnum);
+export const UrgencyCoerced = UrgencyEnum.catch('normal');
 
 /**
- * ReplyComposer's `intent_target` enum. Models love inventing their own
- * verbs (`clarify_or_close`, `schedule_interview`, `provide_info`, …). Map
- * the obvious synonyms to canonical tokens. Truly unknown values still
- * fall through to a Zod validation error — the LLM JSON validator already
- * has a retry loop, and we don't want to silently mis-tag suggestions.
+ * ReplyComposer's `intent_target` is a label on a *suggestion* — the
+ * operator doesn't take action on the value, it's metadata for analytics
+ * and UI badges. So this is a "soft" field: a wrong label must never fail
+ * the whole turn. We use `z.catch('answer_question')` — the safest neutral
+ * default that doesn't bias the funnel toward scheduling.
+ *
+ * Why this matters: previously the schema was strict + had a substring
+ * coercer that silently mapped `confirm_meeting` to `schedule_call`. That
+ * was bad in two ways: (1) when a synonym wasn't in the table, the entire
+ * job died; (2) when it WAS in the table, the rationale said "confirming"
+ * but the label said "scheduling" — analytics garbage.
+ *
+ * `confirm_meeting` is now a first-class value. The repair-loop in
+ * wrap.completeJson handles unknown labels by re-prompting once; if even
+ * that fails, z.catch swallows it.
  */
 export const IntentTargetEnum = z.enum([
   'qualify',
   'schedule_call',
+  'confirm_meeting',
   'answer_question',
   'handle_objection',
   'soft_close',
   'small_talk',
 ]);
 
-export const IntentTargetCoerced = z.preprocess((v) => {
-  if (typeof v !== 'string') return v;
-  const s = v.toLowerCase().trim();
-  if (
-    s === 'qualify' ||
-    s === 'schedule_call' ||
-    s === 'answer_question' ||
-    s === 'handle_objection' ||
-    s === 'soft_close' ||
-    s === 'small_talk'
-  ) {
-    return s;
-  }
-  // schedule_call: any "schedule / book / meeting / confirm-meeting" variant
-  if (
-    s.includes('schedule') ||
-    s.includes('book') ||
-    s.includes('meeting') ||
-    s.includes('meet') ||
-    s.includes('confirm') ||
-    s.includes('встреч') ||
-    s.includes('созвон') ||
-    s.includes('договор') ||
-    s.includes('тайм') ||
-    s.includes('time') ||
-    s.includes('interview') ||
-    s.includes('подтвер')
-  ) {
-    return 'schedule_call';
-  }
-  // soft_close: closing-without-pressure variants
-  if (
-    s.includes('clarify') ||
-    s.includes('close') ||
-    s.includes('finalize') ||
-    s.includes('wrap') ||
-    s.includes('закр') ||
-    s.includes('заверш')
-  ) {
-    return 'soft_close';
-  }
-  // handle_objection
-  if (
-    s.includes('object') ||
-    s.includes('refute') ||
-    s.includes('counter') ||
-    s.includes('возраж') ||
-    s.includes('отказ')
-  ) {
-    return 'handle_objection';
-  }
-  // qualify / discovery / probe
-  if (
-    s.includes('qualif') ||
-    s.includes('discover') ||
-    s.includes('probe') ||
-    s.includes('квалиф') ||
-    s.includes('узнать') ||
-    s.includes('исслед')
-  ) {
-    return 'qualify';
-  }
-  // answer_question / inform / explain
-  if (
-    s.includes('answer') ||
-    s.includes('inform') ||
-    s.includes('explain') ||
-    s.includes('clarif') ||
-    s.includes('ответ') ||
-    s.includes('объясн') ||
-    s.includes('расскаж')
-  ) {
-    return 'answer_question';
-  }
-  // small_talk / rapport / chit-chat
-  if (
-    s.includes('small') ||
-    s.includes('chat') ||
-    s.includes('rapport') ||
-    s.includes('болт') ||
-    s.includes('светск') ||
-    s.includes('warm')
-  ) {
-    return 'small_talk';
-  }
-  return v;
-}, IntentTargetEnum);
+export const IntentTargetCoerced = IntentTargetEnum.catch('answer_question');
 
 /**
  * Integer score in `[min..max]`. Accepts qualitative strings (low/medium/

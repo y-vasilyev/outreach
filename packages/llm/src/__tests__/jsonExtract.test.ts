@@ -70,17 +70,32 @@ describe('parseJsonStrict', () => {
     expect(out).toEqual({ n: 5 });
   });
 
-  it('throws upstream error when parser rejects', () => {
-    expect(() =>
+  it('throws LLM_SCHEMA_FAILED when parser rejects', () => {
+    let caught: unknown;
+    try {
       parseJsonStrict('{"n":"oops"}', (v) => {
         const obj = v as { n: unknown };
         if (typeof obj.n !== 'number') throw new Error('n must be number');
         return obj;
-      }),
-    ).toThrow(/JSON failed validation/);
+      });
+    } catch (e) {
+      caught = e;
+    }
+    const err = caught as { code: string; message: string; details: { preview: string } };
+    expect(err.code).toBe('LLM_SCHEMA_FAILED');
+    expect(err.message).toMatch(/JSON failed validation/);
+    expect(err.details.preview).toContain('"oops"');
   });
 
-  it('throws upstream error on invalid JSON', () => {
-    expect(() => parseJsonStrict('{not json}', (v) => v)).toThrow(/invalid JSON/);
+  it('throws LLM_INVALID_JSON on invalid JSON', () => {
+    let caught: unknown;
+    try {
+      parseJsonStrict('{not json}', (v) => v);
+    } catch (e) {
+      caught = e;
+    }
+    const err = caught as { code: string; message: string };
+    expect(err.code).toBe('LLM_INVALID_JSON');
+    expect(err.message).toMatch(/invalid JSON/);
   });
 });

@@ -120,3 +120,106 @@ Email: ads@vasya.io. Phone +7 (495) 555-22-33. Site https://vasya.io.`;
     expect(runRegexCandidates('')).toEqual([]);
   });
 });
+
+describe('runRegexCandidates — role inference', () => {
+  it('detects ad_manager from Russian "по рекламе" cluster', () => {
+    const cands = runRegexCandidates('По рекламе и интеграциям пишите @ads_vasya');
+    const c = cands.find((x) => x.raw_value === '@ads_vasya');
+    expect(c?.role_hint).toBe('ad_manager');
+  });
+
+  it('detects ad_manager from English "advertising" cluster', () => {
+    const cands = runRegexCandidates('For advertising and partnerships: @ads_vasya');
+    const c = cands.find((x) => x.raw_value === '@ads_vasya');
+    expect(c?.role_hint).toBe('ad_manager');
+  });
+
+  it('detects owner from "автор канала"', () => {
+    const cands = runRegexCandidates('Автор канала — @vasya_writer');
+    const c = cands.find((x) => x.raw_value === '@vasya_writer');
+    expect(c?.role_hint).toBe('owner');
+  });
+
+  it('detects bot from _bot suffix when context is non-ads', () => {
+    const cands = runRegexCandidates('Поддержка: @support_bot');
+    const c = cands.find((x) => x.raw_value === '@support_bot');
+    expect(c?.role_hint).toBe('bot');
+  });
+
+  it('upgrades a *_bot to ad_manager when context says ads', () => {
+    const cands = runRegexCandidates('По рекламе → @brand_ads_bot');
+    const c = cands.find((x) => x.raw_value === '@brand_ads_bot');
+    expect(c?.role_hint).toBe('ad_manager');
+  });
+
+  it('falls back to unknown when no signal', () => {
+    const cands = runRegexCandidates('check @random_handle out');
+    const c = cands.find((x) => x.raw_value === '@random_handle');
+    expect(c?.role_hint).toBe('unknown');
+  });
+});
+
+describe('runRegexCandidates — deny filter', () => {
+  it('marks self-handle (Telegram username form)', () => {
+    const cands = runRegexCandidates(
+      'Subscribe to our channel @nosquare_blog for updates',
+      { channelHandle: 'nosquare_blog' },
+    );
+    const c = cands.find((x) => x.raw_value === '@nosquare_blog');
+    expect(c?.deny_reason).toBe('self_handle');
+  });
+
+  it('marks self-handle (t.me link form)', () => {
+    const cands = runRegexCandidates(
+      'Read more on https://t.me/nosquare_blog/posts',
+      { channelHandle: 'nosquare_blog' },
+    );
+    const tgLink = cands.find((x) => x.type === 'tg_link');
+    expect(tgLink?.deny_reason).toBe('self_handle');
+  });
+
+  it('marks regulator domains', () => {
+    const cands = runRegexCandidates(
+      'Зарегистрировано в https://knd.gov.ru/license/12345 — реестр',
+    );
+    const w = cands.find((x) => x.type === 'website');
+    expect(w?.deny_reason).toBe('regulator_domain');
+  });
+
+  it('marks payment / donation processors', () => {
+    const cands = runRegexCandidates('Поддержать автора: https://boosty.to/myname');
+    const w = cands.find((x) => x.type === 'website');
+    expect(w?.deny_reason).toBe('payment_processor');
+  });
+
+  it('marks "не размещаю рекламу" disclaimers', () => {
+    const cands = runRegexCandidates(
+      'Не размещаю рекламу. Пишите @vasya только по делу.',
+    );
+    const c = cands.find((x) => x.raw_value === '@vasya');
+    expect(c?.deny_reason).toBe('declines_ads');
+  });
+
+  it('marks cross-promo "наш второй канал" mentions', () => {
+    const cands = runRegexCandidates('Наш второй канал @other_channel — подпишитесь');
+    const c = cands.find((x) => x.raw_value === '@other_channel');
+    expect(c?.deny_reason).toBe('cross_promo');
+  });
+
+  it('marks course/product CTAs', () => {
+    const cands = runRegexCandidates(
+      'Запишитесь на курс: https://example.com/course-2026',
+    );
+    const w = cands.find((x) => x.type === 'website');
+    expect(w?.deny_reason).toBe('course_or_product');
+  });
+
+  it('does NOT deny a clear ad_manager handle', () => {
+    const cands = runRegexCandidates(
+      'По рекламе пишите @ads_vasya — отвечает менеджер.',
+    );
+    const c = cands.find((x) => x.raw_value === '@ads_vasya');
+    expect(c?.deny_reason).toBeUndefined();
+    expect(c?.role_hint).toBe('ad_manager');
+  });
+});

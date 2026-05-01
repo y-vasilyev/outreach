@@ -50,7 +50,9 @@ async function retryingCall(
 
 function isTransient(e: unknown): boolean {
   if (e instanceof AppError) {
-    if (e.code !== 'UPSTREAM_ERROR') return false;
+    // Schema/JSON failures are NOT transient — repair-loop in
+    // wrap.completeJson handles them. Network/HTTP-level failures are.
+    if (e.code !== 'LLM_TRANSIENT' && e.code !== 'UPSTREAM_ERROR') return false;
     const status = readStatus(e.details);
     if (status == null) return true; // network error -> retry
     if (status === 408 || status === 429) return true;
@@ -232,15 +234,94 @@ function wrap(provider: LLMProvider, around: CompleteFn): LLMProvider {
     complete: (req) => around(req, innerComplete),
     completeJson: async (req, parser) => {
       // We need the wrapping strategy (retry / timeout / accounting) to apply
-      // to the network call, so we route through `around` rather than calling
-      // provider.completeJson directly. The parser receives raw response text
-      // (and is expected to use parseJsonStrict / extractJson helpers).
-      const meta = await around(
-        { ...req, jsonMode: req.jsonMode ?? true },
-        innerComplete,
-      );
-      const value = parser(meta.text);
-      return { value, meta };
+      // to every network call, so we route through `around`.
+      //
+      // Schema-validation failures (LLM_SCHEMA_FAILED / LLM_INVALID_JSON) are
+      // a *content* problem, not a transport problem — `withRetry` rightly
+      // ignores them. We instead run a repair-loop here: on the first such
+      // failure, send the previous response and the validator's error back
+      // to the model and ask it to fix only the broken fields. One pass is
+      // enough to recover almost every case we've seen in production
+      // (creative enum tokens, missing fields, wrong JSON shape) without
+      // burning multiple turns of compute.
+      const baseReq = { ...req, jsonMode: req.jsonMode ?? true };
+      const meta = await around(baseReq, innerComplete);
+      try {
+        const value = parser(meta.text);
+        return { value, meta };
+      } catch (firstErr) {
+        if (!isRepairable(firstErr)) throw firstErr;
+
+        const repairReq: CompletionRequest = {
+          ...baseReq,
+          systemPrompt: buildRepairSystemPrompt(baseReq.systemPrompt),
+          userPrompt: buildRepairUserPrompt(baseReq.userPrompt, meta.text, firstErr),
+          // Slightly lower temperature on repair — we want the model to
+          // correct, not re-improvise. Falls back to the original setting
+          // when not provided.
+          ...(typeof baseReq.temperature === 'number'
+            ? { temperature: Math.max(0, Math.min(0.3, baseReq.temperature)) }
+            : { temperature: 0 }),
+        };
+        const meta2 = await around(repairReq, innerComplete);
+        const value = parser(meta2.text);
+        // Roll up cost/tokens from both calls so accounting is faithful.
+        const merged: CompletionResponse = {
+          text: meta2.text,
+          tokensIn: (meta.tokensIn ?? 0) + (meta2.tokensIn ?? 0),
+          tokensOut: (meta.tokensOut ?? 0) + (meta2.tokensOut ?? 0),
+          costUsd: (meta.costUsd ?? 0) + (meta2.costUsd ?? 0),
+          model: meta2.model,
+          ...(meta2.raw !== undefined && { raw: meta2.raw }),
+          ...(meta2.providerUsed !== undefined && { providerUsed: meta2.providerUsed }),
+        };
+        return { value, meta: merged };
+      }
     },
   };
+}
+
+function isRepairable(e: unknown): boolean {
+  if (!isAppError(e)) return false;
+  return e.code === 'LLM_SCHEMA_FAILED' || e.code === 'LLM_INVALID_JSON';
+}
+
+function buildRepairSystemPrompt(original: string): string {
+  return [
+    original,
+    '',
+    'ВАЖНО: предыдущий твой ответ не прошёл валидацию. Сейчас ты должен вернуть ИСКЛЮЧИТЕЛЬНО валидный JSON по той же схеме. Никаких комментариев до или после JSON. Не оборачивай в markdown-фенсы. Сохрани смысл и формулировки исходного ответа — поправь только то, что не прошло валидацию (формат, перечень допустимых значений enum, обязательные поля).',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+function buildRepairUserPrompt(
+  originalUser: string,
+  previousAnswer: string,
+  err: unknown,
+): string {
+  const details = isAppError(err) ? err.details : undefined;
+  const validationMessage =
+    (details && typeof details === 'object' && 'message' in details
+      ? String((details as { message?: unknown }).message ?? '')
+      : '') || (err instanceof Error ? err.message : String(err));
+
+  return [
+    originalUser,
+    '',
+    '— — —',
+    'Твой предыдущий ответ:',
+    truncate(previousAnswer, 1500),
+    '',
+    'Ошибка валидации:',
+    truncate(validationMessage, 800),
+    '',
+    'Верни исправленный JSON. Только JSON.',
+  ].join('\n');
+}
+
+function truncate(s: string, max: number): string {
+  if (typeof s !== 'string') return '';
+  return s.length <= max ? s : `${s.slice(0, max)}…`;
 }
