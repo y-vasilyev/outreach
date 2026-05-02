@@ -10,9 +10,12 @@ import type { Suggestion } from './types';
 const props = defineProps<{
   conversationId: string;
   suggestions: Suggestion[];
+  defaultScheduledAt?: string | null;
 }>();
 
-const emit = defineEmits<{ (e: 'pickToDraft', text: string): void }>();
+const emit = defineEmits<{
+  (e: 'pickToDraft', payload: { text: string; scheduledAt?: string }): void;
+}>();
 
 const qc = useQueryClient();
 const chosenId = ref<string | null>(null);
@@ -26,7 +29,18 @@ const current = computed(() => {
 
 watch(
   () => props.conversationId,
-  () => { chosenId.value = null; },
+  () => {
+    chosenId.value = null;
+    scheduledLocal.value = toLocalDateTime(props.defaultScheduledAt);
+  },
+);
+
+watch(
+  () => props.defaultScheduledAt,
+  (v) => {
+    if (!scheduledLocal.value) scheduledLocal.value = toLocalDateTime(v);
+  },
+  { immediate: true },
 );
 
 const approveMut = useMutation({
@@ -58,7 +72,15 @@ function pick(id: string): void {
 }
 
 function loadToDraft(): void {
-  if (current.value) emit('pickToDraft', current.value.text);
+  if (current.value) emit('pickToDraft', { text: current.value.text, scheduledAt: scheduledIso() });
+}
+
+function toLocalDateTime(value?: string | null): string {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const offsetMs = d.getTimezoneOffset() * 60_000;
+  return new Date(d.getTime() - offsetMs).toISOString().slice(0, 16);
 }
 
 function scheduledIso(): string | undefined {

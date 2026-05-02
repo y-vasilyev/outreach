@@ -50,6 +50,7 @@ const { data: suggestions } = useQuery({
 });
 
 const draft = ref('');
+const scheduledLocal = ref('');
 const scrollRef = ref<HTMLElement | null>(null);
 
 useRoom(() => room.value, 'message.new', () => {
@@ -72,11 +73,26 @@ watch(
   },
 );
 
-watch(cId, () => { draft.value = ''; });
+watch(cId, () => {
+  draft.value = '';
+  scheduledLocal.value = '';
+});
 
 const c = computed<ConversationDetail>(() => details.value ?? (props.conversation as ConversationDetail));
+const defaultScheduledAt = computed(() => {
+  const v = c.value.meta?.outreachStartAt;
+  return typeof v === 'string' && v.length > 0 ? v : null;
+});
 const handle = computed(() => c.value.contact?.channel?.handle ?? c.value.contact?.value ?? '—');
 const title = computed(() => c.value.contact?.channel?.title ?? c.value.contact?.value ?? 'Без названия');
+
+watch(
+  defaultScheduledAt,
+  (v) => {
+    if (!scheduledLocal.value) scheduledLocal.value = toLocalDateTime(v);
+  },
+  { immediate: true },
+);
 
 const modeMut = useMutation({
   mutationFn: (mode: 'auto' | 'assisted' | 'manual') =>
@@ -98,10 +114,15 @@ const statusMut = useMutation({
 });
 
 const sendMut = useMutation({
-  mutationFn: () => api.post<void>(`/conversations/${cId.value}/messages`, { text: draft.value }),
+  mutationFn: () =>
+    api.post<void>(`/conversations/${cId.value}/messages`, {
+      text: draft.value,
+      ...(scheduledIso() ? { scheduledAt: scheduledIso() } : {}),
+    }),
   onSuccess: () => {
     qc.invalidateQueries({ queryKey: ['conversation-messages', cId.value] });
     draft.value = '';
+    scheduledLocal.value = '';
     toast.success('Сообщение поставлено в очередь');
   },
   onError: (e: Error) => toast.error('Не удалось отправить', e.message),
@@ -134,6 +155,26 @@ const dropdownItems = computed(() => [
 function send(): void {
   if (draft.value.trim().length === 0) return;
   sendMut.mutate();
+}
+
+function toLocalDateTime(value?: string | null): string {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const offsetMs = d.getTimezoneOffset() * 60_000;
+  return new Date(d.getTime() - offsetMs).toISOString().slice(0, 16);
+}
+
+function scheduledIso(): string | undefined {
+  if (!scheduledLocal.value) return undefined;
+  const d = new Date(scheduledLocal.value);
+  return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
+}
+
+function pickToDraft(payload: { text: string; scheduledAt?: string }): void {
+  draft.value = payload.text;
+  if (payload.scheduledAt) scheduledLocal.value = toLocalDateTime(payload.scheduledAt);
+  else if (defaultScheduledAt.value) scheduledLocal.value = toLocalDateTime(defaultScheduledAt.value);
 }
 
 function onComposerKey(e: KeyboardEvent): void {
@@ -240,7 +281,8 @@ useRoom(() => room.value, 'suggestion.approved', () => {
     <SuggestionStrip
       :conversation-id="cId"
       :suggestions="suggestions ?? []"
-      @pick-to-draft="(t) => (draft = t)"
+      :default-scheduled-at="defaultScheduledAt"
+      @pick-to-draft="pickToDraft"
     />
 
     <!-- Composer -->
@@ -258,6 +300,13 @@ useRoom(() => room.value, 'suggestion.approved', () => {
           <span class="divider-v" />
           <button class="btn ghost sm" title="Перефразировать"><Icon name="sparkle" :size="12" /></button>
           <button class="btn ghost sm" title="SafetyFilter"><Icon name="shield" :size="12" /></button>
+          <input
+            class="input"
+            type="datetime-local"
+            v-model="scheduledLocal"
+            title="Запланировать отправку"
+            style="height: 28px; width: 176px; font-size: 11px;"
+          />
           <div style="flex: 1; min-width: 8px;" />
           <button class="btn primary sm" :disabled="sendMut.isPending.value || !draft.trim()" @click="send">
             <Icon name="send" :size="11" /><span>Отправить</span><span class="kbd">⌘↩</span>
