@@ -1,8 +1,35 @@
+export interface ChannelAnalysis {
+  language?: 'ru' | 'en' | 'other';
+  topic?: string;
+  audience?: string;
+  format?: string;
+  tone?: 'formal' | 'casual' | 'edgy' | 'neutral';
+  owner_signals?: { is_personal_brand?: boolean; owner_hint?: string };
+  red_flags?: string[];
+  [key: string]: unknown;
+}
+
+export interface ConversationChannel {
+  id?: string;
+  handle?: string;
+  title?: string;
+  platform?: 'telegram' | 'instagram' | 'youtube' | string;
+  description?: string | null;
+  links?: string[];
+  followers?: number;
+  language?: string | null;
+  analysis?: ChannelAnalysis | null;
+}
+
 export interface ConversationContact {
   id: string;
   value: string;
   roleGuess?: string;
-  channel?: { id?: string; handle?: string; title?: string; platform?: string; topic?: string; followers?: number };
+  label?: string | null;
+  tgUsername?: string | null;
+  tgFirstName?: string | null;
+  tgLastName?: string | null;
+  channel?: ConversationChannel;
 }
 
 export interface ConversationListItem {
