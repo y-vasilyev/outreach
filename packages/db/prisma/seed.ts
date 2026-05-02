@@ -74,19 +74,27 @@ async function main() {
     console.log('✓ integration: scrapecreators');
   }
 
-  // Resolve default endpoint ids if any
-  const defaultEndpoint = await prisma.endpoint.findFirst({
-    where: { enabled: true },
+  // Resolve default endpoint ids if any. Agent seeds now use OpenRouter model ids,
+  // so prefer an enabled OpenRouter endpoint when it is configured.
+  const openrouterEndpoint = await prisma.endpoint.findFirst({
+    where: { enabled: true, provider: 'openrouter' },
     orderBy: { createdAt: 'asc' },
   });
+  const defaultEndpoint =
+    openrouterEndpoint ??
+    (await prisma.endpoint.findFirst({
+      where: { enabled: true },
+      orderBy: { createdAt: 'asc' },
+    }));
 
   // Versioned upsert for agent configs:
   //   - new record  → insert with seed.version
   //   - existing AND db.version < seed.version → overwrite prompts + bump
   //   - existing AND db.version >= seed.version → leave alone (operator
   //     has likely edited via UI; UI bumps the version on save).
-  // We never touch `enabled` (operator-controlled) or `endpointId` (set
-  // once at create; rebinding is a separate operation).
+  // We never touch `enabled` (operator-controlled). Since agent seeds use
+  // OpenRouter model ids, upgrading a seeded config also rebinds it to the
+  // enabled OpenRouter endpoint when one exists.
   for (const seed of defaultAgentSeeds) {
     const existing = await prisma.agentConfig.findUnique({
       where: { name: seed.name },
@@ -114,6 +122,7 @@ async function main() {
         data: {
           role: seed.role,
           description: seed.description,
+          ...(openrouterEndpoint ? { endpointId: openrouterEndpoint.id } : {}),
           model: seed.model,
           systemPrompt: seed.systemPrompt,
           userPromptTemplate: seed.userPromptTemplate,
