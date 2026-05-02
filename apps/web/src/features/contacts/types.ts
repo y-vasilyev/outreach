@@ -27,7 +27,7 @@ export type ExtractedBy = 'regex' | 'llm' | 'both' | 'manual';
 export interface Contact {
   id: string;
   channelId: string;
-  channel?: { id: string; title?: string; handle?: string; platform?: string };
+  channel?: { id: string; title?: string; handle?: string; platform?: string; description?: string | null };
   type: ContactType;
   value: string;
   rawValue?: string;

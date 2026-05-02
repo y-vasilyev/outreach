@@ -7,6 +7,12 @@ import { emitToRoom } from '../realtime/io.js';
 
 type Filters = z.infer<typeof ConversationFiltersZ>;
 
+function readOutreachStartAt(meta: unknown): string | undefined {
+  if (!meta || typeof meta !== 'object') return undefined;
+  const v = (meta as { outreachStartAt?: unknown }).outreachStartAt;
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
 export const conversationsService = {
   async list(filters: Filters & { limit?: number }) {
     const prisma = getPrisma();
@@ -112,6 +118,7 @@ export const conversationsService = {
     conversationId: string;
     text: string;
     fromSuggestionId?: string;
+    scheduledAt?: string;
     operatorId: string;
   }) {
     const prisma = getPrisma();
@@ -139,19 +146,35 @@ export const conversationsService = {
       });
     }
 
+    const delay = input.scheduledAt
+      ? Math.max(0, new Date(input.scheduledAt).getTime() - Date.now())
+      : 0;
+
     const queues = getQueues();
-    await queues.tgSend.add('send', {
-      messageId: message.id,
-      conversationId: conv.id,
-      tgAccountId: conv.tgAccountId,
-    });
+    await queues.tgSend.add(
+      'send',
+      {
+        messageId: message.id,
+        conversationId: conv.id,
+        tgAccountId: conv.tgAccountId,
+      },
+      delay > 0 ? { delay } : undefined,
+    );
 
     return message;
   },
 
-  async approveSuggestion(suggestionId: string, operatorId: string, overrideText?: string) {
+  async approveSuggestion(
+    suggestionId: string,
+    operatorId: string,
+    overrideText?: string,
+    scheduledAt?: string,
+  ) {
     const prisma = getPrisma();
-    const s = await prisma.suggestion.findUnique({ where: { id: suggestionId } });
+    const s = await prisma.suggestion.findUnique({
+      where: { id: suggestionId },
+      include: { conversation: { select: { meta: true } } },
+    });
     if (!s) throw Errors.notFound('suggestion', suggestionId);
     const text = overrideText ?? s.text;
     if (overrideText && overrideText !== s.text) {
@@ -164,6 +187,7 @@ export const conversationsService = {
       conversationId: s.conversationId,
       text,
       fromSuggestionId: s.id,
+      scheduledAt: scheduledAt ?? readOutreachStartAt(s.conversation.meta),
       operatorId,
     });
   },

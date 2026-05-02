@@ -16,6 +16,7 @@ export interface ContactPromptRow {
   id: string;
   value: string;
   type: string;
+  rawValue: string;
   roleGuess: string;
   label: string | null;
   tgUsername: string | null;
@@ -25,17 +26,48 @@ export interface ContactPromptRow {
 }
 
 export function buildContactPromptInput(c: ContactPromptRow): Record<string, unknown> {
+  const contextText = [c.label, c.rawValue, c.channel?.description]
+    .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    .join('\n');
+  const nameHint =
+    c.tgFirstName ??
+    inferNameHint(contextText, c.roleGuess) ??
+    null;
+
   return {
     id: c.id,
     value: c.value,
+    raw_value: c.rawValue,
     type: c.type,
     role: c.roleGuess,
     label: c.label,
     first_name: c.tgFirstName,
     last_name: c.tgLastName,
     tg_username: c.tgUsername,
+    recipient_name_hint: nameHint,
+    context_note: contextText || null,
     channel_title: c.channel?.title ?? null,
     channel_handle: c.channel?.handle ?? null,
     channel_bio: c.channel?.description ?? null,
   };
+}
+
+function inferNameHint(text: string, role: string): string | null {
+  if (!text) return null;
+  const patterns = [
+    /\b(?:я|это)\s+([А-ЯЁA-Z][а-яёa-z]{2,24})\b/u,
+    /\bна\s+связи\s+([А-ЯЁA-Z][а-яёa-z]{2,24})\b/iu,
+    /\b(?:автор|менеджер|админ|администратор)\s+([А-ЯЁA-Z][а-яёa-z]{2,24})\b/iu,
+  ];
+  for (const re of patterns) {
+    const m = text.match(re);
+    if (m?.[1]) return m[1];
+  }
+
+  // For owner contacts, channel bios often say "я Крис". For manager
+  // contacts, do not borrow the author's name unless the text explicitly
+  // names the manager/contact person.
+  if (role !== 'owner') return null;
+  const shortName = text.match(/\bя\s+([А-ЯЁA-Z][а-яёa-z]{2,16})[,.\s]/u);
+  return shortName?.[1] ?? null;
 }

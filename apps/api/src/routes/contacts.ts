@@ -89,6 +89,7 @@ export async function contactsRoutes(app: FastifyInstance) {
         goalText: z.string().max(2000).optional(),
         valueProp: z.string().max(2000).optional(),
         mode: z.enum(['auto', 'assisted', 'manual']).optional(),
+        scheduledAt: z.string().datetime().optional(),
       })
       .parse(req.body);
     return contactsService.startConversation(params.id, body);

@@ -7,6 +7,7 @@ import { publishRealtime } from '../services/realtime-emit.js';
 import { tryAutoApprove } from '../services/auto-approve.js';
 import { buildContactPromptInput } from '../services/agent-input.js';
 import { runAgentSafe } from '../services/run-agent-safe.js';
+import { ensureContactTgProfile } from '../services/contact-profile.js';
 
 interface IntentOut {
   intent: string;
@@ -31,6 +32,22 @@ interface SafetyOut {
   risk_score: number;
 }
 
+function readAdHocCampaign(meta: unknown): { goalText: string; valueProp: string } {
+  if (!meta || typeof meta !== 'object') return { goalText: '', valueProp: '' };
+  const adHoc = (meta as { adHoc?: unknown }).adHoc;
+  if (!adHoc || typeof adHoc !== 'object') return { goalText: '', valueProp: '' };
+  const r = adHoc as { goalText?: unknown; valueProp?: unknown };
+  return {
+    goalText: typeof r.goalText === 'string' ? r.goalText : '',
+    valueProp: typeof r.valueProp === 'string' ? r.valueProp : '',
+  };
+}
+
+function readOutreachStartAt(meta: unknown): string | undefined {
+  if (!meta || typeof meta !== 'object') return undefined;
+  const v = (meta as { outreachStartAt?: unknown }).outreachStartAt;
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
 
 export function startAgentRunWorker() {
   const worker = new Worker(
@@ -231,8 +248,17 @@ export function startAgentRunWorker() {
           });
           if (!conv) throw new Error('conversation not found');
 
-          const goalText = conv.campaign?.goalText ?? '';
-          const valueProp = conv.campaign?.valueProp ?? '';
+          await ensureContactTgProfile(conv.tgAccountId, conv.contact);
+          const contact = await prisma.contact.findUnique({
+            where: { id: conv.contact.id },
+            include: { channel: true },
+          });
+          if (!contact) throw new Error('contact not found');
+
+          const adHoc = readAdHocCampaign(conv.meta);
+          const goalText = conv.campaign?.goalText ?? adHoc.goalText;
+          const valueProp = conv.campaign?.valueProp ?? adHoc.valueProp;
+          const scheduledAt = readOutreachStartAt(conv.meta);
 
           // Recent posts are required for the new prompt's "one concrete
           // hook" rule. Without them OpeningComposer falls back to generic
@@ -240,7 +266,7 @@ export function startAgentRunWorker() {
           // we're trying to kill. Pull from channel.rawData (set by the
           // scrape worker) and pass as a typed array.
           const rawPosts =
-            ((conv.contact.channel?.rawData as
+            ((contact.channel?.rawData as
               | { posts?: { text?: string; date?: string }[] }
               | null
               | undefined)?.posts ?? []).slice(0, 5);
@@ -252,8 +278,8 @@ export function startAgentRunWorker() {
           const opener = await runAgentSafe<OpenerOut>(
             'opening_composer',
             {
-              channel_analysis: conv.contact.channel?.analysis ?? {},
-              contact: buildContactPromptInput(conv.contact),
+              channel_analysis: contact.channel?.analysis ?? {},
+              contact: buildContactPromptInput(contact),
               strategy: { approach: 'industry_fit' },
               campaign: { goal_text: goalText, value_prop: valueProp },
               recent_posts: recentPosts,
@@ -277,8 +303,8 @@ export function startAgentRunWorker() {
               'safety_filter',
               {
                 draft: v.text,
-                channel_analysis: conv.contact.channel?.analysis ?? {},
-                contact: { id: conv.contact.id },
+                channel_analysis: contact.channel?.analysis ?? {},
+                contact: { id: contact.id },
                 campaign: { name: conv.campaign?.name ?? 'ad-hoc' },
               },
               { conversationId: conv.id },
@@ -316,9 +342,9 @@ export function startAgentRunWorker() {
             }
           }
 
-          if (bestSuggestionId && (conv.contact.status === 'qualified' || conv.contact.status === 'new')) {
+          if (bestSuggestionId && (contact.status === 'qualified' || contact.status === 'new')) {
             await prisma.contact.update({
-              where: { id: conv.contact.id },
+              where: { id: contact.id },
               data: { status: 'contacted' },
             });
           }
@@ -329,6 +355,8 @@ export function startAgentRunWorker() {
               suggestionId: bestSuggestionId,
               text: bestText,
               score: bestScore,
+              scheduledAt,
+              jitterMaxMs: 2 * 60 * 60 * 1000,
             });
           }
 

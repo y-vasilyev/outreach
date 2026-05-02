@@ -33,6 +33,7 @@ export async function conversationsRoutes(app: FastifyInstance) {
       conversationId: params.id,
       text: body.text,
       fromSuggestionId: body.fromSuggestionId,
+      scheduledAt: body.scheduledAt,
       operatorId: req.user.id,
     });
   });
@@ -52,8 +53,13 @@ export async function conversationsRoutes(app: FastifyInstance) {
 
   app.post('/conversations/:id/suggestions/:sid/approve', async (req) => {
     const params = z.object({ id: z.string(), sid: z.string() }).parse(req.params);
-    const body = z.object({ text: z.string().optional() }).parse(req.body ?? {});
-    return conversationsService.approveSuggestion(params.sid, req.user.id, body.text);
+    const body = z
+      .object({
+        text: z.string().optional(),
+        scheduledAt: z.string().datetime().optional(),
+      })
+      .parse(req.body ?? {});
+    return conversationsService.approveSuggestion(params.sid, req.user.id, body.text, body.scheduledAt);
   });
 
   app.post('/conversations/:id/suggestions/:sid/reject', async (req) => {

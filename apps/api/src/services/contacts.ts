@@ -115,7 +115,7 @@ export const contactsService = {
         }),
       },
       include: {
-        channel: { select: { id: true, handle: true, platform: true, title: true } },
+        channel: { select: { id: true, handle: true, platform: true, title: true, description: true } },
       },
       orderBy: { createdAt: 'desc' },
       // Default 1000 (was 200) so the contacts page can "select all" across
@@ -369,6 +369,7 @@ export const contactsService = {
       goalText?: string;
       valueProp?: string;
       mode?: 'auto' | 'assisted' | 'manual';
+      scheduledAt?: string;
     },
   ): Promise<{ ok: true; conversationId: string; created: boolean }> {
     const prisma = getPrisma();
@@ -434,20 +435,26 @@ export const contactsService = {
     });
 
     // If the operator passed inline goal/value (no campaign), tuck them
-    // into the conversation `meta` so agent-run can pick them up. (We do
-    // this rather than mutating an existing Campaign — the goal here is
-    // a one-off chat, not a campaign edit.) Today the agent-run pipeline
-    // pulls from the linked campaign; until that path consumes meta the
-    // inline fields just live there for audit.
-    if (!opts.campaignId && (opts.goalText || opts.valueProp)) {
+    // into `meta` so agent-run can pick them up. `outreachStartAt` gates
+    // auto-send only; suggestions are still generated immediately.
+    if ((!opts.campaignId && (opts.goalText || opts.valueProp)) || opts.scheduledAt) {
+      const currentMeta = conv.meta && typeof conv.meta === 'object'
+        ? (conv.meta as Record<string, unknown>)
+        : {};
       await prisma.conversation.update({
         where: { id: conv.id },
         data: {
           meta: {
-            adHoc: {
-              goalText: opts.goalText ?? '',
-              valueProp: opts.valueProp ?? '',
-            },
+            ...currentMeta,
+            ...(!opts.campaignId && (opts.goalText || opts.valueProp)
+              ? {
+                  adHoc: {
+                    goalText: opts.goalText ?? '',
+                    valueProp: opts.valueProp ?? '',
+                  },
+                }
+              : {}),
+            ...(opts.scheduledAt ? { outreachStartAt: opts.scheduledAt } : {}),
           } as object,
         },
       });

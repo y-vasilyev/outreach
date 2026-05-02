@@ -27,6 +27,7 @@ const campaignId = ref('');
 const mode = ref<'auto' | 'assisted' | 'manual'>('assisted');
 const goalText = ref('');
 const valueProp = ref('');
+const scheduledLocal = ref('');
 
 const { data: tgAccounts } = useQuery({
   queryKey: ['tg-accounts'],
@@ -92,6 +93,7 @@ watch(
     mode.value = 'assisted';
     goalText.value = '';
     valueProp.value = '';
+    scheduledLocal.value = '';
     if (outreachAccounts.value.length > 0) {
       tgAccountId.value = outreachAccounts.value[0]!.id;
     } else {
@@ -107,6 +109,22 @@ const canSubmit = computed(() => {
   return goalText.value.trim().length > 0 && valueProp.value.trim().length > 0;
 });
 
+const contextLines = computed(() => {
+  const c = props.contact;
+  if (!c) return [];
+  const out: Array<{ label: string; text: string }> = [];
+  if (c.label) out.push({ label: 'Контекст контакта', text: c.label });
+  if (c.rawValue && c.rawValue !== c.value) out.push({ label: 'Как найден', text: c.rawValue });
+  if (c.channel?.description) out.push({ label: 'Описание канала', text: truncate(c.channel.description, 600) });
+  return out;
+});
+
+function scheduledIso(): string | undefined {
+  if (!scheduledLocal.value) return undefined;
+  const d = new Date(scheduledLocal.value);
+  return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
+}
+
 const startMut = useMutation({
   mutationFn: () =>
     api.post<{ ok: true; conversationId: string; created: boolean }>(
@@ -116,6 +134,7 @@ const startMut = useMutation({
         ...(campaignId.value ? { campaignId: campaignId.value } : {}),
         ...(goalText.value ? { goalText: goalText.value } : {}),
         ...(valueProp.value ? { valueProp: valueProp.value } : {}),
+        ...(scheduledIso() ? { scheduledAt: scheduledIso() } : {}),
         mode: mode.value,
       },
     ),
@@ -153,6 +172,16 @@ const startMut = useMutation({
             <dt>Reachability</dt>
             <dd><Pill :state="contact.reachability" /></dd>
           </dl>
+          <div v-if="contextLines.length" style="margin-top: 10px; display: grid; gap: 8px;">
+            <div
+              v-for="line in contextLines"
+              :key="line.label"
+              style="border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--paper-2); padding: 8px 10px;"
+            >
+              <div class="muted-2" style="font-size: 10.5px; margin-bottom: 4px;">{{ line.label }}</div>
+              <div style="font-size: 12px; line-height: 1.45; white-space: pre-wrap; color: var(--ink-2);">{{ line.text }}</div>
+            </div>
+          </div>
           <div
             v-if="contact.reachability !== 'reachable_tg'"
             class="muted"
@@ -208,6 +237,13 @@ const startMut = useMutation({
             </Field>
             <Field label="Value-prop" style="grid-column: 1 / -1;">
               <TextareaInput v-model="valueProp" :rows="2" placeholder="доступ к бете / $30 / отчёт" />
+            </Field>
+            <Field
+              label="Старт отправки"
+              style="grid-column: 1 / -1;"
+              help="Подсказка сгенерируется сразу. Для auto-режима отправка уйдёт не раньше этого времени плюс небольшой jitter."
+            >
+              <input class="input" type="datetime-local" v-model="scheduledLocal" />
             </Field>
           </div>
           <div class="muted-2" style="margin-top: 8px; font-size: 11px;">

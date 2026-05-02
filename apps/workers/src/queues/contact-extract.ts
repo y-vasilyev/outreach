@@ -225,6 +225,7 @@ export function startContactExtractWorker() {
               roleGuess: c.role_guess,
               confidence: c.confidence,
               rawValue: c.raw_value,
+              label: c.label ?? null,
               extractedBy: 'both',
             },
             create: {

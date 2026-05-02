@@ -4,6 +4,7 @@ import { getRunner } from '../services/runner.js';
 import { logger } from '../logger.js';
 import { tryAutoApprove } from '../services/auto-approve.js';
 import { buildContactPromptInput } from '../services/agent-input.js';
+import { ensureContactTgProfile } from '../services/contact-profile.js';
 
 interface OpenerOut {
   variants: Array<{ text: string; rationale: string; risk_score: number }>;
@@ -188,10 +189,17 @@ export function startCampaignDispatcher() {
             continue;
           }
 
+          await ensureContactTgProfile(conv.tgAccountId, contact);
+          const contactForPrompt = await prisma.contact.findUnique({
+            where: { id: contact.id },
+            include: { channel: true },
+          });
+          if (!contactForPrompt) continue;
+
           // Pull recent posts for the "one concrete hook" prompt rule —
           // without them the LLM falls back to generic openings.
           const rawPosts =
-            ((contact.channel?.rawData as
+            ((contactForPrompt.channel?.rawData as
               | { posts?: { text?: string; date?: string }[] }
               | null
               | undefined)?.posts ?? []).slice(0, 5);
@@ -202,8 +210,8 @@ export function startCampaignDispatcher() {
 
           try {
             const opener = await runner.run<OpenerOut>('opening_composer', {
-              channel_analysis: contact.channel?.analysis ?? {},
-              contact: buildContactPromptInput(contact),
+              channel_analysis: contactForPrompt.channel?.analysis ?? {},
+              contact: buildContactPromptInput(contactForPrompt),
               strategy: { approach: 'industry_fit' },
               campaign: { goal_text: c.goalText, value_prop: c.valueProp },
               recent_posts: recentPosts,
@@ -219,7 +227,7 @@ export function startCampaignDispatcher() {
             for (const v of opener.variants) {
               const safety = await runner.run<SafetyOut>('safety_filter', {
                 draft: v.text,
-                channel_analysis: contact.channel?.analysis ?? {},
+                channel_analysis: contactForPrompt.channel?.analysis ?? {},
                 contact: { id: contact.id },
                 campaign: { name: c.name },
               }, { conversationId: conv.id });
@@ -258,6 +266,7 @@ export function startCampaignDispatcher() {
                 suggestionId: bestSuggestionId,
                 text: bestText,
                 score: bestScore,
+                jitterMaxMs: 3 * 60 * 60 * 1000,
               });
             }
           } catch (e) {

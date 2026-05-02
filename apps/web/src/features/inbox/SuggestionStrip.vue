@@ -16,6 +16,7 @@ const emit = defineEmits<{ (e: 'pickToDraft', text: string): void }>();
 
 const qc = useQueryClient();
 const chosenId = ref<string | null>(null);
+const scheduledLocal = ref('');
 
 const pending = computed(() => props.suggestions.filter((s) => s.status === 'pending').slice(0, 3));
 const current = computed(() => {
@@ -29,12 +30,16 @@ watch(
 );
 
 const approveMut = useMutation({
-  mutationFn: ({ id, text }: { id: string; text?: string }) =>
-    api.post<void>(`/conversations/${props.conversationId}/suggestions/${id}/approve`, text ? { text } : {}),
+  mutationFn: ({ id, text, scheduledAt }: { id: string; text?: string; scheduledAt?: string }) =>
+    api.post<void>(
+      `/conversations/${props.conversationId}/suggestions/${id}/approve`,
+      { ...(text ? { text } : {}), ...(scheduledAt ? { scheduledAt } : {}) },
+    ),
   onSuccess: () => {
     qc.invalidateQueries({ queryKey: ['conversation-messages', props.conversationId] });
     qc.invalidateQueries({ queryKey: ['conversation-suggestions', props.conversationId] });
     qc.invalidateQueries({ queryKey: ['conversations'] });
+    scheduledLocal.value = '';
     toast.success('Сообщение поставлено в очередь отправки');
   },
   onError: (e: Error) => toast.error('Не удалось одобрить', e.message),
@@ -54,6 +59,12 @@ function pick(id: string): void {
 
 function loadToDraft(): void {
   if (current.value) emit('pickToDraft', current.value.text);
+}
+
+function scheduledIso(): string | undefined {
+  if (!scheduledLocal.value) return undefined;
+  const d = new Date(scheduledLocal.value);
+  return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 
 function pickConf(s: Suggestion): number {
@@ -118,7 +129,18 @@ function tone(s: Suggestion): string {
         <button class="btn sm" @click="loadToDraft">
           <Icon name="edit" :size="11" /><span>В черновик</span>
         </button>
-        <button class="btn primary sm" :disabled="approveMut.isPending.value" @click="approveMut.mutate({ id: current.id })">
+        <input
+          class="input"
+          type="datetime-local"
+          v-model="scheduledLocal"
+          title="Запланировать отправку"
+          style="height: 28px; width: 170px; font-size: 11px;"
+        />
+        <button
+          class="btn primary sm"
+          :disabled="approveMut.isPending.value"
+          @click="approveMut.mutate({ id: current.id, scheduledAt: scheduledIso() })"
+        >
           <Icon name="send" :size="11" /><span>Отправить</span>
         </button>
       </div>
