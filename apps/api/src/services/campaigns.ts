@@ -1,5 +1,5 @@
 import { getPrisma } from '@nosquare/db';
-import { Errors, type CampaignSchedule, isWithinSchedule } from '@nosquare/shared';
+import { Errors } from '@nosquare/shared';
 import type { z } from 'zod';
 import type { CreateCampaignInputZ } from '@nosquare/shared';
 
@@ -158,17 +158,17 @@ export const campaignsService = {
    * Three-step flow:
    *   1. Tag contacts with `cmp:<campaignId>` (preserves the bridge to
    *      the autonomous dispatcher's tags filter).
-   *   2. Pre-flight: detect the most common reasons we *can't* dispatch
-   *      now (campaign not running, no accounts, outside schedule) and
-   *      surface them in the response so the UI can show a clear
-   *      blocker instead of "ничего не появляется".
+   *   2. Pre-flight: detect the reasons we *can't* create Telegram
+   *      conversations at all (no outreach accounts / no active accounts)
+   *      and surface them in the response.
    *   3. If unblocked: round-robin contacts across the campaign's
-   *      outreach pool, upsert conversations, enqueue
+   *      outreach pool, upsert conversations, idempotently enqueue
    *      `outreach_first_message` jobs. The worker generates the opener
    *      and posts suggestions to the conversation.
    *
-   * The dispatcher tick still runs as a backstop and picks up anything
-   * we couldn't create here (e.g. accounts went online after add).
+   * Campaign status and schedule gate sending, not draft preparation:
+   * operators expect pending suggestions to appear right after adding
+   * contacts, even when the campaign is paused or outside work hours.
    */
   async addContacts(id: string, contactIds: string[]) {
     const prisma = getPrisma();
@@ -202,13 +202,12 @@ export const campaignsService = {
       }
     });
 
-    // Pre-flight diagnostics for immediate dispatch.
-    let blocker: 'campaign_not_running' | 'no_accounts' | 'outside_schedule' | 'no_active_accounts' | null = null;
-    if (c.status !== 'running') blocker = 'campaign_not_running';
-    else if (!c.outreachAccountPool || c.outreachAccountPool.length === 0) blocker = 'no_accounts';
-    else if (!isWithinSchedule((c.schedule ?? {}) as CampaignSchedule)) blocker = 'outside_schedule';
+    // Pre-flight diagnostics for immediate conversation creation.
+    let blocker: 'no_accounts' | 'no_active_accounts' | null = null;
+    if (!c.outreachAccountPool || c.outreachAccountPool.length === 0) blocker = 'no_accounts';
 
     let chatsCreated = 0;
+    let suggestionsQueued = 0;
     if (!blocker) {
       const accounts = await prisma.tgAccount.findMany({
         where: { id: { in: c.outreachAccountPool }, status: 'active' },
@@ -221,33 +220,68 @@ export const campaignsService = {
         // stay tagged for the operator's manual outreach flow.
         const reachable = await prisma.contact.findMany({
           where: { id: { in: contactIds }, reachability: 'reachable_tg' },
-          include: { conversations: { where: { campaignId: id }, select: { id: true } } },
+          include: {
+            conversations: {
+              where: { campaignId: id },
+              select: { id: true },
+              orderBy: { createdAt: 'desc' },
+              take: 1,
+            },
+          },
         });
 
         const queues = getQueues();
         let i = 0;
         for (const ct of reachable) {
-          if (ct.conversations.length > 0) continue;
-          const acct = accounts[i % accounts.length]!;
-          i += 1;
-          const conv = await prisma.conversation.upsert({
-            where: { tgAccountId_contactId: { tgAccountId: acct.id, contactId: ct.id } },
-            update: { campaignId: id, mode: c.defaultMode },
-            create: {
-              tgAccountId: acct.id,
-              contactId: ct.id,
+          const existing = ct.conversations[0];
+          let convId = existing?.id;
+          if (!convId) {
+            const acct = accounts[i % accounts.length]!;
+            i += 1;
+            const conv = await prisma.conversation.upsert({
+              where: { tgAccountId_contactId: { tgAccountId: acct.id, contactId: ct.id } },
+              update: { campaignId: id, mode: c.defaultMode },
+              create: {
+                tgAccountId: acct.id,
+                contactId: ct.id,
+                campaignId: id,
+                status: 'active',
+                mode: c.defaultMode,
+              },
+            });
+            convId = conv.id;
+            chatsCreated += 1;
+          }
+
+          const [messageCount, openingSuggestionCount] = await Promise.all([
+            prisma.message.count({ where: { conversationId: convId } }),
+            prisma.suggestion.count({
+              where: {
+                conversationId: convId,
+                agentName: 'opening_composer',
+                status: { in: ['pending', 'approved', 'sent'] },
+              },
+            }),
+          ]);
+          if (messageCount > 0 || openingSuggestionCount > 0) continue;
+
+          await queues.agentRun.add(
+            'outreach_first_message',
+            {
+              pipeline: 'outreach_first_message',
+              conversationId: convId,
               campaignId: id,
-              status: 'active',
-              mode: c.defaultMode,
+              contactId: ct.id,
             },
-          });
-          await queues.agentRun.add('outreach_first_message', {
-            pipeline: 'outreach_first_message',
-            conversationId: conv.id,
-            campaignId: id,
-            contactId: ct.id,
-          });
-          chatsCreated += 1;
+            {
+              attempts: 3,
+              backoff: { type: 'exponential', delay: 5_000 },
+              jobId: `outreach_first_message:${convId}`,
+              removeOnComplete: true,
+              removeOnFail: true,
+            },
+          );
+          suggestionsQueued += 1;
         }
       }
     }
@@ -256,6 +290,7 @@ export const campaignsService = {
       added,
       requested: contactIds.length,
       chatsCreated,
+      suggestionsQueued,
       blocker,
     };
   },

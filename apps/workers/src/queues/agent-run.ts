@@ -316,7 +316,7 @@ export function startAgentRunWorker() {
             }
           }
 
-          if (conv.contact.status === 'qualified' || conv.contact.status === 'new') {
+          if (bestSuggestionId && (conv.contact.status === 'qualified' || conv.contact.status === 'new')) {
             await prisma.contact.update({
               where: { id: conv.contact.id },
               data: { status: 'contacted' },

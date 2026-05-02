@@ -1,5 +1,4 @@
-import type { Prisma } from '@nosquare/db';
-import { getPrisma } from '@nosquare/db';
+import { getPrisma, type Prisma } from '@nosquare/db';
 import { type CampaignSchedule, isWithinSchedule } from '@nosquare/shared';
 import { getRunner } from '../services/runner.js';
 import { logger } from '../logger.js';
@@ -71,14 +70,31 @@ export function startCampaignDispatcher() {
         //     operator who picks an `unknown`-role contact would never
         //     get a chat ("очевидно что хочу написать").
         //   auto:   the existing autonomous discovery filter.
-        // Physical reachability (`reachable_tg`), platform restriction
-        // and "no existing convo for this campaign" apply to BOTH.
+        // Physical reachability (`reachable_tg`) and platform restriction
+        // apply to BOTH. A campaign conversation only disqualifies the
+        // contact when it already has messages or a usable opening
+        // suggestion; a failed/empty opener run should be retried.
         const where: Prisma.ContactWhereInput = {
           reachability: 'reachable_tg',
           ...(filter.platforms && filter.platforms.length > 0
             ? { channel: { platform: { in: filter.platforms as never[] } } }
             : {}),
-          conversations: { none: { campaignId: c.id } },
+          conversations: {
+            none: {
+              campaignId: c.id,
+              OR: [
+                { messages: { some: {} } },
+                {
+                  suggestions: {
+                    some: {
+                      agentName: 'opening_composer',
+                      status: { in: ['pending', 'approved', 'sent'] },
+                    },
+                  },
+                },
+              ],
+            },
+          },
           OR: [
             { tags: { has: manualTag } },
             {
@@ -117,7 +133,10 @@ export function startCampaignDispatcher() {
         });
         if (accounts.length === 0) continue;
 
-        accounts.sort((a, b) => a.sentTodayMsg - b.sentTodayMsg);
+        accounts.sort(
+          (a: { sentTodayMsg: number }, b: { sentTodayMsg: number }) =>
+            a.sentTodayMsg - b.sentTodayMsg,
+        );
 
         // Effective daily cap = stricter of per-account `dailyMsgLimit` and
         // per-campaign `schedule.maxPerDayPerAccount`. Either field acts
@@ -148,19 +167,23 @@ export function startCampaignDispatcher() {
           });
 
           // Don't re-run the opener if this conversation already has any
-          // messages — the candidate filter at line 81 is keyed on
-          // campaignId, so a contact with a *campaignId=null* (manually-
-          // started chat) or a different-campaign conversation can still
-          // make it here, and the upsert above will rebind it to this
-          // campaign. Without this guard the operator sees opening_composer
-          // suggestions popping up in the middle of an ongoing chat.
-          const existingMsgs = await prisma.message.count({
-            where: { conversationId: conv.id },
-          });
-          if (existingMsgs > 0) {
+          // messages or a usable opening suggestion. The candidate filter
+          // above handles campaign-bound conversations, but the upsert may
+          // also bind an older ad-hoc/different-campaign conversation.
+          const [existingMsgs, existingOpeningSuggestions] = await Promise.all([
+            prisma.message.count({ where: { conversationId: conv.id } }),
+            prisma.suggestion.count({
+              where: {
+                conversationId: conv.id,
+                agentName: 'opening_composer',
+                status: { in: ['pending', 'approved', 'sent'] },
+              },
+            }),
+          ]);
+          if (existingMsgs > 0 || existingOpeningSuggestions > 0) {
             logger.debug(
               { conversationId: conv.id, contactId: contact.id, campaignId: c.id },
-              'campaign-dispatcher: conversation already has messages; skipping opener',
+              'campaign-dispatcher: conversation already has opener state; skipping opener',
             );
             continue;
           }
@@ -219,10 +242,12 @@ export function startCampaignDispatcher() {
               }
             }
 
-            await prisma.contact.update({
-              where: { id: contact.id },
-              data: { status: 'contacted' },
-            });
+            if (bestSuggestionId) {
+              await prisma.contact.update({
+                where: { id: contact.id },
+                data: { status: 'contacted' },
+              });
+            }
 
             // Auto-mode: when the conversation is `auto`-mode and the top
             // suggestion is high-confidence + low-risk, send it without

@@ -34,18 +34,15 @@ type AddContactsResponse = {
   added: number;
   requested: number;
   chatsCreated: number;
+  suggestionsQueued: number;
   blocker:
-    | 'campaign_not_running'
     | 'no_accounts'
-    | 'outside_schedule'
     | 'no_active_accounts'
     | null;
 };
 
 const BLOCKER_HINT: Record<NonNullable<AddContactsResponse['blocker']>, string> = {
-  campaign_not_running: 'Кампания не в статусе running — запустите её, чтобы начались отправки.',
   no_accounts: 'В кампании нет TG-аккаунтов — добавьте в настройках кампании.',
-  outside_schedule: 'Сейчас вне расписания кампании. Чаты создадутся в окно работы.',
   no_active_accounts: 'Все TG-аккаунты в cooldown / need_auth. Проверьте на странице аккаунтов.',
 };
 
@@ -63,9 +60,9 @@ const mut = useMutation({
         `Контакты добавлены: ${r.added}${skipped > 0 ? ` (${skipped} уже были)` : ''}`,
         BLOCKER_HINT[r.blocker],
       );
-    } else if (r.chatsCreated > 0) {
+    } else if (r.chatsCreated > 0 || r.suggestionsQueued > 0) {
       toast.success(
-        `Создано чатов: ${r.chatsCreated}`,
+        `Чатов: ${r.chatsCreated}, подсказок в очереди: ${r.suggestionsQueued}`,
         'Опенинги генерируются — увидите их в /inbox через несколько секунд.',
       );
     } else {
