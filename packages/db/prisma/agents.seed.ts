@@ -19,6 +19,7 @@ export interface AgentSeed {
    * v4 — preserve contact context/name hints for opener personalization.
    * v5 — conversion bridge-test rewrite for opener/strategy.
    * v6 — OpenRouter model defaults by agent class.
+   * v7 — rollout bump for formerly v1 agents that may already be UI-edited to v2.
    */
   version: number;
 }
@@ -199,7 +200,7 @@ export const defaultAgentSeeds: AgentSeed[] = [
     userPromptTemplate:
       'Платформа: {{platform}}\nНазвание: {{title}}\nОписание: {{description}}\nСсылки: {{links}}\nПодписчиков: {{followers}}\nПоследние посты:\n{{recent_posts}}\n\nВерни JSON со структурой: {language, topic, audience, format, tone, owner_signals: {is_personal_brand, owner_hint}, red_flags[]}',
     params: { temperature: 0.2, max_tokens: 800 },
-    version: 2,
+    version: 3,
   },
   {
     name: 'contact_extractor',
@@ -229,7 +230,7 @@ export const defaultAgentSeeds: AgentSeed[] = [
     userPromptTemplate:
       'Канал: {{channel_title}}\nАнализ: {{analysis}}\n\nКонтакты:\n{{contacts}}\n\nВерни JSON: {ranked: [{contact_id, score, reason}]}',
     params: { temperature: 0.0, max_tokens: 600 },
-    version: 2,
+    version: 3,
   },
   {
     name: 'approach_strategist',
@@ -273,7 +274,7 @@ export const defaultAgentSeeds: AgentSeed[] = [
     userPromptTemplate:
       'Хвост истории:\n{{history_tail}}\n\nПоследнее входящее: {{last_inbound}}\n\nВерни JSON: {intent, confidence, signals[]}',
     params: { temperature: 0.0, max_tokens: 300 },
-    version: 2,
+    version: 3,
   },
   {
     name: 'safety_filter',
@@ -302,7 +303,7 @@ export const defaultAgentSeeds: AgentSeed[] = [
       max_length: 600,
       allow_links: false,
     },
-    version: 2,
+    version: 3,
   },
   {
     name: 'handoff_decider',
@@ -314,7 +315,7 @@ export const defaultAgentSeeds: AgentSeed[] = [
     userPromptTemplate:
       'Состояние диалога: mode={{mode}}, summary={{summary}}\nХвост истории: {{history_tail}}\nПоследний intent: {{intent}}\nAI confidence (последние): {{ai_recent_confidence}}\nRed-flags: {{red_flags_total}}\n\nВерни JSON: {action, reason, urgency}',
     params: { temperature: 0.0, max_tokens: 250, confidence_threshold: 0.5 },
-    version: 2,
+    version: 3,
   },
   {
     name: 'conversation_summarizer',
@@ -326,7 +327,7 @@ export const defaultAgentSeeds: AgentSeed[] = [
     userPromptTemplate:
       'История:\n{{history}}\n\nПредыдущее саммари: {{previous_summary}}\n\nВерни JSON: {summary, key_facts[], open_questions[]}',
     params: { temperature: 0.2, max_tokens: 600 },
-    version: 2,
+    version: 3,
   },
   {
     name: 'next_action_planner',
@@ -338,7 +339,7 @@ export const defaultAgentSeeds: AgentSeed[] = [
     userPromptTemplate:
       'Состояние: {{conversation_state}}\nИнтенты: {{intent_history}}\nКонтакт: {{contact_meta}}\n\nВерни JSON: {next_action, scheduled_at?, reason}',
     params: { temperature: 0.2, max_tokens: 300 },
-    version: 2,
+    version: 3,
   },
   {
     name: 'quality_reviewer',
@@ -350,6 +351,6 @@ export const defaultAgentSeeds: AgentSeed[] = [
     userPromptTemplate:
       'Драфт: {{draft}}\nИстория: {{conversation_history}}\nКанал: {{channel_analysis}}\nКонтакт: {{contact}}\n\nВерни JSON: {scores: {relevance, tone, grammar, personalization, on_brief}, notes}',
     params: { temperature: 0.2, max_tokens: 400 },
-    version: 2,
+    version: 3,
   },
 ];
