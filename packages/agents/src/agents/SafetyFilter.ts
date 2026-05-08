@@ -9,6 +9,14 @@ export const safetyFilterInputSchema = z.object({
   channel_analysis: z.record(z.unknown()).optional(),
   contact: z.record(z.unknown()).optional(),
   campaign: z.record(z.unknown()).optional(),
+  /**
+   * Campaign AJTBD non_goals — fed into the LLM tone check as
+   * additional risk context. Kept generic: non-goals do NOT become
+   * hard filters here (that's the gate's job in
+   * GoalFitEvaluator). SafetyFilter just biases the risk_score
+   * upward when the draft references a non-goal.
+   */
+  ajtbd_non_goals: z.array(z.string()).optional(),
   /** Optional history to detect "do not message" cases. */
   history: z
     .array(
@@ -55,6 +63,7 @@ const FALLBACK_USER = `Черновик:
 Канал: {{channel_analysis}}
 Контакт: {{contact}}
 Кампания: {{campaign}}
+Anti-цели кампании (non_goals — если черновик их затрагивает, повышай risk_score; не блокируй): {{ajtbd_non_goals}}
 История: {{history}}
 
 Верни JSON.`;
@@ -64,7 +73,7 @@ export const safetyFilter: Agent<SafetyFilterInput, SafetyFilterOutput> = {
   description: 'Финальная проверка исходящего сообщения.',
   inputSchema: safetyFilterInputSchema,
   outputSchema: safetyFilterOutputSchema,
-  variables: ['draft', 'channel_analysis', 'contact', 'campaign', 'history'],
+  variables: ['draft', 'channel_analysis', 'contact', 'campaign', 'ajtbd_non_goals', 'history'],
   defaultModel: 'yandexgpt-lite',
   defaultParams: {
     temperature: 0,
@@ -130,6 +139,7 @@ export const safetyFilter: Agent<SafetyFilterInput, SafetyFilterOutput> = {
         channel_analysis: input.channel_analysis ?? {},
         contact: input.contact ?? {},
         campaign: input.campaign ?? {},
+        ajtbd_non_goals: input.ajtbd_non_goals ?? [],
         history: input.history ?? [],
       },
       outputSchema: safetyFilterOutputSchema,

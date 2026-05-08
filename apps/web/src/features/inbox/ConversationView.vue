@@ -14,7 +14,7 @@ import { api } from '../../lib/api';
 import { toast } from '../../lib/toast';
 import { initials, formatRelative } from '../../lib/format';
 import { avatarColor } from '../../lib/state';
-import type { ChatMessage, ConversationDetail, ConversationListItem, Suggestion } from './types';
+import type { ChatMessage, ConversationDetail, ConversationListItem, ConversationMode, QualityDecision, Suggestion } from './types';
 
 const props = defineProps<{
   conversation: ConversationListItem;
@@ -95,13 +95,29 @@ watch(
 );
 
 const modeMut = useMutation({
-  mutationFn: (mode: 'auto' | 'assisted' | 'manual') =>
+  mutationFn: (mode: ConversationMode) =>
     api.patch<void>(`/conversations/${cId.value}`, { mode }),
   onSuccess: (_v, mode) => {
     qc.invalidateQueries({ queryKey: ['conversation', cId.value] });
     qc.invalidateQueries({ queryKey: ['conversations'] });
     toast.success(`Режим: ${mode}`);
   },
+});
+
+// `quality.gate` realtime — operator-only event emitted by the
+// on_inbound pipeline when GoalFitEvaluator runs (semi_auto/auto
+// only). Latest decision is also persisted on
+// `Conversation.qualityDecision`, but we light up the UI live on
+// receipt so the operator sees the verdict the moment it lands.
+useRoom(() => room.value, 'quality.gate', (event: unknown) => {
+  qc.invalidateQueries({ queryKey: ['conversation', cId.value] });
+  const e = event as QualityDecision & { conversationId: string };
+  if (e?.action === 'handoff_silent') {
+    toast.info(
+      'AI handed off — оператор продолжает',
+      e.reasons?.[0] ?? `score ${e.score?.toFixed(2)}`,
+    );
+  }
 });
 
 const statusMut = useMutation({
@@ -143,14 +159,45 @@ const groupedMessages = computed<DayGroup[]>(() => {
   return Array.from(map.entries()).map(([day, items]) => ({ day, items }));
 });
 
+// Mode picker. Tooltips spell out what each level does — the silent
+// fallback contract of `auto` mode is the load-bearing part of the
+// chat-autonomous-modes change and operators must understand it.
 const dropdownItems = computed(() => [
-  { label: 'Режим: auto', icon: 'play_circle' as const, onClick: () => modeMut.mutate('auto') },
-  { label: 'Режим: assisted', icon: 'sparkle' as const, onClick: () => modeMut.mutate('assisted') },
-  { label: 'Режим: manual', icon: 'user' as const, onClick: () => modeMut.mutate('manual') },
+  {
+    label: 'Режим: auto (полный авто, тихий фоллбек)',
+    icon: 'play_circle' as const,
+    onClick: () => modeMut.mutate('auto'),
+  },
+  {
+    label: 'Режим: semi_auto (авто, иначе подсказка)',
+    icon: 'sparkle' as const,
+    onClick: () => modeMut.mutate('semi_auto'),
+  },
+  {
+    label: 'Режим: assisted (только подсказки)',
+    icon: 'sparkle' as const,
+    onClick: () => modeMut.mutate('assisted'),
+  },
+  {
+    label: 'Режим: manual (только оператор)',
+    icon: 'user' as const,
+    onClick: () => modeMut.mutate('manual'),
+  },
   { divider: true, label: '' },
   { label: 'Поставить на паузу', icon: 'pause_circle' as const, onClick: () => statusMut.mutate('paused') },
   { label: 'Закрыть как done', icon: 'check_circle' as const, onClick: () => statusMut.mutate('done') },
 ]);
+
+// Quality-gate banner: surfaced in the conversation header when the
+// gate's last decision is `handoff_silent`. Cleared automatically
+// when the operator switches mode (server clears qualityDecision in
+// the same tx).
+const gateBanner = computed(() => {
+  const q = c.value.qualityDecision;
+  if (!q || q.action !== 'handoff_silent') return null;
+  const reason = q.reasons?.[0] ?? 'AI оценил, что разговор сошёл с цели кампании';
+  return { reason, decidedAt: q.decidedAt };
+});
 
 function send(): void {
   if (draft.value.trim().length === 0) return;
@@ -270,6 +317,24 @@ useRoom(() => room.value, 'suggestion.approved', () => {
           <MessageBubble v-for="m in g.items" :key="m.id" :msg="m" />
         </div>
       </template>
+    </div>
+
+    <!-- Quality-gate handoff banner -->
+    <div
+      v-if="gateBanner"
+      style="border-top: 1px solid var(--line); background: var(--warn-bg); color: var(--warn); padding: 6px 14px; font-size: 11.5px; display: flex; align-items: center; gap: 8px;"
+    >
+      <Icon name="flag" :size="12" />
+      <span><strong>AI handed off:</strong> {{ gateBanner.reason }}</span>
+      <span style="flex: 1;" />
+      <button
+        class="btn ghost sm"
+        :disabled="modeMut.isPending.value"
+        @click="modeMut.mutate('auto')"
+        title="Вернуть диалог в авто-режим (квалити-gate начнёт оценивать заново)"
+      >
+        <Icon name="play_circle" :size="12" /><span>Resume auto</span>
+      </button>
     </div>
 
     <!-- Summary banner -->

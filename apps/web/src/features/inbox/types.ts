@@ -32,11 +32,20 @@ export interface ConversationContact {
   channel?: ConversationChannel;
 }
 
+export type ConversationMode = 'auto' | 'semi_auto' | 'assisted' | 'manual';
+
+export interface QualityDecision {
+  score: number;
+  action: 'continue' | 'soften' | 'handoff_silent';
+  reasons: string[];
+  decidedAt: string;
+}
+
 export interface ConversationListItem {
   id: string;
   contact?: ConversationContact;
   status: 'active' | 'paused' | 'done' | 'failed';
-  mode: 'auto' | 'assisted' | 'manual';
+  mode: ConversationMode;
   lastMessageText?: string;
   lastMessageAt?: string;
   lastInboundAt?: string | null;
@@ -49,6 +58,8 @@ export interface ConversationDetail extends ConversationListItem {
   summary?: string | null;
   meta?: Record<string, unknown>;
   tgAccount?: { label: string; phone: string };
+  qualityDecision?: QualityDecision | null;
+  lastSyncedAt?: string | null;
 }
 
 export interface ChatMessage {

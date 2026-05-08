@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { CampaignAjtbdZ } from '@nosquare/shared/schemas';
+
 import type { Agent } from '../types.js';
 import { invokeJson } from './_runtime.js';
 import { IntentTargetCoerced } from './_coerce.js';
@@ -8,6 +10,14 @@ export const replyComposerInputSchema = z.object({
   channel_analysis: z.record(z.unknown()),
   contact: z.record(z.unknown()),
   campaign: z.record(z.unknown()),
+  /**
+   * Structured AJTBD framing for the campaign. Optional at the schema
+   * boundary (so unit tests and ad-hoc invocations don't break), but
+   * the on_inbound pipeline always provides it — see
+   * `apps/workers/src/queues/agent-run.ts`. Replaces the
+   * empty-string `goal_text` / `value_prop` previously passed in.
+   */
+  ajtbd: CampaignAjtbdZ.optional(),
   conversation_history: z
     .array(
       z.object({
@@ -99,6 +109,12 @@ const FALLBACK_USER = `Канал: {{channel_analysis}}
 Контакт: {{contact}}
 Кампания: цель — {{goal_text}}, value-prop — {{value_prop}}
 
+AJTBD кампании (структурированный контекст — на что собеседник ловит "это про меня"):
+{{ajtbd}}
+
+Категорически НЕ цель этой кампании (non_goals — если разговор сваливается сюда, оператор подхватит сам, не пытайся вывозить):
+{{non_goals}}
+
 Резюме диалога: {{conversation_summary}}
 
 История диалога:
@@ -117,6 +133,7 @@ export const replyComposer: Agent<ReplyComposerInput, ReplyComposerOutput> = {
     'channel_analysis',
     'contact',
     'campaign',
+    'ajtbd',
     'conversation_history',
     'conversation_summary',
     'last_inbound',
@@ -125,17 +142,24 @@ export const replyComposer: Agent<ReplyComposerInput, ReplyComposerOutput> = {
   defaultParams: { temperature: 0.6, max_tokens: 800 },
   async run(input, ctx) {
     // Split campaign into goal_text / value_prop scalars so the template
-    // can reference them directly. The template also still has access to
-    // the full {{campaign}} object for completeness.
+    // can still reference them (some seed prompts predate AJTBD). The
+    // template also has access to the structured {{ajtbd}} block.
     const campaign = input.campaign as { goal_text?: unknown; value_prop?: unknown };
+    const ajtbd = input.ajtbd ?? null;
     return invokeJson({
       ctx,
       vars: {
         channel_analysis: input.channel_analysis,
         contact: input.contact,
         campaign: input.campaign,
-        goal_text: typeof campaign.goal_text === 'string' ? campaign.goal_text : '',
-        value_prop: typeof campaign.value_prop === 'string' ? campaign.value_prop : '',
+        ajtbd,
+        goal_text:
+          ajtbd?.job ??
+          (typeof campaign.goal_text === 'string' ? campaign.goal_text : ''),
+        value_prop:
+          ajtbd?.desired_outcome ??
+          (typeof campaign.value_prop === 'string' ? campaign.value_prop : ''),
+        non_goals: ajtbd?.non_goals ?? [],
         conversation_history: input.conversation_history,
         conversation_summary: input.conversation_summary ?? '',
         last_inbound: input.last_inbound,

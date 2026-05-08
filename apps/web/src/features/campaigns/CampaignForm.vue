@@ -11,7 +11,7 @@ import TagInput from '../../components/TagInput.vue';
 import Icon from '../../components/Icon.vue';
 import { api } from '../../lib/api';
 import { toast } from '../../lib/toast';
-import type { Campaign } from './types';
+import type { Campaign, CampaignAjtbd } from './types';
 import type { TgAccount } from '../tg-accounts/types';
 
 const props = defineProps<{ open: boolean; campaign: Campaign | null }>();
@@ -21,7 +21,21 @@ const emit = defineEmits<{ (e: 'close'): void; (e: 'saved'): void }>();
 const name = ref('');
 const goal = ref('');
 const valueProp = ref('');
-const mode = ref<'auto' | 'assisted' | 'manual'>('assisted');
+const mode = ref<'auto' | 'semi_auto' | 'assisted' | 'manual'>('assisted');
+
+// AJTBD framing — propagated into ReplyComposer / HandoffDecider /
+// SafetyFilter / GoalFitEvaluator on every inbound. Operators see /
+// edit it here; the migration scaffolds it from goalText/valueProp
+// for legacy campaigns. Empty arrays are valid; missing keys are
+// not.
+const ajtbdJob = ref('');
+const ajtbdWhen = ref('');
+const ajtbdDesiredOutcome = ref('');
+const ajtbdPush = ref<string[]>([]);
+const ajtbdPull = ref<string[]>([]);
+const ajtbdAnxieties = ref<string[]>([]);
+const ajtbdHabits = ref<string[]>([]);
+const ajtbdNonGoals = ref<string[]>([]);
 
 // ─── Target filter (audience) ───
 const filterPlatforms = ref<string[]>(['telegram']);
@@ -109,6 +123,16 @@ watch(
       valueProp.value = c.valueProp;
       mode.value = c.defaultMode;
 
+      const a = c.ajtbd;
+      ajtbdJob.value = a?.job ?? c.goalText;
+      ajtbdWhen.value = a?.when ?? '';
+      ajtbdDesiredOutcome.value = a?.desired_outcome ?? c.valueProp;
+      ajtbdPush.value = a?.forces?.push ?? [];
+      ajtbdPull.value = a?.forces?.pull ?? [];
+      ajtbdAnxieties.value = a?.forces?.anxieties ?? [];
+      ajtbdHabits.value = a?.forces?.habits ?? [];
+      ajtbdNonGoals.value = a?.non_goals ?? [];
+
       const f = (c.targetFilter ?? {}) as {
         platforms?: string[];
         roleGuess?: string[];
@@ -139,6 +163,14 @@ watch(
       goal.value = '';
       valueProp.value = '';
       mode.value = 'assisted';
+      ajtbdJob.value = '';
+      ajtbdWhen.value = '';
+      ajtbdDesiredOutcome.value = '';
+      ajtbdPush.value = [];
+      ajtbdPull.value = [];
+      ajtbdAnxieties.value = [];
+      ajtbdHabits.value = [];
+      ajtbdNonGoals.value = [];
       filterPlatforms.value = ['telegram'];
       filterRoles.value = ['ad_manager', 'owner'];
       filterLanguages.value = [];
@@ -187,10 +219,24 @@ const mut = useMutation({
       maxPerDayPerAccount: scheduleMaxPerDay.value,
     };
 
+    const ajtbd: CampaignAjtbd = {
+      job: ajtbdJob.value || goal.value,
+      when: ajtbdWhen.value,
+      forces: {
+        push: ajtbdPush.value,
+        pull: ajtbdPull.value,
+        anxieties: ajtbdAnxieties.value,
+        habits: ajtbdHabits.value,
+      },
+      desired_outcome: ajtbdDesiredOutcome.value || valueProp.value,
+      non_goals: ajtbdNonGoals.value,
+    };
+
     const body = {
       name: name.value,
       goalText: goal.value,
       valueProp: valueProp.value,
+      ajtbd,
       defaultMode: mode.value,
       targetFilter,
       agentOverrides,
@@ -233,7 +279,8 @@ function togglePoolAccount(id: string): void {
             <SelectInput
               v-model="mode as string"
               :options="[
-                { value: 'auto', label: 'auto — ИИ отправляет сам (low-risk)' },
+                { value: 'auto', label: 'auto — полный авто, тихий фоллбек' },
+                { value: 'semi_auto', label: 'semi_auto — авто, иначе подсказка' },
                 { value: 'assisted', label: 'assisted — оператор подтверждает' },
                 { value: 'manual', label: 'manual — оператор пишет сам' },
               ]"
@@ -244,6 +291,43 @@ function togglePoolAccount(id: string): void {
           </Field>
           <Field label="Value-prop (что получит респондент)" style="grid-column: 1 / -1;">
             <TextareaInput v-model="valueProp" :rows="2" placeholder="доступ к бете / $30 / итоговый отчёт по индустрии" />
+          </Field>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── AJTBD framing ─── -->
+    <div class="card" style="margin-top: 12px;">
+      <div class="card-head">
+        <Icon name="sparkle" :size="12" />
+        <span>AJTBD — что делает кампанию своей</span>
+        <span class="muted-2" style="margin-left: 6px;">пробрасывается во все агенты диалога</span>
+      </div>
+      <div class="card-body">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <Field label="Job (что мы хотим сделать)" style="grid-column: 1 / -1;" help='Формула: "Когда [ситуация], я хочу [мотивация], чтобы [результат]"'>
+            <TextareaInput v-model="ajtbdJob" :rows="2" placeholder="Провести 15-минутное CustDev-интервью с автором канала." />
+          </Field>
+          <Field label="When (триггер / ситуация)" style="grid-column: 1 / -1;">
+            <TextareaInput v-model="ajtbdWhen" :rows="2" placeholder="Когда автор начинает получать первые входящие от рекламодателей." />
+          </Field>
+          <Field label="Desired outcome (как выглядит успех)" style="grid-column: 1 / -1;">
+            <TextareaInput v-model="ajtbdDesiredOutcome" :rows="2" placeholder="Согласие на интервью + договорённость о времени." />
+          </Field>
+          <Field label="Push (что выталкивает)">
+            <TagInput v-model="ajtbdPush" placeholder="Push-сила и Enter" />
+          </Field>
+          <Field label="Pull (к чему тянет)">
+            <TagInput v-model="ajtbdPull" placeholder="Pull-сила и Enter" />
+          </Field>
+          <Field label="Anxieties (опасения)">
+            <TagInput v-model="ajtbdAnxieties" placeholder="Опасение и Enter" />
+          </Field>
+          <Field label="Habits (текущая привычка)">
+            <TagInput v-model="ajtbdHabits" placeholder="Привычка и Enter" />
+          </Field>
+          <Field label="Non-goals (anti-цели — не CustDev)" style="grid-column: 1 / -1;" help="Если разговор сваливается сюда, GoalFitEvaluator незаметно передаёт оператору.">
+            <TagInput v-model="ajtbdNonGoals" placeholder="Anti-цель и Enter" />
           </Field>
         </div>
       </div>

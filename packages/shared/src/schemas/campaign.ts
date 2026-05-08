@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import { PlatformZ } from './common.js';
 import { RoleGuessZ } from './contact.js';
+import { CampaignAjtbdZ } from './ajtbd.js';
 
-export const CampaignModeZ = z.enum(['auto', 'assisted', 'manual']);
+export const CampaignModeZ = z.enum(['auto', 'semi_auto', 'assisted', 'manual']);
 export const CampaignStatusZ = z.enum(['draft', 'running', 'paused', 'finished']);
 
 export const TargetFilterZ = z
@@ -32,6 +33,7 @@ export const CampaignZ = z.object({
   name: z.string(),
   goalText: z.string(),
   valueProp: z.string(),
+  ajtbd: CampaignAjtbdZ.nullable(),
   targetFilter: TargetFilterZ,
   agentOverrides: z.record(z.unknown()).default({}),
   outreachAccountPool: z.array(z.string()),
@@ -45,6 +47,7 @@ export const CreateCampaignInputZ = z.object({
   name: z.string().min(1),
   goalText: z.string().min(1),
   valueProp: z.string().min(1),
+  ajtbd: CampaignAjtbdZ.optional(),
   targetFilter: TargetFilterZ,
   agentOverrides: z.record(z.unknown()).default({}),
   outreachAccountPool: z.array(z.string()).default([]),

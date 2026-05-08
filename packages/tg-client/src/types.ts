@@ -78,6 +78,32 @@ export interface SendMessageResult {
   sentAt: string;
 }
 
+/**
+ * One historical message recovered via `fetchHistorySince`. Same wire
+ * shape as IncomingMessage so the on-open sync path can hand it
+ * straight to the same persistence helper that `tg-listen` uses.
+ *
+ * `direction` distinguishes our own outbound echoes from contact
+ * messages — the sync should persist only inbound, but we surface
+ * outbound too so callers can update their local view if needed.
+ */
+export interface HistoryMessage {
+  tgAccountId: string;
+  /** TG user id of the OTHER party in the 1-1 chat. */
+  peerTgUserId: string;
+  /** TG user id of whoever sent this message (== peerTgUserId for inbound, our id for outbound). */
+  fromTgUserId: string;
+  text: string;
+  tgMsgId: string;
+  /** ISO timestamp of when TG says the message was sent. */
+  sentAt: string;
+  /** True when the message was sent by our account (outbound echo from history). */
+  out: boolean;
+  fromUsername?: string;
+  fromFirstName?: string;
+  fromLastName?: string;
+}
+
 export interface IncomingMessage {
   tgAccountId: string;
   fromTgUserId: string;
@@ -152,6 +178,24 @@ export interface TelegramClientHandle {
   getRecentPosts(handle: string, limit: number): Promise<RecentPost[]>;
   resolveUser(usernameOrId: string): Promise<ResolvedUser>;
   sendMessage(toUsernameOrId: string, text: string): Promise<SendMessageResult>;
+
+  /**
+   * Fetch the most recent messages from the 1-1 chat with `peerKey`,
+   * bounded to `limit` (≤ 50) descending. When `sinceTgMsgId` is
+   * provided, returns only messages strictly newer than that id. Used
+   * by the on-open conversation-sync path to backfill messages
+   * received while the workers were offline.
+   *
+   * Wraps `messages.getHistory` (or GramJS `client.getMessages`,
+   * which is the equivalent helper). Results are mapped to the
+   * `HistoryMessage` wire shape so consumers don't depend on the
+   * GramJS Message class.
+   */
+  fetchHistorySince(opts: {
+    peerKey: string;
+    sinceTgMsgId?: string;
+    limit?: number;
+  }): Promise<HistoryMessage[]>;
 
   /**
    * Subscribe to incoming TG private messages on this session. Returns an

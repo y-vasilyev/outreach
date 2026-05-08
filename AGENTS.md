@@ -374,6 +374,67 @@ interface AgentContext {
 
 ---
 
+### 13. GoalFitEvaluator — `goal_fit_evaluator`
+Quality-gate авто-режима: оценивает goal-fit черновика и истории к AJTBD кампании. Запускается только в `semi_auto` / `auto` (skip для `manual` / `assisted`).
+
+**Input**
+```ts
+{
+  ajtbd: CampaignAjtbd,
+  history_tail: string[],   // последние ≤ 8 строк
+  intent: { intent, confidence },
+  handoff: { action, reason },
+  draft: string,            // top variant от reply_composer
+  previous_decision: { score, action, decidedAt } | null
+}
+```
+
+**Output**
+```ts
+{
+  score: 0..1,
+  action: 'continue' | 'soften' | 'handoff_silent',
+  reasons: string[]
+}
+```
+
+**Композиция с другими сигналами** (см. `apps/workers/src/services/auto-approve.ts`):
+- `mode = manual | assisted`: gate не запускается, авто-отправки нет.
+- `mode = semi_auto`: авто-отправка iff `safety.allow && (1 - risk_score) ≥ T_safety && gate.action ∈ {continue, soften} && gate.score ≥ T_semi_auto_goalfit`.
+- `mode = auto`: авто-отправка iff то же + `gate.action == continue` + `gate.score ≥ T_auto_goalfit`.
+
+**Hysteresis** (борьба с одиночными ложными хэндоффами): `handoff_silent` переводит диалог в `assisted` ТОЛЬКО когда (а) предыдущее решение тоже было `handoff_silent`, ИЛИ (б) текущий `score ≤ 0.3`.
+
+**Silent fallback contract**: при флипе из `auto` в `assisted` система:
+- НЕ создаёт исходящих сообщений и не ставит задачи в `tg-send`,
+- НЕ публикует событий в контактные realtime-каналы,
+- эмитит `quality.gate` событие ТОЛЬКО в operator-room,
+- оставляет лучший safe-черновик как `pending` suggestion для оператора.
+
+Контакт видит только естественную задержку оператора — никаких "сейчас передаю человеку" или резких изменений тона.
+
+**Модель**: дешёвая (Haiku-class). Cap on input: 8 trailing messages, 350 max_tokens.
+
+---
+
+## Режимы диалога (`Conversation.mode`)
+
+| Режим | Кто отвечает | Gate | Auto-send |
+|---|---|---|---|
+| `manual` | только оператор | skip | нет |
+| `assisted` | оператор подтверждает draft | skip | нет |
+| `semi_auto` | ИИ автоматом, иначе draft | runs | iff safety + gate (`continue`/`soften`) ≥ `T_semi_auto_goalfit` |
+| `auto` | ИИ полностью; молчаливый фоллбек | runs | iff safety + gate == `continue` ≥ `T_auto_goalfit` |
+
+**Пороги по умолчанию** (env-tunable, см. `auto-approve.ts`):
+- `T_safety = 0.8` — `(1 - risk_score)` от `safety_filter`.
+- `T_semi_auto_goalfit = 0.6` — gate.score для semi_auto.
+- `T_auto_goalfit = 0.75` — gate.score для строгого auto.
+
+Per-campaign override через `Campaign.agentOverrides.goal_fit_evaluator.params`.
+
+---
+
 ## Пайплайны
 
 Пайплайны — данные (`Pipeline = { steps: Step[] }`), исполняются `Orchestrator`.
@@ -407,25 +468,33 @@ interface AgentContext {
 ```
 
 ### `on_inbound`
-Триггер: входящее сообщение.
+Триггер: входящее сообщение (push-листенер `tg-listen` или on-open sync — см. `apps/api/src/services/conversation-sync.ts`).
+
 ```
-1. (если history_len % 20 == 0) ConversationSummarizer
-2. IntentClassifier
-3. HandoffDecider
-4. switch action:
-     'operator_now':
-        conversation.mode = 'manual'
-        notify operator с причиной и urgency
-     'ai_suggest_only':
-        conversation.mode = 'assisted'
-        ReplyComposer (2 варианта) → SafetyFilter → suggestion-ы
-     'ai_continue':
-        ReplyComposer (2 варианта) → SafetyFilter → NextActionPlanner
-        if scheduled_at вблизи (< 1 мин):
-           message(pending) + tg-send
-        else:
-           suggestion-ы + scheduled_at, отправит cron
+1. resolveCampaignAjtbd(conv.campaign) — загружаем AJTBD один раз на run.
+   Если кампания есть, но ajtbd null/невалиден — fail explicit (не молчим).
+2. (если history_len % 20 == 0) ConversationSummarizer
+3. IntentClassifier
+4. HandoffDecider (получает ajtbd: non_goals, desired_outcome)
+5. if handoff.action == 'operator_now':
+     conversation.mode = 'manual'; notify operator; gate skipped.
+6. ReplyComposer (получает ajtbd) → variants[]
+7. for each variant: SafetyFilter (получает ajtbd_non_goals)
+   → пишем `pending` suggestion для каждого safe-варианта.
+8. if conv.mode ∈ {semi_auto, auto} AND есть safe-вариант AND ajtbd:
+     GoalFitEvaluator(ajtbd, history_tail≤8, intent, handoff, top.draft,
+                      previous_decision)
+     → tx: persist Conversation.qualityDecision (всегда),
+            optionally Conversation.mode = 'assisted' (по hysteresis).
+     → publishRealtime('quality.gate', operator-room only).
+     → if flipped to 'assisted': оставить best suggestion `pending`,
+        НЕ enqueue tg-send, НЕ создавать исходящее. Return.
+9. tryAutoApprove(conversationId, suggestionId, text, score, gate?):
+     Композиция safety + gate + mode (см. таблицу выше).
+     Если разрешено — message(pending) + tg-send.
 ```
+
+**Conversation sync на открытии**: при `GET /conversations/:id` API вызывает `ConversationSync.syncOne(id)` с hard-budget 1500мс. Sync дёргает `messages.getHistory` через `tg-client.fetchHistorySince`, дедуплицирует по `Message.tgMsgId`, сохраняет пропущенные inbound через тот же путь, что `tg-listen`, и enqueue-ит `agent-run on_inbound` ТОЛЬКО для самого свежего нового inbound. Лимит 50 сообщений descending; FloodWait → лог + counter `tg.flood_wait`, без retry inline.
 
 ### `followup_check` (cron)
 ```

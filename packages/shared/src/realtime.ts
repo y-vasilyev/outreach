@@ -107,6 +107,26 @@ export interface SuggestionApprovedEvent {
   auto?: boolean;
 }
 
+/**
+ * Emitted by the on_inbound pipeline whenever the GoalFitEvaluator gate
+ * produces a decision in `semi_auto` / `auto` conversations. Operator
+ * UI uses it to surface the latest goal-fit verdict (banner +
+ * "AI handed off" indicator) without polling.
+ *
+ * **Routing**: this event is published only to the operator-side
+ * realtime channel(s) for the conversation. It must NOT reach any
+ * contact-facing surface — the silent-fallback contract requires the
+ * contact to perceive nothing when the AI hands off.
+ */
+export interface QualityGateEvent {
+  type: 'quality.gate';
+  conversationId: string;
+  score: number;
+  action: 'continue' | 'soften' | 'handoff_silent';
+  reasons: string[];
+  decidedAt: string;
+}
+
 export type RealtimeEvent =
   | MessageEvent
   | SuggestionEvent
@@ -117,4 +137,5 @@ export type RealtimeEvent =
   | CampaignTickEvent
   | DashboardEvent
   | OperatorAssignmentEvent
-  | AgentFailedEvent;
+  | AgentFailedEvent
+  | QualityGateEvent;

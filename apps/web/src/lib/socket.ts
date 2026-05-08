@@ -73,11 +73,19 @@ export interface RealtimeEvents {
   'suggestion.new': { conversationId: string; suggestionId: string };
   'suggestion.approved': { conversationId: string; suggestionId: string; auto?: boolean };
   'status.changed': { conversationId: string; status: string };
-  'mode.changed': { conversationId: string; mode: 'auto' | 'assisted' | 'manual' };
+  'mode.changed': { conversationId: string; mode: 'auto' | 'semi_auto' | 'assisted' | 'manual' };
   'channel.progress': { channelId: string; status: string; pct?: number };
   'campaign.tick': { campaignId: string; sent?: number; replies?: number };
   'dashboard.update': Record<string, number>;
   'operator.assigned': { conversationId: string; reason: string; urgency: 'low' | 'normal' | 'high' };
+  'agent.failed': { conversationId: string; agentName: string; code?: string; reason: string };
+  'quality.gate': {
+    conversationId: string;
+    score: number;
+    action: 'continue' | 'soften' | 'handoff_silent';
+    reasons: string[];
+    decidedAt: string;
+  };
 }
 
 export function useRoom<E extends keyof RealtimeEvents>(

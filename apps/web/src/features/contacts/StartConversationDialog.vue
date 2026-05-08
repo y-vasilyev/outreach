@@ -24,7 +24,7 @@ const isOpen = computed(() => !!props.contact);
 
 const tgAccountId = ref('');
 const campaignId = ref('');
-const mode = ref<'auto' | 'assisted' | 'manual'>('assisted');
+const mode = ref<'auto' | 'semi_auto' | 'assisted' | 'manual'>('assisted');
 const goalText = ref('');
 const valueProp = ref('');
 const scheduledLocal = ref('');

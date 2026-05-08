@@ -29,7 +29,7 @@ export type ChannelStatus =
   | 'done'
   | 'failed';
 
-export type ConversationMode = 'auto' | 'assisted' | 'manual';
+export type ConversationMode = 'auto' | 'semi_auto' | 'assisted' | 'manual';
 export type ConversationStatus = 'active' | 'paused' | 'done' | 'failed';
 export type MessageDirection = 'in' | 'out';
 export type MessageSender = 'contact' | 'ai' | 'operator' | 'system';

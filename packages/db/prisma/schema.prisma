@@ -107,6 +107,7 @@ enum CampaignStatus {
 
 enum ConversationMode {
   auto
+  semi_auto
   assisted
   manual
 }
@@ -295,6 +296,12 @@ model Campaign {
   name                 String
   goalText             String
   valueProp            String
+  // Structured AJTBD framing. Validated via zod (`CampaignAjtbdZ` in
+  // packages/shared). Nullable so legacy rows don't trip migrations; the
+  // on_inbound pipeline backfills a scaffold from goalText/valueProp via
+  // the data migration in 4_chat_autonomous_modes, and the runtime fails
+  // explicitly if it is still null when an agent needs it.
+  ajtbd                Json?
   targetFilter         Json           @default("{}")
   agentOverrides       Json           @default("{}")
   outreachAccountPool  String[]       @default([])
@@ -323,6 +330,14 @@ model Conversation {
   assignedOperator     User?              @relation("ConversationOperator", fields: [assignedOperatorId], references: [id], onDelete: SetNull)
   lastInboundAt        DateTime?
   lastOutboundAt       DateTime?
+  // Latest snapshot from the GoalFitEvaluator gate when the conversation
+  // is in `semi_auto`/`auto` mode: { score, action, reasons[],
+  // agentRunId, decidedAt }. Cleared on any operator-driven mode change.
+  qualityDecision      Json?
+  // Set whenever the API on-open sync (`ConversationSync.syncOne`)
+  // successfully fetches history for this peer. Used by the inbox UI's
+  // "Syncing…" hint and by metrics that detect stale push coverage.
+  lastSyncedAt         DateTime?
   summary              String?
   meta                 Json               @default("{}")
   createdAt            DateTime           @default(now())

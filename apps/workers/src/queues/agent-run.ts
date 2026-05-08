@@ -1,6 +1,7 @@
 import { Worker } from 'bullmq';
 import { getRedis } from '../redis.js';
-import { AgentRunJobZ, QueueNames } from '@nosquare/shared';
+import { AgentRunJobZ, QueueNames, CampaignAjtbdZ, type CampaignAjtbd } from '@nosquare/shared';
+import { Errors } from '@nosquare/shared/errors';
 import { getPrisma } from '@nosquare/db';
 import { logger } from '../logger.js';
 import { publishRealtime } from '../services/realtime-emit.js';
@@ -31,6 +32,47 @@ interface SafetyOut {
   rewrite_hint?: string;
   risk_score: number;
 }
+interface GateOut {
+  score: number;
+  action: 'continue' | 'soften' | 'handoff_silent';
+  reasons: string[];
+}
+
+interface PriorQualityDecision {
+  action?: GateOut['action'];
+  score?: number;
+  decidedAt?: string;
+}
+
+/**
+ * Hysteresis rule (chat-autonomous-modes spec, conversation-quality-gate):
+ * a `handoff_silent` action triggers a mode flip only when EITHER
+ *   (a) the immediately-previous decision was also `handoff_silent`, OR
+ *   (b) the current `score ≤ 0.3` (severe single-turn fit failure).
+ * Anything else is recorded as a decision but does NOT flip the mode.
+ */
+function shouldFlipOnHandoff(current: GateOut, previous: PriorQualityDecision | null): boolean {
+  if (current.action !== 'handoff_silent') return false;
+  if (current.score <= 0.3) return true;
+  return previous?.action === 'handoff_silent';
+}
+
+function readPriorQualityDecision(value: unknown): PriorQualityDecision | null {
+  if (!value || typeof value !== 'object') return null;
+  const v = value as { action?: unknown; score?: unknown; decidedAt?: unknown };
+  const action =
+    v.action === 'continue' || v.action === 'soften' || v.action === 'handoff_silent'
+      ? v.action
+      : undefined;
+  const score = typeof v.score === 'number' ? v.score : undefined;
+  const decidedAt = typeof v.decidedAt === 'string' ? v.decidedAt : undefined;
+  if (!action && score === undefined) return null;
+  return {
+    ...(action ? { action } : {}),
+    ...(score !== undefined ? { score } : {}),
+    ...(decidedAt ? { decidedAt } : {}),
+  };
+}
 
 function readAdHocCampaign(meta: unknown): { goalText: string; valueProp: string } {
   if (!meta || typeof meta !== 'object') return { goalText: '', valueProp: '' };
@@ -49,6 +91,41 @@ function readOutreachStartAt(meta: unknown): string | undefined {
   return typeof v === 'string' && v.length > 0 ? v : undefined;
 }
 
+/**
+ * Resolve the AJTBD framing for a conversation. Returns a parsed
+ * `CampaignAjtbd` when the attached campaign has one, or `undefined`
+ * when the conversation is ad-hoc (no campaign).
+ *
+ * **Throws** when the conversation IS attached to a campaign but that
+ * campaign's `ajtbd` column is null or fails zod validation. Per
+ * `chat-autonomous-modes` design: post-migration every campaign should
+ * have a populated AJTBD (the migration backfills a scaffold from
+ * goalText/valueProp). A null AJTBD therefore indicates a config bug
+ * (e.g. campaign created via a code path that bypassed the zod schema)
+ * — we fail loud rather than fall back to a hardcoded default, which
+ * would silently degrade quality across the inbound pipeline.
+ */
+function resolveCampaignAjtbd(campaign: {
+  id: string;
+  ajtbd: unknown;
+} | null | undefined): CampaignAjtbd | undefined {
+  if (!campaign) return undefined;
+  if (campaign.ajtbd === null || campaign.ajtbd === undefined) {
+    throw Errors.internal(
+      `campaign ${campaign.id} has no ajtbd; expected scaffold from migration 4_chat_autonomous_modes`,
+      { campaignId: campaign.id },
+    );
+  }
+  const parsed = CampaignAjtbdZ.safeParse(campaign.ajtbd);
+  if (!parsed.success) {
+    throw Errors.internal(
+      `campaign ${campaign.id} has invalid ajtbd shape`,
+      { campaignId: campaign.id, error: parsed.error.message },
+    );
+  }
+  return parsed.data;
+}
+
 export function startAgentRunWorker() {
   const worker = new Worker(
     QueueNames.agentRun,
@@ -61,9 +138,18 @@ export function startAgentRunWorker() {
           if (!data.conversationId) throw new Error('conversationId required');
           const conv = await prisma.conversation.findUnique({
             where: { id: data.conversationId },
-            include: { contact: { include: { channel: true } } },
+            include: {
+              contact: { include: { channel: true } },
+              campaign: { select: { id: true, ajtbd: true, goalText: true, valueProp: true } },
+            },
           });
           if (!conv) throw new Error('conversation not found');
+
+          // Load AJTBD up-front so every agent in this run sees the same
+          // framing. Throws (caught by BullMQ → retried/failed) when a
+          // campaign exists but its ajtbd is missing/invalid — see
+          // resolveCampaignAjtbd doc.
+          const ajtbd = resolveCampaignAjtbd(conv.campaign);
 
           const messages = await prisma.message.findMany({
             where: { conversationId: conv.id },
@@ -106,6 +192,7 @@ export function startAgentRunWorker() {
                 history_tail: historyTail,
               },
               intent: { intent: intent.intent, confidence: intent.confidence },
+              ...(ajtbd ? { ajtbd } : {}),
               ai_recent_confidence: [intent.confidence],
               red_flags_total: 0,
             },
@@ -149,7 +236,14 @@ export function startAgentRunWorker() {
             {
               channel_analysis: conv.contact.channel?.analysis ?? {},
               contact: buildContactPromptInput(conv.contact),
-              campaign: { goal_text: '', value_prop: '' },
+              // Keep the legacy campaign block populated when we have one
+              // — old prompt templates still reference {{goal_text}} /
+              // {{value_prop}}. The new AJTBD block lives alongside.
+              campaign: {
+                goal_text: conv.campaign?.goalText ?? '',
+                value_prop: conv.campaign?.valueProp ?? '',
+              },
+              ...(ajtbd ? { ajtbd } : {}),
               conversation_history: messages.map((m) => ({
                 direction: m.direction === 'in_' ? 'in' : 'out',
                 sender: m.sender,
@@ -179,6 +273,7 @@ export function startAgentRunWorker() {
                 channel_analysis: conv.contact.channel?.analysis ?? {},
                 contact: { id: conv.contact.id },
                 campaign: {},
+                ajtbd_non_goals: ajtbd?.non_goals ?? [],
               },
               { conversationId: conv.id },
             );
@@ -217,19 +312,109 @@ export function startAgentRunWorker() {
             }
           }
 
-          // Auto-mode reply: if conv.mode === 'auto' and the top suggestion
-          // is high-confidence + low-risk, send it without waiting for the
-          // operator. tryAutoApprove is a no-op for assisted/manual modes.
+          // ---- Quality gate (semi_auto / auto only) ---------------------
+          //
+          // Run GoalFitEvaluator after we have at least one safe draft. Gate
+          // is skipped entirely for `assisted`/`manual` (cost optimisation)
+          // and short-circuited when HandoffDecider already decided to
+          // operator_now (we already flipped to manual above; the gate has
+          // no work to do).
+          let gate: GateOut | null = null;
+          if (
+            bestSuggestionId &&
+            handoff.action !== 'operator_now' &&
+            (conv.mode === 'semi_auto' || conv.mode === 'auto') &&
+            ajtbd
+          ) {
+            const previous = readPriorQualityDecision(conv.qualityDecision);
+            gate = await runAgentSafe<GateOut>(
+              'goal_fit_evaluator',
+              {
+                ajtbd,
+                history_tail: historyTail.slice(-8),
+                intent: { intent: intent.intent, confidence: intent.confidence },
+                handoff: { action: handoff.action, reason: handoff.reason },
+                draft: bestText,
+                previous_decision: previous,
+              },
+              { conversationId: conv.id },
+            );
+
+            if (gate) {
+              const decidedAt = new Date().toISOString();
+              const flip = conv.mode === 'auto' && shouldFlipOnHandoff(gate, previous);
+
+              // Persist the decision (and optionally flip mode) in one tx
+              // so the operator's view is consistent — they never see a
+              // mode change without an accompanying decision, or vice
+              // versa.
+              await prisma.$transaction(async (tx) => {
+                await tx.conversation.update({
+                  where: { id: conv.id },
+                  data: {
+                    qualityDecision: {
+                      score: gate!.score,
+                      action: gate!.action,
+                      reasons: gate!.reasons,
+                      decidedAt,
+                    },
+                    ...(flip ? { mode: 'assisted' } : {}),
+                  },
+                });
+              });
+
+              // Operator-only realtime: gate decision + (when applicable)
+              // mode change. The contact must perceive nothing — see the
+              // silent-fallback contract in
+              // openspec/changes/chat-autonomous-modes/specs/conversation-quality-gate/spec.md
+              await publishRealtime(`conversation:${conv.id}`, {
+                type: 'quality.gate',
+                conversationId: conv.id,
+                score: gate.score,
+                action: gate.action,
+                reasons: gate.reasons,
+                decidedAt,
+              });
+              if (flip) {
+                await publishRealtime(`conversation:${conv.id}`, {
+                  type: 'mode.changed',
+                  conversationId: conv.id,
+                  mode: 'assisted',
+                });
+                logger.info(
+                  {
+                    conversationId: conv.id,
+                    score: gate.score,
+                    reasons: gate.reasons,
+                    previousAction: previous?.action ?? null,
+                  },
+                  'quality gate: silent handoff — flipped auto → assisted',
+                );
+              }
+
+              // After a flip the suggestion stays `pending` for the
+              // operator. Skip auto-approve below.
+              if (flip) {
+                return { ok: true, action: handoff.action, gate: gate.action, flipped: true };
+              }
+            }
+          }
+
+          // Auto-mode reply: composition rule lives in `tryAutoApprove`.
+          // For semi_auto / auto we pass the gate decision so it can
+          // enforce the goal-fit thresholds. For assisted / manual the
+          // helper short-circuits.
           if (bestSuggestionId) {
             await tryAutoApprove({
               conversationId: conv.id,
               suggestionId: bestSuggestionId,
               text: bestText,
               score: bestScore,
+              ...(gate ? { gate: { action: gate.action, score: gate.score } } : {}),
             });
           }
 
-          return { ok: true, action: handoff.action };
+          return { ok: true, action: handoff.action, gate: gate?.action ?? null };
         }
 
         case 'outreach_first_message': {

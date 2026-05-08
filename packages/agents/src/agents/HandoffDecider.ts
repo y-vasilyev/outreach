@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { CampaignAjtbdZ } from '@nosquare/shared/schemas';
+
 import type { Agent } from '../types.js';
 import { invokeJson, readParams } from './_runtime.js';
 import { ConfidenceCoerced, HandoffActionCoerced, UrgencyCoerced } from './_coerce.js';
@@ -8,7 +10,9 @@ import { INTENTS } from './IntentClassifier.js';
 
 export const handoffDeciderInputSchema = z.object({
   conversation: z.object({
-    mode: z.enum(['auto', 'assisted', 'manual']),
+    // The full set of conversation modes lives in shared/conversation.ts.
+    // Keep this enum in sync — semi_auto added with chat-autonomous-modes.
+    mode: z.enum(['auto', 'semi_auto', 'assisted', 'manual']),
     summary: z.string().optional(),
     last_inbound: z.string().optional(),
     history_tail: z.array(z.string()).default([]),
@@ -19,6 +23,14 @@ export const handoffDeciderInputSchema = z.object({
     // forwards an LLM output we want the same coercion.
     confidence: ConfidenceCoerced,
   }),
+  /**
+   * Optional AJTBD framing — handoff_decider uses non_goals and
+   * desired_outcome to decide if the contact has shifted into a
+   * non-goal (e.g. asks for ad placement during CustDev) and the
+   * pipeline should escalate to operator_now even when the intent
+   * isn't on the hard-rule list.
+   */
+  ajtbd: CampaignAjtbdZ.optional(),
   ai_recent_confidence: z.array(ConfidenceCoerced).default([]),
   red_flags_total: z.number().int().nonnegative().default(0),
 });
@@ -48,6 +60,9 @@ const FALLBACK_SYSTEM = `Ты решаешь, продолжать ли ИИ д�
 
 const FALLBACK_USER = `Диалог: {{conversation}}
 Интент: {{intent}}
+AJTBD кампании: {{ajtbd}}
+Желаемый исход кампании: {{desired_outcome}}
+Anti-цели (non_goals — если собеседник тянет туда, эскалируй): {{non_goals}}
 Свежие confidence ИИ: {{ai_recent_confidence}}
 Red flags total: {{red_flags_total}}
 
@@ -58,7 +73,7 @@ export const handoffDecider: Agent<HandoffDeciderInput, HandoffDeciderOutput> = 
   description: 'Решает: ИИ продолжает / только подсказки / оператор.',
   inputSchema: handoffDeciderInputSchema,
   outputSchema: handoffDeciderOutputSchema,
-  variables: ['conversation', 'intent', 'ai_recent_confidence', 'red_flags_total'],
+  variables: ['conversation', 'intent', 'ajtbd', 'ai_recent_confidence', 'red_flags_total'],
   defaultModel: 'yandexgpt-lite',
   defaultParams: {
     temperature: 0,
@@ -118,6 +133,9 @@ export const handoffDecider: Agent<HandoffDeciderInput, HandoffDeciderOutput> = 
       vars: {
         conversation: input.conversation,
         intent: input.intent,
+        ajtbd: input.ajtbd ?? null,
+        non_goals: input.ajtbd?.non_goals ?? [],
+        desired_outcome: input.ajtbd?.desired_outcome ?? '',
         ai_recent_confidence: input.ai_recent_confidence,
         red_flags_total: input.red_flags_total,
       },

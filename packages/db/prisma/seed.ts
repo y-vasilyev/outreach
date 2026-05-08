@@ -3,6 +3,27 @@ import bcrypt from 'bcryptjs';
 import { encryptJson } from '../src/crypto.js';
 import { defaultAgentSeeds } from './agents.seed.js';
 
+// AJTBD scaffold for the demo campaign. Kept inline (no shared import)
+// so this seed has no compile-time coupling to the shared zod schema —
+// the migration's UPDATE statement uses the same shape.
+const DEMO_AJTBD = {
+  job: 'Провести 15-минутное CustDev-интервью с автором или менеджером канала про их рабочий процесс.',
+  when: 'Когда канал получает входящие запросы от рекламодателей и автору нужно решать, с кем работать.',
+  forces: {
+    push: ['Автор устал от хаотичных переписок с брендами', 'Нет нормального портфолио для рекламодателей'],
+    pull: ['Готовое автоматическое портфолио по каналу', 'Понимание, что бренды реально хотят'],
+    anxieties: ['Это очередная продажа рекламы', 'Это отнимет много времени'],
+    habits: ['Отвечает рекламодателям вручную в личке', 'Хранит примеры интеграций в Notion / голове'],
+  },
+  desired_outcome: 'Согласие на интервью + договорённость о времени.',
+  non_goals: [
+    'Продажа рекламы на канале',
+    'Покупка размещения у автора',
+    'Партнёрство / коллаборация',
+    'Ценовое предложение',
+  ],
+};
+
 const prisma = new PrismaClient();
 
 async function main() {
@@ -138,6 +159,32 @@ async function main() {
         `· agent_config: ${seed.name} (kept v${existing.version}, seed v${seed.version})`,
       );
     }
+  }
+
+  // Optional demo campaign seed. Off by default so prod / CI seeds
+  // don't pollute the campaigns table. Set SEED_DEMO_CAMPAIGN=1 in dev
+  // to make a sample campaign with populated AJTBD and defaultMode =
+  // semi_auto (so new conversations under it inherit semi-auto and
+  // the GoalFitEvaluator gate exercises the auto-approve path).
+  if (process.env.SEED_DEMO_CAMPAIGN === '1') {
+    const demo = await prisma.campaign.upsert({
+      where: { id: 'demo-custdev' },
+      update: {
+        ajtbd: DEMO_AJTBD,
+        defaultMode: 'semi_auto',
+      },
+      create: {
+        id: 'demo-custdev',
+        name: 'Demo CustDev',
+        goalText: DEMO_AJTBD.job,
+        valueProp: DEMO_AJTBD.desired_outcome,
+        ajtbd: DEMO_AJTBD,
+        defaultMode: 'semi_auto',
+        status: 'draft',
+        createdById: admin.id,
+      },
+    });
+    console.log(`✓ campaign: ${demo.name} (defaultMode=semi_auto, AJTBD populated)`);
   }
 
   console.log('\nSeed complete.');

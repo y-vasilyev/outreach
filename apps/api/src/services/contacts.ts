@@ -368,7 +368,7 @@ export const contactsService = {
       campaignId?: string;
       goalText?: string;
       valueProp?: string;
-      mode?: 'auto' | 'assisted' | 'manual';
+      mode?: 'auto' | 'semi_auto' | 'assisted' | 'manual';
       scheduledAt?: string;
     },
   ): Promise<{ ok: true; conversationId: string; created: boolean }> {
@@ -396,7 +396,7 @@ export const contactsService = {
       throw Errors.badRequest('tg-account is not configured for outreach');
     }
 
-    let mode: 'auto' | 'assisted' | 'manual' = opts.mode ?? 'assisted';
+    let mode: 'auto' | 'semi_auto' | 'assisted' | 'manual' = opts.mode ?? 'assisted';
     if (opts.campaignId) {
       const cmp = await prisma.campaign.findUnique({
         where: { id: opts.campaignId },

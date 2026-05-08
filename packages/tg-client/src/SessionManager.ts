@@ -1,6 +1,8 @@
 import { AppError } from '@nosquare/shared/errors';
 import { floodGuard } from './FloodGuard.js';
+import { fetchHistorySinceImpl } from './methods/fetchHistorySince.js';
 import type {
+  HistoryMessage,
   IncomingHandler,
   IncomingMessage,
   RecentPost,
@@ -597,6 +599,22 @@ export class SessionManager {
           };
           return resolved;
         });
+      },
+
+      async fetchHistorySince(opts: {
+        peerKey: string;
+        sinceTgMsgId?: string;
+        limit?: number;
+      }): Promise<HistoryMessage[]> {
+        requireAuth();
+        return wrap(async () =>
+          fetchHistorySinceImpl(client, {
+            tgAccountId,
+            peerKey: opts.peerKey,
+            ...(opts.sinceTgMsgId !== undefined && { sinceTgMsgId: opts.sinceTgMsgId }),
+            ...(opts.limit !== undefined && { limit: opts.limit }),
+          }),
+        );
       },
 
       async sendMessage(toUsernameOrId: string, text: string) {

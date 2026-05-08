@@ -16,6 +16,7 @@ import { replyComposer } from './ReplyComposer.js';
 import { intentClassifier } from './IntentClassifier.js';
 import { safetyFilter } from './SafetyFilter.js';
 import { handoffDecider } from './HandoffDecider.js';
+import { goalFitEvaluator } from './GoalFitEvaluator.js';
 import { conversationSummarizer } from './ConversationSummarizer.js';
 import { nextActionPlanner } from './NextActionPlanner.js';
 import { qualityReviewer } from './QualityReviewer.js';
@@ -29,6 +30,7 @@ agentRegistry.register(replyComposer);
 agentRegistry.register(intentClassifier);
 agentRegistry.register(safetyFilter);
 agentRegistry.register(handoffDecider);
+agentRegistry.register(goalFitEvaluator);
 agentRegistry.register(conversationSummarizer);
 agentRegistry.register(nextActionPlanner);
 agentRegistry.register(qualityReviewer);
@@ -43,6 +45,7 @@ export {
   intentClassifier,
   safetyFilter,
   handoffDecider,
+  goalFitEvaluator,
   conversationSummarizer,
   nextActionPlanner,
   qualityReviewer,
@@ -57,6 +60,7 @@ export * from './ReplyComposer.js';
 export * from './IntentClassifier.js';
 export * from './SafetyFilter.js';
 export * from './HandoffDecider.js';
+export * from './GoalFitEvaluator.js';
 export * from './ConversationSummarizer.js';
 export * from './NextActionPlanner.js';
 export * from './QualityReviewer.js';

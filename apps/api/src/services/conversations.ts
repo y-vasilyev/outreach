@@ -1,4 +1,4 @@
-import { getPrisma } from '@nosquare/db';
+import { getPrisma, Prisma } from '@nosquare/db';
 import { Errors } from '@nosquare/shared';
 import type { z } from 'zod';
 import type { ConversationFiltersZ } from '@nosquare/shared';
@@ -102,9 +102,19 @@ export const conversationsService = {
     return rows.map((r) => ({ ...r, score: Number(r.score) }));
   },
 
-  async setMode(id: string, mode: 'auto' | 'assisted' | 'manual') {
+  async setMode(id: string, mode: 'auto' | 'semi_auto' | 'assisted' | 'manual') {
     const prisma = getPrisma();
-    const c = await prisma.conversation.update({ where: { id }, data: { mode } });
+    // Operator-driven mode change clears the latest gate snapshot — once
+    // the operator decides what mode this conversation should be in, any
+    // prior "AI handed off" verdict is no longer relevant. The on_inbound
+    // pipeline will write a fresh decision on the next inbound if the new
+    // mode is `semi_auto` or `auto`. Use Prisma.JsonNull to set the JSON
+    // column to SQL NULL (TS2322 otherwise — Prisma distinguishes
+    // database NULL from a JSON `null` value).
+    const c = await prisma.conversation.update({
+      where: { id },
+      data: { mode, qualityDecision: Prisma.JsonNull },
+    });
     emitToRoom(`conversation:${id}`, { type: 'mode.changed', conversationId: id, mode });
     return c;
   },

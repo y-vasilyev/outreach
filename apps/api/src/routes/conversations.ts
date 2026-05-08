@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { ConversationFiltersZ, SendMessageInputZ } from '@nosquare/shared';
 import { conversationsService } from '../services/conversations.js';
+import { syncOneWithBudget } from '../services/conversation-sync.js';
 
 export async function conversationsRoutes(app: FastifyInstance) {
   app.addHook('onRequest', app.authenticate);
@@ -13,6 +14,13 @@ export async function conversationsRoutes(app: FastifyInstance) {
 
   app.get('/conversations/:id', async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
+    // Pull any messages the workers missed while offline before
+    // responding. Hard 1500ms budget — if sync is slow we return the
+    // current DB state and let the rest finish in the background; the
+    // UI picks up newly-persisted messages via the realtime
+    // `message.new` event regardless. See chat-autonomous-modes
+    // design.md Decision 4.
+    await syncOneWithBudget(params.id);
     return conversationsService.get(params.id);
   });
 
@@ -42,11 +50,20 @@ export async function conversationsRoutes(app: FastifyInstance) {
     const params = z.object({ id: z.string() }).parse(req.params);
     const body = z
       .object({
-        mode: z.enum(['auto', 'assisted', 'manual']).optional(),
+        mode: z.enum(['auto', 'semi_auto', 'assisted', 'manual']).optional(),
         status: z.enum(['active', 'paused', 'done', 'failed']).optional(),
       })
       .parse(req.body);
-    if (body.mode) await conversationsService.setMode(params.id, body.mode);
+    // Migration shim — when LEGACY_AUTO_MEANS_SEMI_AUTO=1 the API
+    // accepts the legacy `auto` value (which previously meant
+    // "auto-send when safe, otherwise suggest") and stores it as
+    // `semi_auto`. Off by default; remove with task 8.4 once external
+    // callers have caught up.
+    let mode = body.mode;
+    if (mode === 'auto' && process.env.LEGACY_AUTO_MEANS_SEMI_AUTO === '1') {
+      mode = 'semi_auto';
+    }
+    if (mode) await conversationsService.setMode(params.id, mode);
     if (body.status) await conversationsService.setStatus(params.id, body.status);
     return conversationsService.get(params.id);
   });

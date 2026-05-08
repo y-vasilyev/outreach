@@ -109,6 +109,13 @@ export function startTgListenWorker() {
         },
       });
       if (!conv) {
+        // No campaign context at this point — the inbound is from a
+        // contact that never had a conversation with this account
+        // before. We can't propagate `Campaign.defaultMode` because
+        // we don't know which campaign (if any) this contact belongs
+        // to. Default to `assisted` so the operator drives the first
+        // turn; subsequent operator actions or campaign binds (e.g.
+        // contacts.startConversation) can change the mode.
         conv = await prisma.conversation.create({
           data: {
             tgAccountId: data.tgAccountId,

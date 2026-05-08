@@ -20,6 +20,7 @@ export interface AgentSeed {
    * v5 — conversion bridge-test rewrite for opener/strategy.
    * v6 — OpenRouter model defaults by agent class.
    * v7 — rollout bump for formerly v1 agents that may already be UI-edited to v2.
+   * v8 — chat-autonomous-modes: introduces goal_fit_evaluator agent.
    */
   version: number;
 }
@@ -340,6 +341,63 @@ export const defaultAgentSeeds: AgentSeed[] = [
       'Состояние: {{conversation_state}}\nИнтенты: {{intent_history}}\nКонтакт: {{contact_meta}}\n\nВерни JSON: {next_action, scheduled_at?, reason}',
     params: { temperature: 0.2, max_tokens: 300 },
     version: 3,
+  },
+  {
+    name: 'goal_fit_evaluator',
+    role: 'quality-gate',
+    description:
+      'Оценивает, насколько диалог по-прежнему движется к цели CustDev-кампании (AJTBD). Решает: continue / soften / handoff_silent.',
+    // Cheap, structured-output model — gate runs on every inbound when
+    // mode is semi_auto/auto, so we keep it lite by default.
+    model: 'google/gemini-2.5-flash-lite',
+    systemPrompt: `Ты оцениваешь, насколько активный CustDev-диалог по-прежнему движется к цели кампании, описанной через AJTBD (Jobs-To-Be-Done).
+
+Тебе на вход:
+- ajtbd кампании: { job, when, forces, desired_outcome, non_goals[] }
+- последний intent собеседника и его confidence
+- решение handoff_decider (но это решение УЖЕ обработано — твоя задача оценить goal-fit для ИИ-ответа в авто-режиме, не дублировать логику handoff)
+- хвост последних сообщений (≤ 8) и черновик ответа, который ИИ собирается отправить
+
+Возвращай JSON: { score: 0..1, action: "continue" | "soften" | "handoff_silent", reasons: string[] }.
+
+action:
+- "continue" — диалог идёт по плану, ответ хороший, можно отправить.
+- "soften" — диалог в целом на трассе, но черновик звучит немного не в ту сторону: слишком напористо, слишком похоже на продажу, или начинает скользить к non_goal. Допустим к авто-отправке только в semi_auto режиме (там это безопаснее, проверка строже в auto).
+- "handoff_silent" — диалог явно ушёл от цели или собеседник тащит в non_goals (например, спрашивает прайс на рекламу, когда цель — CustDev-интервью). В авто-режиме надо незаметно передать оператору. Это решение **молчаливое**: контакт не должен заметить переход.
+
+score (0..1) — насколько ответ соответствует AJTBD:
+- 0.85+ — образцово на трассе, полный hit на desired_outcome.
+- 0.6–0.85 — нормально, держит линию.
+- 0.3–0.6 — есть дрейф, риск потери цели.
+- < 0.3 — явное нарушение, либо собеседник, либо черновик уже за рамками AJTBD.
+
+reasons[] — короткие конкретные причины оценки (2–4 пункта). Цитируй non_goals, если черновик их затрагивает. Не лей воду.
+
+ВАЖНО: ты оцениваешь fit к ЦЕЛИ, не к стилю и не к безопасности. Стиль — забота reply_composer, безопасность — забота safety_filter. Твой вклад — «ещё CustDev или уже что-то другое?».`,
+    userPromptTemplate: `AJTBD кампании: {{ajtbd}}
+
+Хвост истории (последние ≤ 8 сообщений):
+{{history_tail}}
+
+Последний intent собеседника: {{intent}}
+Решение handoff_decider: {{handoff}}
+Черновик ИИ-ответа (top variant): {{draft}}
+Предыдущее решение gate (для понимания тренда, может быть null): {{previous_decision}}
+
+Верни JSON.`,
+    params: {
+      temperature: 0.0,
+      max_tokens: 350,
+      // Composition thresholds — env can override at runtime, but DB
+      // params is the source of truth per-agent and per-campaign
+      // (campaign.agentOverrides.goal_fit_evaluator).
+      t_safety: 0.8,
+      t_semi_auto_goalfit: 0.6,
+      t_auto_goalfit: 0.75,
+      // Cap on how many trailing messages to include in the prompt.
+      max_history_tail: 8,
+    },
+    version: 1,
   },
   {
     name: 'quality_reviewer',
