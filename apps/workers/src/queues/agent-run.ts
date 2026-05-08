@@ -50,14 +50,21 @@ interface PriorQualityDecision {
  *   (a) the immediately-previous decision was also `handoff_silent`, OR
  *   (b) the current `score ≤ 0.3` (severe single-turn fit failure).
  * Anything else is recorded as a decision but does NOT flip the mode.
+ *
+ * Exported so tests can pin the boundary cases (score = 0.3 vs 0.31 vs 0.4
+ * crossed with prev=continue vs prev=handoff_silent). Pure function — no
+ * side effects.
  */
-function shouldFlipOnHandoff(current: GateOut, previous: PriorQualityDecision | null): boolean {
+export function shouldFlipOnHandoff(
+  current: GateOut,
+  previous: PriorQualityDecision | null,
+): boolean {
   if (current.action !== 'handoff_silent') return false;
   if (current.score <= 0.3) return true;
   return previous?.action === 'handoff_silent';
 }
 
-function readPriorQualityDecision(value: unknown): PriorQualityDecision | null {
+export function readPriorQualityDecision(value: unknown): PriorQualityDecision | null {
   if (!value || typeof value !== 'object') return null;
   const v = value as { action?: unknown; score?: unknown; decidedAt?: unknown };
   const action =
@@ -126,16 +133,17 @@ function resolveCampaignAjtbd(campaign: {
   return parsed.data;
 }
 
-export function startAgentRunWorker() {
-  const worker = new Worker(
-    QueueNames.agentRun,
-    async (job) => {
-      const data = AgentRunJobZ.parse(job.data);
-      const prisma = getPrisma();
-
-      switch (data.pipeline) {
-        case 'on_inbound': {
-          if (!data.conversationId) throw new Error('conversationId required');
+/**
+ * `on_inbound` pipeline body, exported for unit-testing the silent
+ * fallback contract (see `chat-autonomous-modes` design Decision 5):
+ * when the gate trips `handoff_silent` in `auto` mode, no `out_`
+ * message, no `tg-send` job, and no contact-facing realtime event are
+ * produced. Tests pin those invariants with mocked deps; the worker
+ * itself is a thin BullMQ dispatcher around this function.
+ */
+export async function handleOnInbound(data: { conversationId?: string }): Promise<unknown> {
+  const prisma = getPrisma();
+  if (!data.conversationId) throw new Error('conversationId required');
           const conv = await prisma.conversation.findUnique({
             where: { id: data.conversationId },
             include: {
@@ -415,9 +423,16 @@ export function startAgentRunWorker() {
           }
 
           return { ok: true, action: handoff.action, gate: gate?.action ?? null };
-        }
+}
 
-        case 'outreach_first_message': {
+/**
+ * `outreach_first_message` pipeline body — opener generation flow used
+ * by the campaign dispatcher and the operator's "Start chat" action.
+ * Extracted alongside `handleOnInbound` for symmetry; not currently
+ * unit-tested (covered by integration with the dispatcher).
+ */
+export async function handleOutreachFirstMessage(data: { conversationId?: string }): Promise<unknown> {
+  const prisma = getPrisma();
           // On-demand opener generation. Used by `POST
           // /contacts/:id/start-conversation` so the operator can kick
           // off a chat with a specific contact without waiting for the
@@ -546,8 +561,18 @@ export function startAgentRunWorker() {
           }
 
           return { ok: true, suggestions: opener.variants.length };
-        }
+}
 
+export function startAgentRunWorker() {
+  const worker = new Worker(
+    QueueNames.agentRun,
+    async (job) => {
+      const data = AgentRunJobZ.parse(job.data);
+      switch (data.pipeline) {
+        case 'on_inbound':
+          return handleOnInbound(data);
+        case 'outreach_first_message':
+          return handleOutreachFirstMessage(data);
         default:
           logger.warn({ pipeline: data.pipeline }, 'pipeline not implemented yet');
           return { ok: false, reason: 'not implemented' };
