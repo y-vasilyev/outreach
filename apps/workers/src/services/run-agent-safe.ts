@@ -1,5 +1,6 @@
 import { isAppError } from '@nosquare/shared/errors';
 import { getPrisma } from '@nosquare/db';
+import type { RunOptions } from '@nosquare/agents';
 
 import { logger } from '../logger.js';
 import { publishRealtime } from './realtime-emit.js';
@@ -27,7 +28,17 @@ import { getRunner } from './runner.js';
 export async function runAgentSafe<T>(
   agentName: string,
   input: unknown,
-  ctx: { conversationId: string; channelId?: string; contactId?: string; campaignId?: string },
+  ctx: {
+    conversationId: string;
+    channelId?: string;
+    contactId?: string;
+    campaignId?: string;
+    /**
+     * Campaign-type config merged over the DB agent_config (e.g. the type's
+     * safety profile → SafetyFilter params). agency-sourcing-matching change.
+     */
+    overrides?: RunOptions['overrides'];
+  },
 ): Promise<T | null> {
   const runner = getRunner();
   try {

@@ -1,6 +1,6 @@
 // Prisma schema for Nosquare Outreach
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
   binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
@@ -175,53 +175,53 @@ model User {
 }
 
 model TgAccount {
-  id                    String          @id @default(cuid())
-  label                 String
-  phone                 String          @unique
-  sessionEncrypted      String?
-  status                TgAccountStatus @default(need_auth)
-  role                  TgAccountRole   @default(both)
-  dailyMsgLimit         Int             @default(30)
-  dailyNewContactLimit  Int             @default(15)
-  sentTodayMsg          Int             @default(0)
-  sentTodayNew          Int             @default(0)
-  dayRolledAt           DateTime?
-  cooldownUntil         DateTime?
-  warmupStartedAt       DateTime?
-  warmupStage           Int             @default(0)
-  tags                  String[]        @default([])
-  notes                 String?
-  loginPhoneCodeHash    String?
-  deviceFingerprint     Json?
-  createdAt             DateTime        @default(now())
-  updatedAt             DateTime        @updatedAt
+  id                   String          @id @default(cuid())
+  label                String
+  phone                String          @unique
+  sessionEncrypted     String?
+  status               TgAccountStatus @default(need_auth)
+  role                 TgAccountRole   @default(both)
+  dailyMsgLimit        Int             @default(30)
+  dailyNewContactLimit Int             @default(15)
+  sentTodayMsg         Int             @default(0)
+  sentTodayNew         Int             @default(0)
+  dayRolledAt          DateTime?
+  cooldownUntil        DateTime?
+  warmupStartedAt      DateTime?
+  warmupStage          Int             @default(0)
+  tags                 String[]        @default([])
+  notes                String?
+  loginPhoneCodeHash   String?
+  deviceFingerprint    Json?
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
 
   conversations Conversation[]
   opLogs        TgOpLog[]
 }
 
 model Integration {
-  id              String   @id @default(cuid())
-  kind            String   @unique
+  id              String    @id @default(cuid())
+  kind            String    @unique
   configEncrypted String
-  enabled         Boolean  @default(true)
+  enabled         Boolean   @default(true)
   status          String?
   lastCheckAt     DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 }
 
 model Endpoint {
-  id              String          @id @default(cuid())
-  name            String          @unique
-  provider        LLMProviderKind
-  baseUrl         String
-  authEncrypted   String
-  defaultHeaders  Json            @default("{}")
-  rateLimitRpm    Int?
-  enabled         Boolean         @default(true)
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  id             String          @id @default(cuid())
+  name           String          @unique
+  provider       LLMProviderKind
+  baseUrl        String
+  authEncrypted  String
+  defaultHeaders Json            @default("{}")
+  rateLimitRpm   Int?
+  enabled        Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
   agentConfigsPrimary  AgentConfig[] @relation("AgentEndpointPrimary")
   agentConfigsFallback AgentConfig[] @relation("AgentEndpointFallback")
@@ -292,56 +292,68 @@ model Contact {
 }
 
 model Campaign {
-  id                   String         @id @default(cuid())
-  name                 String
-  goalText             String
-  valueProp            String
+  id                  String           @id @default(cuid())
+  name                String
+  goalText            String
+  valueProp           String
   // Structured AJTBD framing. Validated via zod (`CampaignAjtbdZ` in
   // packages/shared). Nullable so legacy rows don't trip migrations; the
   // on_inbound pipeline backfills a scaffold from goalText/valueProp via
   // the data migration in 4_chat_autonomous_modes, and the runtime fails
   // explicitly if it is still null when an agent needs it.
-  ajtbd                Json?
-  targetFilter         Json           @default("{}")
-  agentOverrides       Json           @default("{}")
-  outreachAccountPool  String[]       @default([])
-  schedule             Json           @default("{}")
-  defaultMode          ConversationMode @default(assisted)
-  status               CampaignStatus @default(draft)
-  createdById          String?
-  createdBy            User?          @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt            DateTime       @default(now())
-  updatedAt            DateTime       @updatedAt
+  ajtbd               Json?
+  // Campaign type from the registry (agency-sourcing-matching change).
+  // Nullable during the backfill window; flipped to required in a
+  // follow-up migration once every row carries a type + goal.
+  typeId              String?
+  type                CampaignType?    @relation(fields: [typeId], references: [id], onDelete: SetNull)
+  // Structured goal validated against the type's `goalSchema`. For
+  // `custdev` this mirrors the legacy `ajtbd` shape; for `agency_sourcing`
+  // it carries the data-collection objective. The runtime fails explicitly
+  // if it is null when an agent needs it (no hardcoded fallback).
+  goal                Json?
+  targetFilter        Json             @default("{}")
+  agentOverrides      Json             @default("{}")
+  outreachAccountPool String[]         @default([])
+  schedule            Json             @default("{}")
+  defaultMode         ConversationMode @default(assisted)
+  status              CampaignStatus   @default(draft)
+  createdById         String?
+  createdBy           User?            @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
 
   conversations Conversation[]
+
+  @@index([typeId])
 }
 
 model Conversation {
-  id                   String             @id @default(cuid())
-  tgAccountId          String
-  tgAccount            TgAccount          @relation(fields: [tgAccountId], references: [id])
-  contactId            String
-  contact              Contact            @relation(fields: [contactId], references: [id])
-  campaignId           String?
-  campaign             Campaign?          @relation(fields: [campaignId], references: [id], onDelete: SetNull)
-  status               ConversationStatus @default(active)
-  mode                 ConversationMode   @default(assisted)
-  assignedOperatorId   String?
-  assignedOperator     User?              @relation("ConversationOperator", fields: [assignedOperatorId], references: [id], onDelete: SetNull)
-  lastInboundAt        DateTime?
-  lastOutboundAt       DateTime?
+  id                 String             @id @default(cuid())
+  tgAccountId        String
+  tgAccount          TgAccount          @relation(fields: [tgAccountId], references: [id])
+  contactId          String
+  contact            Contact            @relation(fields: [contactId], references: [id])
+  campaignId         String?
+  campaign           Campaign?          @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  status             ConversationStatus @default(active)
+  mode               ConversationMode   @default(assisted)
+  assignedOperatorId String?
+  assignedOperator   User?              @relation("ConversationOperator", fields: [assignedOperatorId], references: [id], onDelete: SetNull)
+  lastInboundAt      DateTime?
+  lastOutboundAt     DateTime?
   // Latest snapshot from the GoalFitEvaluator gate when the conversation
   // is in `semi_auto`/`auto` mode: { score, action, reasons[],
   // agentRunId, decidedAt }. Cleared on any operator-driven mode change.
-  qualityDecision      Json?
+  qualityDecision    Json?
   // Set whenever the API on-open sync (`ConversationSync.syncOne`)
   // successfully fetches history for this peer. Used by the inbox UI's
   // "Syncing…" hint and by metrics that detect stale push coverage.
-  lastSyncedAt         DateTime?
-  summary              String?
-  meta                 Json               @default("{}")
-  createdAt            DateTime           @default(now())
-  updatedAt            DateTime           @updatedAt
+  lastSyncedAt       DateTime?
+  summary            String?
+  meta               Json               @default("{}")
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
 
   messages    Message[]
   suggestions Suggestion[]
@@ -390,24 +402,24 @@ model Suggestion {
 }
 
 model AgentConfig {
-  id                  String   @id @default(cuid())
-  name                String   @unique
-  role                String   @default("")
-  description         String   @default("")
-  endpointId          String?
-  endpoint            Endpoint? @relation("AgentEndpointPrimary", fields: [endpointId], references: [id], onDelete: SetNull)
-  fallbackEndpointId  String?
-  fallbackEndpoint    Endpoint? @relation("AgentEndpointFallback", fields: [fallbackEndpointId], references: [id], onDelete: SetNull)
-  model               String   @default("")
-  systemPrompt        String   @default("")
-  userPromptTemplate  String   @default("")
-  params              Json     @default("{}")
-  enabled             Boolean  @default(true)
-  version             Int      @default(1)
-  updatedById         String?
-  updatedBy           User?    @relation("AgentConfigUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
-  updatedAt           DateTime @updatedAt
-  createdAt           DateTime @default(now())
+  id                 String    @id @default(cuid())
+  name               String    @unique
+  role               String    @default("")
+  description        String    @default("")
+  endpointId         String?
+  endpoint           Endpoint? @relation("AgentEndpointPrimary", fields: [endpointId], references: [id], onDelete: SetNull)
+  fallbackEndpointId String?
+  fallbackEndpoint   Endpoint? @relation("AgentEndpointFallback", fields: [fallbackEndpointId], references: [id], onDelete: SetNull)
+  model              String    @default("")
+  systemPrompt       String    @default("")
+  userPromptTemplate String    @default("")
+  params             Json      @default("{}")
+  enabled            Boolean   @default(true)
+  version            Int       @default(1)
+  updatedById        String?
+  updatedBy          User?     @relation("AgentConfigUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedAt          DateTime  @updatedAt
+  createdAt          DateTime  @default(now())
 
   history AgentConfigHistory[]
 }
@@ -449,15 +461,15 @@ model AgentRun {
 }
 
 model TgOpLog {
-  id           String     @id @default(cuid())
-  tgAccountId  String
-  tgAccount    TgAccount  @relation(fields: [tgAccountId], references: [id], onDelete: Cascade)
-  op           String
-  ok           Boolean
-  latencyMs    Int        @default(0)
-  error        String?
-  meta         Json       @default("{}")
-  createdAt    DateTime   @default(now())
+  id          String    @id @default(cuid())
+  tgAccountId String
+  tgAccount   TgAccount @relation(fields: [tgAccountId], references: [id], onDelete: Cascade)
+  op          String
+  ok          Boolean
+  latencyMs   Int       @default(0)
+  error       String?
+  meta        Json      @default("{}")
+  createdAt   DateTime  @default(now())
 
   @@index([tgAccountId, createdAt])
 }
@@ -473,4 +485,135 @@ model AuditLog {
   createdAt  DateTime @default(now())
 
   @@index([createdAt])
+}
+
+// =============== AGENCY SOURCING & MATCHING ===============
+// (agency-sourcing-matching change)
+
+enum MediaAssetKind {
+  media_kit
+  screenshot
+  document
+  image
+  video
+  raw_payload
+  other
+}
+
+// Configurable campaign type. Drives which agents run, the safety
+// profile (allowed/forbidden vocabulary), the autonomy policy, and the
+// JSON-schema a campaign's `goal` is validated against.
+model CampaignType {
+  id             String   @id @default(cuid())
+  key            String   @unique
+  name           String
+  description    String   @default("")
+  goalSchema     Json     @default("{}")
+  agentSet       Json     @default("{}")
+  safetyProfile  Json     @default("{}")
+  autonomyPolicy Json     @default("{}")
+  builtIn        Boolean  @default(false)
+  enabled        Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  campaigns Campaign[]
+}
+
+// Standardized, queryable catalog row for a blogger/channel. Composed
+// deterministically from ProfileDataPoint rows (latest high-confidence).
+model BloggerProfile {
+  id         String    @id @default(cuid())
+  // Plain indexed reference to Channel.id (no FK relation to keep the
+  // existing channel graph's cascade semantics untouched).
+  channelId  String?   @unique
+  topics     String[]  @default([])
+  languages  String[]  @default([])
+  formats    String[]  @default([])
+  // Standardized rolled-up fields: { reach, avgViews, rateCards: [...],
+  // audience: { age, gender, geo } }. Source of truth is dataPoints.
+  audience   Json      @default("{}")
+  rateCards  Json      @default("[]")
+  reach      Int?
+  avgViews   Int?
+  capturedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  dataPoints   ProfileDataPoint[]
+  mediaAssets  MediaAsset[]
+  matchResults MatchResult[]
+}
+
+// One harvested fact with provenance, so the rolled-up profile can be
+// re-derived and audited. Raw source text preserved in `rawSnippet`.
+model ProfileDataPoint {
+  id              String         @id @default(cuid())
+  profileId       String
+  profile         BloggerProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  field           String
+  value           Json
+  unit            String?
+  confidence      Decimal        @default(0)
+  extractedBy     String         @default("llm")
+  // Plain reference to Message.id (no FK relation).
+  sourceMessageId String?
+  rawSnippet      String         @default("")
+  capturedAt      DateTime       @default(now())
+  createdAt       DateTime       @default(now())
+
+  @@index([profileId, field])
+}
+
+// Files bloggers send (media kits, stat screenshots) and raw payload
+// snapshots, stored in S3-compatible object storage.
+model MediaAsset {
+  id             String          @id @default(cuid())
+  // Plain indexed reference to Conversation.id.
+  conversationId String?
+  profileId      String?
+  profile        BloggerProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+  kind           MediaAssetKind  @default(other)
+  s3Key          String
+  mime           String?
+  bytes          Int?
+  sha256         String?
+  // Plain reference to the source TG message id.
+  sourceTgMsgId  String?
+  createdAt      DateTime        @default(now())
+
+  @@index([conversationId])
+  @@index([profileId])
+}
+
+// Incoming advertising request to match against the catalog.
+model AdBrief {
+  id             String    @id @default(cuid())
+  topic          String
+  audienceTarget String    @default("")
+  budget         Int?
+  formats        String[]  @default([])
+  geo            String[]  @default([])
+  deadline       DateTime?
+  notes          String    @default("")
+  createdById    String?
+  createdAt      DateTime  @default(now())
+
+  matchResults MatchResult[]
+}
+
+// A ranked candidate for a brief, persisted for auditability.
+model MatchResult {
+  id            String         @id @default(cuid())
+  briefId       String
+  brief         AdBrief        @relation(fields: [briefId], references: [id], onDelete: Cascade)
+  profileId     String
+  profile       BloggerProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  score         Decimal        @default(0)
+  rationale     String         @default("")
+  rerankedByLlm Boolean        @default(false)
+  createdAt     DateTime       @default(now())
+
+  @@index([briefId])
+  @@index([profileId])
 }

@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import sensible from '@fastify/sensible';
+import { flags } from '@nosquare/shared';
 import { env } from './env.js';
 import { logger } from './logger.js';
 import { registerAuth } from './auth/plugin.js';
@@ -14,6 +15,7 @@ import { agentsRoutes } from './routes/agents.js';
 import { channelsRoutes } from './routes/channels.js';
 import { contactsRoutes } from './routes/contacts.js';
 import { campaignsRoutes } from './routes/campaigns.js';
+import { campaignTypesRoutes } from './routes/campaign-types.js';
 import { conversationsRoutes } from './routes/conversations.js';
 import { usersRoutes } from './routes/users.js';
 import { auditRoutes } from './routes/audit.js';
@@ -40,6 +42,11 @@ async function main() {
   await app.register(channelsRoutes);
   await app.register(contactsRoutes);
   await app.register(campaignsRoutes);
+  // Campaign-type registry endpoints stay dark until the flag is enabled
+  // (agency-sourcing-matching rollout step 1).
+  if (flags.ENABLE_CAMPAIGN_TYPES) {
+    await app.register(campaignTypesRoutes);
+  }
   await app.register(conversationsRoutes);
   await app.register(usersRoutes);
   await app.register(auditRoutes);

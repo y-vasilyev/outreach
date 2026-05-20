@@ -141,9 +141,23 @@ export class AgentRunner {
       throw new AppError('FORBIDDEN', `agent ${agentName} disabled`, 403);
     }
 
-    // 2. Apply overrides (shallow merge over DB record).
+    // 2. Apply overrides (shallow merge over DB record). `params` is
+    // deep-merged one level so a caller overriding e.g. `max_length` keeps
+    // the DB record's `temperature` / `max_tokens` — used by campaign-type
+    // safety profiles and per-campaign agentOverrides alike.
     const config: DbAgentConfig = ctx?.overrides
-      ? ({ ...dbConfig, ...ctx.overrides } as DbAgentConfig)
+      ? ({
+          ...dbConfig,
+          ...ctx.overrides,
+          ...(ctx.overrides.params !== undefined
+            ? {
+                params: {
+                  ...((dbConfig.params as Record<string, unknown> | null) ?? {}),
+                  ...(ctx.overrides.params as Record<string, unknown>),
+                },
+              }
+            : {}),
+        } as DbAgentConfig)
       : dbConfig;
 
     // 3. Look up the agent from the registry & validate input.

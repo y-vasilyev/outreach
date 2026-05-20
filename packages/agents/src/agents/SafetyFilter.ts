@@ -17,6 +17,17 @@ export const safetyFilterInputSchema = z.object({
    * upward when the draft references a non-goal.
    */
   ajtbd_non_goals: z.array(z.string()).optional(),
+  /**
+   * Campaign-type safety profile vocabulary (agency-sourcing-matching
+   * change). `forbidden_topics` bias the risk_score UP when the draft
+   * touches them; `allowed_topics` are explicitly NOT penalised. This is
+   * how the same agent serves both CustDev (forbids ad-sales lexicon) and
+   * agency-sourcing (permits commercial lexicon) — the lists come from the
+   * campaign type's `safetyProfile`, not a global default. They remain
+   * advisory tone signals, never hard blocks (hard guards stay below).
+   */
+  forbidden_topics: z.array(z.string()).optional(),
+  allowed_topics: z.array(z.string()).optional(),
   /** Optional history to detect "do not message" cases. */
   history: z
     .array(
@@ -43,13 +54,18 @@ export type SafetyFilterOutput = z.infer<typeof safetyFilterOutputSchema>;
 
 const DEFAULT_MAX_LENGTH = 600;
 
-const FALLBACK_SYSTEM = `Ты оцениваешь тон CustDev-сообщения. Цель кампании — НЕ продажа: мы зовём на короткое исследовательское интервью.
+const FALLBACK_SYSTEM = `Ты оцениваешь тон исходящего сообщения относительно цели кампании.
 
-Твоя задача — присвоить risk_score (0..1), отражающий, насколько сообщение звучит «продающе» / неуместно:
-- 0.0–0.2 — спокойный исследовательский тон, всё в порядке.
-- 0.3–0.5 — слегка натянуто или маркетингово, но допустимо.
-- 0.6–0.8 — звучит как продажа рекламы / интеграции / спецпредложения.
-- 0.9–1.0 — явный спам или агрессивная продажа.
+Твоя задача — присвоить risk_score (0..1), отражающий, насколько сообщение звучит неуместно для этой кампании:
+- 0.0–0.2 — уместный тон, всё в порядке.
+- 0.3–0.5 — слегка натянуто, но допустимо.
+- 0.6–0.8 — заметно выбивается из цели кампании.
+- 0.9–1.0 — явный спам или агрессия.
+
+Правила оценки тем:
+- Если черновик затрагивает темы из «запрещённых тем» (forbidden_topics) — повышай risk_score.
+- Темы из «разрешённых тем» (allowed_topics) сами по себе риск НЕ повышают: для этой кампании они уместны (например, обсуждение рекламы/прайса в агентской кампании).
+- Если черновик затрагивает anti-цели (non_goals) — повышай risk_score.
 
 В reasons[] кратко перечисли поводы для оценки (если есть). В rewrite_hint можешь предложить, как переписать.
 
@@ -63,6 +79,8 @@ const FALLBACK_USER = `Черновик:
 Канал: {{channel_analysis}}
 Контакт: {{contact}}
 Кампания: {{campaign}}
+Запрещённые темы (forbidden_topics — повышают risk_score): {{forbidden_topics}}
+Разрешённые темы (allowed_topics — уместны, риск не повышают): {{allowed_topics}}
 Anti-цели кампании (non_goals — если черновик их затрагивает, повышай risk_score; не блокируй): {{ajtbd_non_goals}}
 История: {{history}}
 
@@ -73,7 +91,16 @@ export const safetyFilter: Agent<SafetyFilterInput, SafetyFilterOutput> = {
   description: 'Финальная проверка исходящего сообщения.',
   inputSchema: safetyFilterInputSchema,
   outputSchema: safetyFilterOutputSchema,
-  variables: ['draft', 'channel_analysis', 'contact', 'campaign', 'ajtbd_non_goals', 'history'],
+  variables: [
+    'draft',
+    'channel_analysis',
+    'contact',
+    'campaign',
+    'forbidden_topics',
+    'allowed_topics',
+    'ajtbd_non_goals',
+    'history',
+  ],
   defaultModel: 'yandexgpt-lite',
   defaultParams: {
     temperature: 0,
@@ -139,6 +166,8 @@ export const safetyFilter: Agent<SafetyFilterInput, SafetyFilterOutput> = {
         channel_analysis: input.channel_analysis ?? {},
         contact: input.contact ?? {},
         campaign: input.campaign ?? {},
+        forbidden_topics: input.forbidden_topics ?? [],
+        allowed_topics: input.allowed_topics ?? [],
         ajtbd_non_goals: input.ajtbd_non_goals ?? [],
         history: input.history ?? [],
       },

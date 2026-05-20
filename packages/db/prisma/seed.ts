@@ -161,6 +161,133 @@ async function main() {
     }
   }
 
+  // Campaign-type registry (agency-sourcing-matching change). Idempotent
+  // upsert of the two built-in types. `update` re-syncs the config so seed
+  // changes propagate to dev/CI; operator-authored types are untouched
+  // (different keys). Pipelines read safetyProfile / autonomyPolicy from
+  // here behind ENABLE_CAMPAIGN_TYPES.
+  const BASE_AGENT_SET = {
+    opening_composer: { agentName: 'opening_composer', overrides: {} },
+    approach_strategist: { agentName: 'approach_strategist', overrides: {} },
+    reply_composer: { agentName: 'reply_composer', overrides: {} },
+    intent_classifier: { agentName: 'intent_classifier', overrides: {} },
+    safety_filter: { agentName: 'safety_filter', overrides: {} },
+    handoff_decider: { agentName: 'handoff_decider', overrides: {} },
+    goal_fit_evaluator: { agentName: 'goal_fit_evaluator', overrides: {} },
+    conversation_summarizer: { agentName: 'conversation_summarizer', overrides: {} },
+    next_action_planner: { agentName: 'next_action_planner', overrides: {} },
+  };
+
+  const campaignTypeSeeds = [
+    {
+      key: 'custdev',
+      name: 'CustDev интервью',
+      description:
+        'Приглашение на исследовательское интервью по продукту. Не продажа, не реклама.',
+      goalSchema: {
+        type: 'object',
+        required: ['job', 'desired_outcome'],
+        properties: {
+          job: { type: 'string' },
+          when: { type: 'string' },
+          forces: { type: 'object' },
+          desired_outcome: { type: 'string' },
+          non_goals: { type: 'array', items: { type: 'string' } },
+        },
+      },
+      agentSet: BASE_AGENT_SET,
+      // Mirrors the legacy SafetyFilter intent: ad-sales lexicon raises the
+      // risk score (advisory), 600-char cap, no links in turn one.
+      safetyProfile: {
+        forbidden_topics: [
+          'реклама',
+          'рекламная',
+          'интеграц',
+          'купить рекламу',
+          'разместить',
+          'промо',
+          'приобрести',
+          'оффер',
+          'выгодное предложение',
+        ],
+        allowed_topics: [],
+        allow_links: false,
+        max_length: 600,
+      },
+      // Empty: CustDev escalations (hostile / spam / request_human /
+      // wants_payment_for_ads / wants_to_schedule) already live in
+      // HandoffDecider's deterministic rules. Keeping this empty preserves
+      // exact pre-registry behavior.
+      autonomyPolicy: {
+        defaultMode: 'assisted',
+        T_safety: 0.8,
+        T_semi_auto_goalfit: 0.6,
+        T_auto_goalfit: 0.75,
+        forceHandoffIntents: [],
+      },
+    },
+    {
+      key: 'agency_sourcing',
+      name: 'Агентство по размещению рекламы',
+      description:
+        'Заход от лица агентства: сбор прайсов, форматов, сроков, охватов и статистики аудитории для базы блогеров.',
+      goalSchema: {
+        type: 'object',
+        required: ['target_data_points'],
+        properties: {
+          target_data_points: { type: 'array', items: { type: 'string' } },
+          client_brief: { type: 'string' },
+        },
+      },
+      agentSet: BASE_AGENT_SET,
+      // Inverse of CustDev: commercial vocabulary is on-goal here, so it must
+      // NOT raise the risk score. M4 adds the agency-specific agents/prompts.
+      safetyProfile: {
+        forbidden_topics: [],
+        allowed_topics: ['реклама', 'интеграция', 'прайс', 'охваты', 'формат', 'размещение'],
+        allow_links: false,
+        max_length: 800,
+      },
+      // Price/quote intents (added to IntentClassifier in M4) force a human
+      // to confirm commercial terms.
+      autonomyPolicy: {
+        defaultMode: 'assisted',
+        T_safety: 0.8,
+        T_semi_auto_goalfit: 0.6,
+        T_auto_goalfit: 0.75,
+        forceHandoffIntents: ['discusses_price', 'sends_quote', 'wants_payment_for_ads'],
+      },
+    },
+  ] as const;
+
+  for (const t of campaignTypeSeeds) {
+    await prisma.campaignType.upsert({
+      where: { key: t.key },
+      update: {
+        name: t.name,
+        description: t.description,
+        goalSchema: t.goalSchema as object,
+        agentSet: t.agentSet as object,
+        safetyProfile: t.safetyProfile as object,
+        autonomyPolicy: t.autonomyPolicy as object,
+        builtIn: true,
+      },
+      create: {
+        id: t.key,
+        key: t.key,
+        name: t.name,
+        description: t.description,
+        goalSchema: t.goalSchema as object,
+        agentSet: t.agentSet as object,
+        safetyProfile: t.safetyProfile as object,
+        autonomyPolicy: t.autonomyPolicy as object,
+        builtIn: true,
+        enabled: true,
+      },
+    });
+    console.log(`✓ campaign_type: ${t.key}`);
+  }
+
   // Optional demo campaign seed. Off by default so prod / CI seeds
   // don't pollute the campaigns table. Set SEED_DEMO_CAMPAIGN=1 in dev
   // to make a sample campaign with populated AJTBD and defaultMode =

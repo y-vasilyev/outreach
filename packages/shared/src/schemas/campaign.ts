@@ -34,6 +34,11 @@ export const CampaignZ = z.object({
   goalText: z.string(),
   valueProp: z.string(),
   ajtbd: CampaignAjtbdZ.nullable(),
+  // Campaign-type registry (agency-sourcing-matching change). Nullable
+  // during the backfill window; `goal` is validated against the type's
+  // goalSchema server-side.
+  typeId: z.string().nullable(),
+  goal: z.record(z.unknown()).nullable(),
   targetFilter: TargetFilterZ,
   agentOverrides: z.record(z.unknown()).default({}),
   outreachAccountPool: z.array(z.string()),
@@ -48,6 +53,11 @@ export const CreateCampaignInputZ = z.object({
   goalText: z.string().min(1),
   valueProp: z.string().min(1),
   ajtbd: CampaignAjtbdZ.optional(),
+  // Campaign type to attach. Defaults to `custdev` server-side when omitted
+  // (preserves pre-registry behavior). `goal` is validated against the
+  // type's goalSchema; for custdev it falls back to the AJTBD scaffold.
+  typeId: z.string().optional(),
+  goal: z.record(z.unknown()).optional(),
   targetFilter: TargetFilterZ,
   agentOverrides: z.record(z.unknown()).default({}),
   outreachAccountPool: z.array(z.string()).default([]),
