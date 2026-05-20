@@ -225,4 +225,17 @@ describe('campaignTypeBuilderService.saveDraft', () => {
     await expect(campaignTypeBuilderService.saveDraft(reserved, 'admin1')).rejects.toBeTruthy();
     expect(prismaMock.agentConfig.create).not.toHaveBeenCalled();
   });
+
+  it('rejects a non-snake_case key with a 400 before any DB write', async () => {
+    prismaMock.endpoint.findMany.mockResolvedValue([
+      { id: 'ep_or', provider: 'openrouter', enabled: true },
+    ]);
+    const draft = await campaignTypeBuilderService.buildDraft({ goal_description: 'g' });
+    const bad = { ...draft, key: 'Bad Key!' };
+    await expect(campaignTypeBuilderService.saveDraft(bad, 'admin1')).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    expect(prismaMock.agentConfig.create).not.toHaveBeenCalled();
+    expect(prismaMock.campaignType.create).not.toHaveBeenCalled();
+  });
 });

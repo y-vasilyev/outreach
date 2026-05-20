@@ -160,8 +160,19 @@ export class AgentRunner {
         } as DbAgentConfig)
       : dbConfig;
 
-    // 3. Look up the agent from the registry & validate input.
-    const agent = agentRegistry.get(agentName);
+    // 3. Resolve the implementation & validate input.
+    //
+    // The common case: `agentName` is itself a registered implementation name
+    // (e.g. `opening_composer`) — use it directly. Custom configs saved by the
+    // campaign-type builder use a unique per-type `name` (e.g.
+    // `podcast_guesting_opening_composer`) that is NOT a registered
+    // implementation; for those we fall back to the registered agent named by
+    // `config.role` (the canonical implementation key the row should run as).
+    const implKey = agentRegistry.has(agentName) ? agentName : config.role;
+    if (!agentRegistry.has(implKey)) {
+      throw Errors.notFound('agent_impl', agentName);
+    }
+    const agent = agentRegistry.get(implKey);
     let parsedInput: unknown;
     try {
       parsedInput = agent.inputSchema.parse(input);
@@ -326,14 +337,14 @@ export class AgentRunner {
     };
 
     let output: T;
+    let acc: TokenAccumulator;
     try {
       output = (await agent.run(parsedInput, ctx)) as T;
       output = agent.outputSchema.parse(output) as T;
     } finally {
       // Always pull the accumulator so we don't leak entries on error.
-      // (Re-throw happens via finally + catch chain.)
+      acc = takeAcc(runId);
     }
-    const acc = takeAcc(runId);
     return {
       output,
       tokensIn: acc.tokensIn,
@@ -388,9 +399,15 @@ export class AgentRunner {
     };
 
     let output: T;
-    output = (await agent.run(parsedInput, ctx)) as T;
-    output = agent.outputSchema.parse(output) as T;
-    const acc = takeAcc(runId);
+    let acc: TokenAccumulator;
+    try {
+      output = (await agent.run(parsedInput, ctx)) as T;
+      output = agent.outputSchema.parse(output) as T;
+    } finally {
+      // Always pull the accumulator so a thrown run()/parse never leaks the
+      // runId-scoped token entry into the module-level Map.
+      acc = takeAcc(runId);
+    }
     return {
       output,
       tokensIn: acc.tokensIn,

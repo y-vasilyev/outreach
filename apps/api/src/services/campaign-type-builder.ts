@@ -20,7 +20,6 @@ import {
 
 import { getAgentRunner } from './agents.js';
 import { campaignTypesService } from './campaign-types.js';
-import { auditService } from './audit.js';
 import { logger } from '../logger.js';
 
 const BUILDER_AGENT_NAME = 'campaign_type_builder';
@@ -43,6 +42,8 @@ const STRUCTURED_ROLES = new Set([
  */
 const draftStore = new Map<string, CampaignTypeDraft>();
 const DRAFT_TTL_MS = 60 * 60 * 1000;
+/** Hard cap on retained drafts; oldest are evicted first on insert. */
+const DRAFT_MAX_ENTRIES = 200;
 const draftCreatedAt = new Map<string, number>();
 
 function pruneDrafts(): void {
@@ -53,6 +54,23 @@ function pruneDrafts(): void {
       draftCreatedAt.delete(id);
     }
   }
+}
+
+/**
+ * Store a draft, enforcing both the TTL prune and a hard entry cap. Map
+ * iteration order is insertion order, so evicting the first keys drops the
+ * oldest drafts first.
+ */
+function storeDraft(draft: CampaignTypeDraft): void {
+  pruneDrafts();
+  while (draftStore.size >= DRAFT_MAX_ENTRIES) {
+    const oldest = draftStore.keys().next().value;
+    if (oldest === undefined) break;
+    draftStore.delete(oldest);
+    draftCreatedAt.delete(oldest);
+  }
+  draftStore.set(draft.draftId, draft);
+  draftCreatedAt.set(draft.draftId, Date.now());
 }
 
 /**
@@ -290,9 +308,7 @@ export const campaignTypeBuilderService = {
       unavailableTiers,
     };
 
-    pruneDrafts();
-    draftStore.set(draftId, draft);
-    draftCreatedAt.set(draftId, Date.now());
+    storeDraft(draft);
     return draft;
   },
 
@@ -314,6 +330,15 @@ export const campaignTypeBuilderService = {
     actorId: string | null,
   ): Promise<{ id: string; key: string }> {
     const prisma = getPrisma();
+
+    // Enforce the snake_case key contract at the save boundary even when the
+    // service is called directly (the route also validates via zod). Mirrors
+    // CreateCampaignTypeInputZ so a hand-edited draft can't smuggle a bad key.
+    if (!/^[a-z][a-z0-9_]*$/.test(draft.key)) {
+      throw Errors.badRequest(`campaign type key "${draft.key}" must be snake_case`, {
+        key: draft.key,
+      });
+    }
 
     if ((BUILTIN_CAMPAIGN_TYPE_KEYS as readonly string[]).includes(draft.key)) {
       throw Errors.badRequest(`campaign type key "${draft.key}" is reserved`, {
@@ -367,7 +392,7 @@ export const campaignTypeBuilderService = {
         });
       }
 
-      return tx.campaignType.create({
+      const ct = await tx.campaignType.create({
         data: {
           key: draft.key,
           name: draft.name,
@@ -380,6 +405,20 @@ export const campaignTypeBuilderService = {
           enabled: true,
         },
       });
+
+      // Audit INSIDE the transaction so a failed audit rolls back the whole
+      // save (and a failed save never leaves a dangling audit row).
+      await tx.auditLog.create({
+        data: {
+          userId: actorId,
+          action: 'campaign_type.build_save',
+          targetType: 'campaign_type',
+          targetId: ct.id,
+          payload: { key: ct.key, agents: draft.agents.map((a) => a.name) } as object,
+        },
+      });
+
+      return ct;
     });
 
     // Consume the in-memory draft once saved.
@@ -388,14 +427,6 @@ export const campaignTypeBuilderService = {
 
     // Reuse the registry validator path for parity (no-op success here).
     void campaignTypesService;
-
-    await auditService.log({
-      userId: actorId,
-      action: 'campaign_type.build_save',
-      targetType: 'campaign_type',
-      targetId: created.id,
-      payload: { key: created.key, agents: draft.agents.map((a) => a.name) },
-    });
 
     return { id: created.id, key: created.key };
   },

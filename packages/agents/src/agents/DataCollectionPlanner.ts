@@ -51,6 +51,31 @@ export type DataCollectionPlannerOutput = z.infer<
   typeof dataCollectionPlannerOutputSchema
 >;
 
+/**
+ * Deterministic Russian question templates per known data-point key. Used when
+ * the planner overrides the LLM's `next_data_point` (because the model picked a
+ * collected/wrong field) so the returned `reply` can't keep asking about the
+ * wrong point. Unknown keys get a generic, point-aware fallback.
+ */
+const QUESTION_TEMPLATES: Record<string, string> = {
+  rate_card: 'Подскажите, пожалуйста, ваш прайс по форматам (пост, сторис и т.д.)?',
+  reach: 'Какие у вас охваты/просмотры на пост и на сторис?',
+  audience: 'Расскажете про аудиторию — пол, возраст, основные интересы?',
+  audience_demographics:
+    'Расскажете про аудиторию — пол, возраст, основные интересы?',
+  geo: 'Из каких стран и городов в основном ваша аудитория?',
+  deals_contact: 'С кем лучше обсуждать размещения — с вами напрямую или есть менеджер?',
+};
+
+const CLOSING_REPLY = 'Спасибо, всё собрал! Вернусь с конкретикой по клиенту.';
+
+function questionFor(point: string): string {
+  return (
+    QUESTION_TEMPLATES[point] ??
+    `Подскажите, пожалуйста, по пункту «${point}» — что можете рассказать?`
+  );
+}
+
 const FALLBACK_SYSTEM = `Ты ведёшь диалог от лица агентства и собираешь у блогера коммерческие данные: прайс по форматам, охваты/просмотры, демографию аудитории, гео, контакт для сделок.
 
 Тебе дают:
@@ -120,10 +145,11 @@ export const dataCollectionPlanner: Agent<
     });
 
     if (missing.length === 0) {
-      // Goal satisfied: the structural truth is deterministic. Keep the LLM's
-      // reply copy but never let it re-open a collected point.
+      // Goal satisfied: the structural truth is deterministic. The LLM may
+      // still emit a reply that re-asks a collected point, so replace it with
+      // a deterministic closing line — never pass the model copy verbatim.
       return {
-        reply: out.reply,
+        reply: CLOSING_REPLY,
         goal_satisfied: true,
         rationale: out.rationale || 'Все целевые данные собраны.',
       };
@@ -137,9 +163,15 @@ export const dataCollectionPlanner: Agent<
         : undefined;
     const nextPoint = llmPick ?? missing[0]!;
 
+    // When we OVERRODE the model's pick (it chose a collected/wrong field),
+    // its `reply` likely asks about that wrong point — so substitute a
+    // deterministic question for the corrected field. When we honoured the
+    // model's pick, keep its (richer) natural phrasing.
+    const reply = llmPick === undefined ? questionFor(nextPoint) : out.reply;
+
     return {
       next_data_point: nextPoint,
-      reply: out.reply,
+      reply,
       goal_satisfied: false,
       rationale: out.rationale,
     };

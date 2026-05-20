@@ -104,4 +104,36 @@ describe('agency_opening_composer', () => {
     // Observed integrations exist, but the variant cited a different brand.
     expect(out.variants[0]!.auto_send_eligible).toBe(false);
   });
+
+  it('drops auto-send eligibility when the text does not contain the cited integration', async () => {
+    const llm = makeLLM({
+      completeJsonImpl: () => ({
+        variants: [
+          {
+            // cited_integration is a REAL observed brand, but the text talks
+            // about something else entirely — the citation is divorced from
+            // what would actually be sent.
+            text: 'Здравствуйте! Мы агентство, у клиента есть интересный запрос — расскажете про форматы?',
+            rationale: 'cited Skillbox but never mentions it in the text',
+            length: 'medium',
+            risk_score: 0.1,
+            cited_integration: 'Skillbox',
+            auto_send_eligible: true,
+          },
+        ],
+      }),
+    });
+    const ctx = makeCtx({ llm, config: baseConfig });
+    const out = await agencyOpeningComposer.run(
+      {
+        channel_analysis: { topic: 'edtech' },
+        contact: {},
+        campaign: { goal_text: 'x', client_brief: '' },
+        observed_integrations: [{ brand: 'Skillbox', snippet: 'курс Skillbox' }],
+      },
+      ctx,
+    );
+    // Citation is real but absent from the text → conservative: not eligible.
+    expect(out.variants[0]!.auto_send_eligible).toBe(false);
+  });
 });

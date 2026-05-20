@@ -195,13 +195,28 @@ export const agencyOpeningComposer: Agent<
       .map((s) => s.toLowerCase());
 
     const variants = out.variants.map((v) => {
+      // (a) No observed integrations at all → never auto-send; strip any
+      // citation the model invented.
       if (!hasObserved) {
         return { ...v, cited_integration: undefined, auto_send_eligible: false };
       }
-      const citesReal =
-        typeof v.cited_integration === 'string' &&
-        knownHooks.some((h) => v.cited_integration!.toLowerCase().includes(h) || h.includes(v.cited_integration!.toLowerCase()));
-      return { ...v, auto_send_eligible: v.auto_send_eligible && citesReal };
+      // If the model didn't claim to cite anything, leave it for a human.
+      const cited = typeof v.cited_integration === 'string' ? v.cited_integration.trim() : '';
+      if (cited.length === 0) {
+        return { ...v, auto_send_eligible: false };
+      }
+      const citedLc = cited.toLowerCase();
+      // (b) The cited token must match a supplied snippet/brand — never invented.
+      const citesReal = knownHooks.some(
+        (h) => citedLc.includes(h) || h.includes(citedLc),
+      );
+      // (c) The variant text must actually contain the cited token, so the
+      // citation isn't just metadata divorced from what gets sent.
+      const textMentionsCited = v.text.toLowerCase().includes(citedLc);
+      // When in doubt, be conservative: only keep eligibility if the model
+      // asked for it AND the citation is real AND the text backs it up.
+      const eligible = v.auto_send_eligible && citesReal && textMentionsCited;
+      return { ...v, auto_send_eligible: eligible };
     });
 
     return { variants };

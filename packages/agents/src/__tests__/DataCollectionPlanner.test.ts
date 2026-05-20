@@ -65,6 +65,11 @@ describe('data_collection_planner', () => {
     // rate_card is collected → planner overrides to the first missing one.
     expect(out.next_data_point).not.toBe('rate_card');
     expect(['audience_demographics', 'geo', 'deals_contact']).toContain(out.next_data_point);
+    // The reply must NOT keep asking about the (collected) wrong point — the
+    // planner substitutes a deterministic question for the corrected field.
+    expect(out.reply).not.toMatch(/стоит пост/i);
+    expect(out.reply).not.toMatch(/rate_card/i);
+    expect(out.reply.length).toBeGreaterThan(0);
   });
 
   it('signals goal-satisfied with a closing reply when all collected', async () => {

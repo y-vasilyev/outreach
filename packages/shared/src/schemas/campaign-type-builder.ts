@@ -73,7 +73,15 @@ export type DraftAgentTestResult = z.infer<typeof DraftAgentTestResultZ>;
 export const CampaignTypeDraftZ = z.object({
   /** Opaque id for fetching this draft's results before save. */
   draftId: z.string(),
-  key: z.string(),
+  /**
+   * snake_case key — same regex as `CreateCampaignTypeInputZ`. Enforced here
+   * so an edited draft can't be saved with an invalid key (rejected with a
+   * 400 at the save boundary before any DB writes).
+   */
+  key: z
+    .string()
+    .min(1)
+    .regex(/^[a-z][a-z0-9_]*$/, 'key must be snake_case'),
   name: z.string(),
   description: z.string().default(''),
   goalSchema: GoalSchemaZ,
