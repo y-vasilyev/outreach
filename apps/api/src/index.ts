@@ -16,6 +16,7 @@ import { channelsRoutes } from './routes/channels.js';
 import { contactsRoutes } from './routes/contacts.js';
 import { campaignsRoutes } from './routes/campaigns.js';
 import { campaignTypesRoutes } from './routes/campaign-types.js';
+import { campaignTypeBuilderRoutes } from './routes/campaign-type-builder.js';
 import { conversationsRoutes } from './routes/conversations.js';
 import { usersRoutes } from './routes/users.js';
 import { auditRoutes } from './routes/audit.js';
@@ -46,6 +47,7 @@ async function main() {
   // (agency-sourcing-matching rollout step 1).
   if (flags.ENABLE_CAMPAIGN_TYPES) {
     await app.register(campaignTypesRoutes);
+    await app.register(campaignTypeBuilderRoutes);
   }
   await app.register(conversationsRoutes);
   await app.register(usersRoutes);

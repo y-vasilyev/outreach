@@ -343,6 +343,63 @@ export class AgentRunner {
     };
   }
 
+  /**
+   * Like `dryRun`, but runs an agent against an INLINE config that does NOT
+   * exist in the DB yet. Used by the campaign-type builder to test drafted
+   * agents against fixtures before the operator saves them — so no live
+   * `agent_config` row is created before save (Decision D3). Never persists
+   * `agent_run`.
+   *
+   * `agentName` selects the agent implementation (run logic + schemas) from
+   * the registry; `config` supplies the prompts/model/params/endpoint to use.
+   */
+  async dryRunConfig<T>(
+    agentName: string,
+    config: DbAgentConfig,
+    input: unknown,
+  ): Promise<{
+    output: T;
+    tokensIn: number;
+    tokensOut: number;
+    costUsd: number;
+    latencyMs: number;
+  }> {
+    const started = Date.now();
+    const runId = randomUUID();
+    const log = this.logger.child({ runId, agent: agentName, dryRun: true });
+
+    const agent = agentRegistry.get(agentName);
+    const parsedInput = agent.inputSchema.parse(input);
+
+    const provider = await this.buildProvider(config, runId);
+
+    const agentLogger: AgentLogger = {
+      info: (...args) => log.info(args.length === 1 ? args[0] : args),
+      warn: (...args) => log.warn(args.length === 1 ? args[0] : args),
+      error: (...args) => log.error(args.length === 1 ? args[0] : args),
+      debug: (...args) => log.debug(args.length === 1 ? args[0] : args),
+    };
+
+    const ctx: AgentRunCtx = {
+      llm: provider,
+      config,
+      logger: agentLogger,
+      runId,
+    };
+
+    let output: T;
+    output = (await agent.run(parsedInput, ctx)) as T;
+    output = agent.outputSchema.parse(output) as T;
+    const acc = takeAcc(runId);
+    return {
+      output,
+      tokensIn: acc.tokensIn,
+      tokensOut: acc.tokensOut,
+      costUsd: acc.costUsd,
+      latencyMs: Date.now() - started,
+    };
+  }
+
   /* ------------------------------------------------------------------ */
   /* Internals                                                          */
   /* ------------------------------------------------------------------ */

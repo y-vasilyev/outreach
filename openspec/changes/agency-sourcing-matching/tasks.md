@@ -25,12 +25,12 @@
 
 ## 3. Campaign-type builder
 
-- [ ] 3.1 Seed a capability→endpoint/model map (cheap/medium/strong) per available endpoint
-- [ ] 3.2 `CampaignTypeBuilder` meta-agent in `packages/agents`: input `{ goal_description, examples?, constraints? }` → draft `goal_schema`, `safety_profile`, per-role draft agent configs (prompts, model tier, params, output schema); register + seed
-- [ ] 3.3 Builder runs each drafted agent against fixtures via `dry_run`, attaching output/tokens/cost/latency; report tiers with no available endpoint
-- [ ] 3.4 Save-draft flow: create `campaign_type` + real `agent_config` rows (v1 in `agent_config_history`); audit the save; never auto-publish
-- [ ] 3.5 API endpoints: build draft, fetch draft results, save draft
-- [ ] 3.6 Unit tests with mocked `LLMProvider`: draft completeness, no live config before save, model-tier selection
+- [x] 3.1 Seed a capability→endpoint/model map (cheap/medium/strong) per available endpoint — `DEFAULT_CAPABILITY_MAP` + `resolveCapabilityMap` in `packages/shared/src/capability-map.ts`; seed block in `seed.ts` resolves it against configured endpoints and logs which tiers degrade (no endpoint)
+- [x] 3.2 `CampaignTypeBuilder` meta-agent in `packages/agents`: input `{ goal_description, examples?, constraints? }` → draft `goal_schema`, `safety_profile`, per-role draft agent configs (prompts, model tier, params, output schema); register + seed — registered in `agents/index.ts`; seeded as `campaign_type_builder` agent_config (strong tier, rebound from capability map at run time)
+- [x] 3.3 Builder runs each drafted agent against fixtures via `dry_run`, attaching output/tokens/cost/latency; report tiers with no available endpoint — `AgentRunner.dryRunConfig` runs an inline (unsaved) config; service attaches per-agent results and skips/reports agents whose tier has no endpoint
+- [x] 3.4 Save-draft flow: create `campaign_type` + real `agent_config` rows (v1 in `agent_config_history`); audit the save; never auto-publish — `saveDraft` in `campaign-type-builder.ts` (tx: agent_config v1 + history v1 + campaign_type; audit `campaign_type.build_save`)
+- [x] 3.5 API endpoints: build draft, fetch draft results, save draft — `routes/campaign-type-builder.ts` (admin, flag-gated behind ENABLE_CAMPAIGN_TYPES)
+- [x] 3.6 Unit tests with mocked `LLMProvider`: draft completeness, no live config before save, model-tier selection — `packages/agents/.../CampaignTypeBuilder.test.ts` + `apps/api/.../campaign-type-builder.test.ts`
 
 ## 4. Agency sourcing pipeline & agents
 

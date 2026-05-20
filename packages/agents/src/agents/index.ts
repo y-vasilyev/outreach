@@ -20,6 +20,7 @@ import { goalFitEvaluator } from './GoalFitEvaluator.js';
 import { conversationSummarizer } from './ConversationSummarizer.js';
 import { nextActionPlanner } from './NextActionPlanner.js';
 import { qualityReviewer } from './QualityReviewer.js';
+import { campaignTypeBuilder } from './CampaignTypeBuilder.js';
 
 agentRegistry.register(channelAnalyzer);
 agentRegistry.register(contactExtractor);
@@ -34,6 +35,7 @@ agentRegistry.register(goalFitEvaluator);
 agentRegistry.register(conversationSummarizer);
 agentRegistry.register(nextActionPlanner);
 agentRegistry.register(qualityReviewer);
+agentRegistry.register(campaignTypeBuilder);
 
 export {
   channelAnalyzer,
@@ -49,6 +51,7 @@ export {
   conversationSummarizer,
   nextActionPlanner,
   qualityReviewer,
+  campaignTypeBuilder,
 };
 
 export * from './ChannelAnalyzer.js';
@@ -64,3 +67,4 @@ export * from './GoalFitEvaluator.js';
 export * from './ConversationSummarizer.js';
 export * from './NextActionPlanner.js';
 export * from './QualityReviewer.js';
+export * from './CampaignTypeBuilder.js';

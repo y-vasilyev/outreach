@@ -411,4 +411,19 @@ reasons[] — короткие конкретные причины оценки 
     params: { temperature: 0.2, max_tokens: 400 },
     version: 3,
   },
+  {
+    // Meta-agent for the campaign-type builder (agency-sourcing-matching M3).
+    // Authors a draft campaign type from a plain-language goal. Strong tier.
+    // The builder SERVICE rebinds endpoint/model from the capability map at
+    // run time, so the seeded model here is only the static default.
+    name: 'campaign_type_builder',
+    role: 'campaign-type-builder',
+    description:
+      'Мета-агент: проектирует draft типа кампании (goal schema, safety profile, autonomy policy, промпты по ролям) из описания цели.',
+    model: 'anthropic/claude-sonnet-4.6',
+    systemPrompt: '',
+    userPromptTemplate: '',
+    params: { temperature: 0.3, max_tokens: 4000 },
+    version: 1,
+  },
 ];

@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { encryptJson } from '../src/crypto.js';
 import { defaultAgentSeeds } from './agents.seed.js';
+import { resolveCapabilityMap } from '@nosquare/shared';
 
 // AJTBD scaffold for the demo campaign. Kept inline (no shared import)
 // so this seed has no compile-time coupling to the shared zod schema —
@@ -286,6 +287,32 @@ async function main() {
       },
     });
     console.log(`✓ campaign_type: ${t.key}`);
+  }
+
+  // Capability → endpoint/model map (agency-sourcing-matching M3, task 3.1).
+  // The builder picks a tier (cheap/medium/strong) per role and binds it to
+  // an enabled endpoint of the matching provider. We resolve it here against
+  // the endpoints actually configured so the seed log surfaces which tiers
+  // are usable in this deployment — and which degrade (no endpoint).
+  const allEndpoints = await prisma.endpoint.findMany({
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, provider: true, enabled: true, name: true },
+  });
+  const resolvedMap = resolveCapabilityMap(
+    allEndpoints.map((e) => ({ id: e.id, provider: e.provider, enabled: e.enabled })),
+  );
+  for (const tier of ['cheap', 'medium', 'strong'] as const) {
+    const r = resolvedMap[tier];
+    if (r.available) {
+      const ep = allEndpoints.find((e) => e.id === r.endpointId);
+      console.log(
+        `✓ capability_map: ${tier} → ${ep?.name ?? r.endpointId} (${r.provider} / ${r.model})`,
+      );
+    } else {
+      console.log(
+        `· capability_map: ${tier} → (no endpoint configured — builder will report this tier as unavailable)`,
+      );
+    }
   }
 
   // Optional demo campaign seed. Off by default so prod / CI seeds
