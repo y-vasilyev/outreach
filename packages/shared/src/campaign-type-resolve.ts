@@ -1,6 +1,7 @@
 import {
   SafetyProfileZ,
   AutonomyPolicyZ,
+  AgentSetZ,
 } from './schemas/campaign-type.js';
 
 /**
@@ -55,4 +56,31 @@ export function resolveForceHandoffIntents(rawPolicy: unknown): string[] {
   if (rawPolicy == null) return [];
   const parsed = AutonomyPolicyZ.safeParse(rawPolicy);
   return parsed.success ? parsed.data.forceHandoffIntents : [];
+}
+
+/**
+ * Resolve which `agent_config.name` fills a pipeline role for a campaign
+ * type, given the type's stored `agentSet` JSON. Pure so the worker can wire
+ * it up behind `ENABLE_CAMPAIGN_TYPES` without reaching for the DB here.
+ *
+ * Falls back to `fallback` (typically the role name itself, which equals the
+ * legacy global agent name — e.g. `opening_composer`) when the role is absent
+ * or the agentSet is missing/invalid. This keeps a flag-off / typeless
+ * campaign on the legacy agent set.
+ *
+ * The agency type maps `opening_composer → agency_opening_composer` and adds
+ * `data_collection_planner`, so once the worker call-site is wired, agency
+ * conversations resolve the agency-framed agents while CustDev stays put.
+ */
+export function resolveAgentName(
+  rawAgentSet: unknown,
+  role: string,
+  fallback: string,
+): string {
+  if (rawAgentSet == null) return fallback;
+  const parsed = AgentSetZ.safeParse(rawAgentSet);
+  if (!parsed.success) return fallback;
+  const slot = parsed.data[role];
+  if (!slot || !slot.agentName) return fallback;
+  return slot.agentName;
 }

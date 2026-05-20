@@ -34,12 +34,12 @@
 
 ## 4. Agency sourcing pipeline & agents
 
-- [ ] 4.1 Seed `agency_sourcing` type's `safety_profile` (permits commercial vocabulary; blocks guarantees, fabricated client specifics, money/links, pressure)
-- [ ] 4.2 `AgencyOpeningComposer` agent: opening referencing an observed sponsored integration in the channel's posts; no-fabrication guard
-- [ ] 4.3 `DataCollectionPlanner` agent: track collected vs target data points, propose next single question, signal goal-satisfied
-- [ ] 4.4 Intent handling: add price-agreement/quote intents that force `operator_now`; wire into autonomy policy
-- [ ] 4.5 Default `agency_sourcing` conversations to `assisted` until promoted; document in type config
-- [ ] 4.6 Unit tests: opening cites real ad / refuses fabrication, planner sequencing, price intent forces handoff, commercial vocab passes safety, result-guarantee blocked
+- [x] 4.1 Seed `agency_sourcing` type's `safety_profile` (permits commercial vocabulary; blocks guarantees, fabricated client specifics, money/links, pressure) — `allowed_topics` carry commercial vocab; `forbidden_topics` now carry the agency guardrail tone signals (guarantee/pressure/money phrases) consumed by SafetyFilter as advisory risk signals (`packages/db/prisma/seed.ts`)
+- [x] 4.2 `AgencyOpeningComposer` agent (`agency_opening_composer`): opening referencing an observed sponsored integration in the channel's posts; deterministic no-fabrication guard (no observed integration → not auto-send-eligible, cited brand must match a supplied snippet/brand). Registered + seeded
+- [x] 4.3 `DataCollectionPlanner` agent (`data_collection_planner`): deterministic missing-set (target − collected), proposes next single missing question, never re-asks collected, authoritative goal-satisfied signal. Registered + seeded
+- [x] 4.4 Intent handling: added `discusses_price` + `sends_quote` to IntentClassifier's enum (kept all existing intents); the agency type's seeded `forceHandoffIntents` escalate them. Tests updated
+- [x] 4.5 Default `agency_sourcing` conversations to `assisted` (verified in seed `autonomyPolicy.defaultMode='assisted'` + documented); agency `agentSet` points `opening_composer→agency_opening_composer` and adds `data_collection_planner`; pure `resolveAgentName(agentSet, role, fallback)` helper added in `packages/shared` (worker call-site wiring deferred to integration — agent-run.ts not touched per constraints)
+- [x] 4.6 Unit tests (mocked LLM): opening cites real ad / refuses fabrication, planner sequencing + stop-when-complete, price intent in classifier output + force-handoff, commercial vocab passes safety low-risk, result-guarantee high-risk, `resolveAgentName` resolution
 - [ ] 4.7 **CODEX REVIEW** — milestone 2 (builder + agency pipeline)
 
 ## 5. Blogger commercial profile & extractors

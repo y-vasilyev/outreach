@@ -13,6 +13,13 @@ export const INTENTS = [
   'objection_compensation',
   'wants_payment_for_ads',
   'wants_to_schedule',
+  // Agency-sourcing commercial intents (agency-sourcing-matching M4). These
+  // are listed in the agency type's autonomyPolicy.forceHandoffIntents so the
+  // worker escalates them to the operator — a human confirms commercial terms
+  // before any price is agreed or a quote goes out. They are harmless to
+  // CustDev (whose policy lists neither), so adding them is additive.
+  'discusses_price',
+  'sends_quote',
   'declined',
   'hostile',
   'spam_complaint',
@@ -35,7 +42,11 @@ export const intentClassifierOutputSchema = z.object({
 export type IntentClassifierInput = z.infer<typeof intentClassifierInputSchema>;
 export type IntentClassifierOutput = z.infer<typeof intentClassifierOutputSchema>;
 
-const FALLBACK_SYSTEM = `Ты классифицируешь входящее сообщение в CustDev-диалоге. Возможные интенты: ${INTENTS.join(', ')}. Особо важно отличать wants_payment_for_ads — человек считает, что мы предлагаем купить рекламу. Возвращай JSON: { intent, confidence, signals[] }.`;
+const FALLBACK_SYSTEM = `Ты классифицируешь входящее сообщение в диалоге аутрича. Возможные интенты: ${INTENTS.join(', ')}.
+- wants_payment_for_ads — собеседник принял нас за покупателя рекламы и называет/просит цену (важный сигнал для CustDev).
+- discusses_price — собеседник обсуждает/называет цену или прайс под коммерческое размещение (агентский сценарий).
+- sends_quote — собеседник прислал коммерческое предложение/смету/конкретные условия сделки.
+Возвращай JSON: { intent, confidence, signals[] }.`;
 
 const FALLBACK_USER = `Последнее входящее: {{last_inbound}}
 

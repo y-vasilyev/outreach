@@ -1,5 +1,5 @@
 /**
- * Side-effect import: registers all 12 agents into `agentRegistry`.
+ * Side-effect import: registers all agents into `agentRegistry`.
  *
  * Importing this module from `packages/agents/src/index.ts` is enough; callers
  * that only need a specific agent's schemas can also import the file directly.
@@ -21,6 +21,8 @@ import { conversationSummarizer } from './ConversationSummarizer.js';
 import { nextActionPlanner } from './NextActionPlanner.js';
 import { qualityReviewer } from './QualityReviewer.js';
 import { campaignTypeBuilder } from './CampaignTypeBuilder.js';
+import { agencyOpeningComposer } from './AgencyOpeningComposer.js';
+import { dataCollectionPlanner } from './DataCollectionPlanner.js';
 
 agentRegistry.register(channelAnalyzer);
 agentRegistry.register(contactExtractor);
@@ -36,6 +38,8 @@ agentRegistry.register(conversationSummarizer);
 agentRegistry.register(nextActionPlanner);
 agentRegistry.register(qualityReviewer);
 agentRegistry.register(campaignTypeBuilder);
+agentRegistry.register(agencyOpeningComposer);
+agentRegistry.register(dataCollectionPlanner);
 
 export {
   channelAnalyzer,
@@ -52,6 +56,8 @@ export {
   nextActionPlanner,
   qualityReviewer,
   campaignTypeBuilder,
+  agencyOpeningComposer,
+  dataCollectionPlanner,
 };
 
 export * from './ChannelAnalyzer.js';
@@ -68,3 +74,5 @@ export * from './ConversationSummarizer.js';
 export * from './NextActionPlanner.js';
 export * from './QualityReviewer.js';
 export * from './CampaignTypeBuilder.js';
+export * from './AgencyOpeningComposer.js';
+export * from './DataCollectionPlanner.js';

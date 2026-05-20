@@ -21,6 +21,9 @@ export interface AgentSeed {
    * v6 — OpenRouter model defaults by agent class.
    * v7 — rollout bump for formerly v1 agents that may already be UI-edited to v2.
    * v8 — chat-autonomous-modes: introduces goal_fit_evaluator agent.
+   * v9 — agency-sourcing-matching M4: intent_classifier learns the agency
+   *      commercial intents (discusses_price/sends_quote); adds
+   *      agency_opening_composer + data_collection_planner agents.
    */
   version: number;
 }
@@ -271,11 +274,11 @@ export const defaultAgentSeeds: AgentSeed[] = [
     description: 'Классифицирует входящее под CustDev-сценарий.',
     model: 'google/gemini-2.5-flash-lite',
     systemPrompt:
-      'Ты классифицируешь входящее сообщение в CustDev-аутриче. Особо важный интент: wants_payment_for_ads — собеседник принял за продажу рекламы и просит/называет цену. Возвращай JSON. Возможные intent: interested, needs_more_info, asks_about_product, objection_busy, objection_irrelevant, objection_compensation, wants_payment_for_ads, wants_to_schedule, declined, hostile, spam_complaint, request_human, silence_likely.',
+      'Ты классифицируешь входящее сообщение в аутрич-диалоге. Особо важные интенты: wants_payment_for_ads — собеседник принял за продажу рекламы и просит/называет цену (CustDev-сигнал); discusses_price — обсуждает/называет прайс под коммерческое размещение (агентский сценарий); sends_quote — прислал смету/коммерческое предложение/условия сделки. Возвращай JSON. Возможные intent: interested, needs_more_info, asks_about_product, objection_busy, objection_irrelevant, objection_compensation, wants_payment_for_ads, wants_to_schedule, discusses_price, sends_quote, declined, hostile, spam_complaint, request_human, silence_likely.',
     userPromptTemplate:
       'Хвост истории:\n{{history_tail}}\n\nПоследнее входящее: {{last_inbound}}\n\nВерни JSON: {intent, confidence, signals[]}',
     params: { temperature: 0.0, max_tokens: 300 },
-    version: 3,
+    version: 4,
   },
   {
     name: 'safety_filter',
@@ -424,6 +427,39 @@ reasons[] — короткие конкретные причины оценки 
     systemPrompt: '',
     userPromptTemplate: '',
     params: { temperature: 0.3, max_tokens: 4000 },
+    version: 1,
+  },
+  {
+    // Agency-sourcing opening composer (agency-sourcing-matching M4, task 4.2).
+    // Inverse of opening_composer: agency framing + cites a REAL observed
+    // integration; never invents a past ad (deterministic guard in the agent).
+    name: 'agency_opening_composer',
+    role: 'agency-opening-composer',
+    description:
+      'Первое сообщение от лица агентства со ссылкой на реальную интеграцию автора; не выдумывает прошлых размещений.',
+    model: 'anthropic/claude-sonnet-4.6',
+    systemPrompt:
+      'Ты пишешь первое сообщение блогеру от лица агентства по размещению рекламы. Цель — открыть коммерческий разговор: прайс, форматы, сроки, охваты под запрос клиента. Коммерческая лексика уместна. ГЛАВНОЕ: ссылаться можно ТОЛЬКО на интеграции из observed_integrations (реальные рекламные посты автора). Если список пуст — НЕЛЬЗЯ упоминать конкретную прошлую рекламу; используй общий заход по тематике или auto_send_eligible=false. Нельзя: гарантии результата, выдуманные детали клиента, платёжные ссылки/перевод денег до подтверждения оператором, давление («только сегодня», «срочно»). Заполняй cited_integration зацепкой, которую процитировал. Возвращай JSON: {variants: [{text, rationale, length, risk_score, cited_integration?, auto_send_eligible}]}.',
+    userPromptTemplate:
+      'Канал (анализ): {{channel_analysis}}\nКонтакт: {{contact}}\nЧто ищем для клиента: {{goal_text}}\nБриф клиента: {{client_brief}}\n\nНаблюдаемые интеграции автора (только на них можно ссылаться; если пусто — общий заход):\n{{observed_integrations_for_hook}}\n\nВерни JSON. 2–3 варианта.',
+    params: { temperature: 0.7, max_tokens: 1200 },
+    version: 1,
+  },
+  {
+    // Data-collection dialogue planner (agency-sourcing-matching M4, task 4.3).
+    // Asks one missing data point at a time; signals goal-satisfied when all
+    // collected. The missing-set + goal-satisfied truth is deterministic in
+    // the agent — the prompt only phrases the question/closing.
+    name: 'data_collection_planner',
+    role: 'data-collection-planner',
+    description:
+      'Спрашивает следующий недостающий коммерческий показатель блогера по одному за ход; сигналит goal-satisfied.',
+    model: 'anthropic/claude-haiku-4.5',
+    systemPrompt:
+      'Ты ведёшь диалог от лица агентства и собираешь у блогера коммерческие данные (прайс по форматам, охваты/просмотры, демография, гео, контакт для сделок). Спрашивай РОВНО ОДИН недостающий пункт за ход (next_data_point из missing_data_points). НИКОГДА не переспрашивай уже собранное. Если missing_data_points пуст — короткое благодарственное/закрывающее сообщение, goal_satisfied=true, next_data_point не указывай. Без давления, гарантий результата и платёжных ссылок. Возвращай JSON: {next_data_point?, reply, goal_satisfied, rationale}.',
+    userPromptTemplate:
+      'Все целевые данные: {{target_data_points}}\nУже собрано: {{collected_data_points}}\nЕщё НЕ собрано (спрашивай только это): {{missing_data_points}}\n\nИстория:\n{{history_tail}}\n\nПоследнее входящее: {{last_inbound}}\n\nВерни JSON.',
+    params: { temperature: 0.3, max_tokens: 400 },
     version: 1,
   },
 ];

@@ -179,6 +179,19 @@ async function main() {
     next_action_planner: { agentName: 'next_action_planner', overrides: {} },
   };
 
+  // Agency-sourcing agent set (agency-sourcing-matching M4, task 4.5): reuse
+  // the shared classifier/safety/handoff/summarizer agents but point the
+  // `opening_composer` role at the agency-framed composer and add the
+  // data-collection planner role. The worker resolves a role→agent via
+  // `resolveAgentName(agentSet, role, fallback)` (packages/shared) behind
+  // ENABLE_CAMPAIGN_TYPES; that call-site wiring lands with the agency inbound
+  // pipeline (M4 worker integration) — the registry already carries the map.
+  const AGENCY_AGENT_SET = {
+    ...BASE_AGENT_SET,
+    opening_composer: { agentName: 'agency_opening_composer', overrides: {} },
+    data_collection_planner: { agentName: 'data_collection_planner', overrides: {} },
+  };
+
   const campaignTypeSeeds = [
     {
       key: 'custdev',
@@ -240,17 +253,38 @@ async function main() {
           client_brief: { type: 'string' },
         },
       },
-      agentSet: BASE_AGENT_SET,
-      // Inverse of CustDev: commercial vocabulary is on-goal here, so it must
-      // NOT raise the risk score. M4 adds the agency-specific agents/prompts.
+      agentSet: AGENCY_AGENT_SET,
+      // Inverse of CustDev (D7). Commercial vocabulary is ON-goal here, so it
+      // is `allowed_topics` (never raises the risk score). `forbidden_topics`
+      // are NOT a salesy-lexicon list — they are advisory tone signals for the
+      // SafetyFilter LLM that capture the agency-specific guardrails:
+      //   - result guarantees (гарантируем результат / гарантия продаж/охватов)
+      //   - fabricated client specifics (выдуманный бренд/бюджет клиента)
+      //   - money transfers / payment links before operator confirmation
+      //   - pressure tactics (срочно/только сегодня/последнее место)
+      // Hard guards (max_length, links) still apply deterministically.
       safetyProfile: {
-        forbidden_topics: [],
+        forbidden_topics: [
+          'гарантируем результат',
+          'гарантия продаж',
+          'гарантированный охват',
+          'гарантируем продажи',
+          'оплатите по ссылке',
+          'переведите предоплату',
+          'реквизиты для оплаты',
+          'только сегодня',
+          'последнее место',
+          'срочно решайте',
+        ],
         allowed_topics: ['реклама', 'интеграция', 'прайс', 'охваты', 'формат', 'размещение'],
         allow_links: false,
         max_length: 800,
       },
-      // Price/quote intents (added to IntentClassifier in M4) force a human
-      // to confirm commercial terms.
+      // Agency dialogues default to `assisted` (D7 + non-goal: no auto price
+      // negotiation): the AI drafts, a human confirms before sending. Price/
+      // quote intents (discusses_price / sends_quote, added to IntentClassifier
+      // in M4) plus wants_payment_for_ads force an immediate operator handoff
+      // so a human confirms commercial terms before any price is agreed.
       autonomyPolicy: {
         defaultMode: 'assisted',
         T_safety: 0.8,
