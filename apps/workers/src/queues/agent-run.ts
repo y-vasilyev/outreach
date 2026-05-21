@@ -212,6 +212,67 @@ function isAgencyConversation(
   return Boolean(flags.ENABLE_AGENCY_SOURCING && campaign?.type?.key === 'agency_sourcing');
 }
 
+interface DataCollectionPlannerOut {
+  next_data_point?: string;
+  reply: string;
+  goal_satisfied: boolean;
+  rationale: string;
+}
+
+// Default agency data points to harvest when a campaign's goal doesn't
+// declare its own `target_data_points`.
+const AGENCY_DEFAULT_TARGETS = ['rate_card', 'reach', 'audience', 'geo', 'deals_contact'];
+
+/** Read `target_data_points` from an agency campaign's goal, else the default set. */
+function agencyTargets(goal: unknown): string[] {
+  if (goal && typeof goal === 'object') {
+    const t = (goal as { target_data_points?: unknown }).target_data_points;
+    if (Array.isArray(t)) {
+      const arr = t.filter((x): x is string => typeof x === 'string' && x.length > 0);
+      if (arr.length > 0) return arr;
+    }
+  }
+  return AGENCY_DEFAULT_TARGETS;
+}
+
+// Keyword roots that mark a target as "collected" given a ProfileDataPoint
+// field (extractors emit fields like `rate.post`, `reach.story`, `audience.geo`).
+const TARGET_FIELD_KEYWORDS: Record<string, string[]> = {
+  rate_card: ['rate', 'price'],
+  reach: ['reach', 'views'],
+  audience: ['audience'],
+  audience_demographics: ['audience'],
+  geo: ['geo'],
+  deals_contact: ['contact', 'deals', 'manager'],
+};
+
+function targetCollected(target: string, fields: string[]): boolean {
+  const kws = TARGET_FIELD_KEYWORDS[target] ?? [target];
+  return fields.some((f) => {
+    const lf = f.toLowerCase();
+    return kws.some((k) => lf === k || lf.startsWith(`${k}.`) || lf.includes(k));
+  });
+}
+
+/**
+ * Which target data points are already collected for a channel's blogger
+ * profile (by mapping the profile's ProfileDataPoint fields onto the target
+ * categories). Empty when there's no channel or profile yet.
+ */
+async function collectedAgencyTargets(
+  channelId: string | null | undefined,
+  targets: string[],
+): Promise<string[]> {
+  if (!channelId) return [];
+  const profile = await getPrisma().bloggerProfile.findUnique({
+    where: { channelId },
+    select: { dataPoints: { select: { field: true } } },
+  });
+  if (!profile) return [];
+  const fields = profile.dataPoints.map((d) => d.field);
+  return targets.filter((t) => targetCollected(t, fields));
+}
+
 let _profileExtractQueue: Queue | undefined;
 function profileExtractQueue(): Queue {
   if (!_profileExtractQueue) {
@@ -239,6 +300,7 @@ export async function handleOnInbound(data: { conversationId?: string }): Promis
                 select: {
                   id: true,
                   ajtbd: true,
+                  goal: true,
                   goalText: true,
                   valueProp: true,
                   type: {
@@ -408,30 +470,72 @@ export async function handleOnInbound(data: { conversationId?: string }): Promis
           // type's agentSet; it maps `reply_composer → reply_composer` today,
           // so this is a no-op until a type remaps it. CustDev / flag-off stays
           // on the literal `reply_composer`.
-          const replyAgent = resolveRoleAgent(conv.campaign, 'reply_composer', 'reply_composer');
-          const reply = await runAgentSafe<ReplyComposerOut>(
-            replyAgent,
-            {
-              channel_analysis: conv.contact.channel?.analysis ?? {},
-              contact: buildContactPromptInput(conv.contact),
-              // Keep the legacy campaign block populated when we have one
-              // — old prompt templates still reference {{goal_text}} /
-              // {{value_prop}}. The new AJTBD block lives alongside.
-              campaign: {
-                goal_text: conv.campaign?.goalText ?? '',
-                value_prop: conv.campaign?.valueProp ?? '',
+          // Reply generation. For agency_sourcing conversations (behind
+          // ENABLE_AGENCY_SOURCING) the DataCollectionPlanner drives the
+          // dialogue — it asks for the next missing commercial data point
+          // (one per turn) or closes when everything is collected — and its
+          // single reply becomes the candidate, run through the same safety /
+          // gate / auto-approve path below. CustDev / flag-off uses
+          // reply_composer exactly as before.
+          let reply: ReplyComposerOut | null;
+          if (isAgencyConversation(conv.campaign)) {
+            const targets = agencyTargets(conv.campaign?.goal);
+            const collected = await collectedAgencyTargets(conv.contact.channelId, targets);
+            const planner = await runAgentSafe<DataCollectionPlannerOut>(
+              'data_collection_planner',
+              {
+                target_data_points: targets,
+                collected_data_points: collected,
+                history_tail: historyTail,
+                last_inbound: last.text,
               },
-              ...(ajtbd ? { ajtbd } : {}),
-              conversation_history: messages.map((m) => ({
-                direction: m.direction === 'in_' ? 'in' : 'out',
-                sender: m.sender,
-                text: m.text,
-                at: m.createdAt.toISOString(),
-              })),
-              last_inbound: { text: last.text, intent: intent.intent, sentiment: 'neutral' },
-            },
-            { conversationId: conv.id },
-          );
+              { conversationId: conv.id },
+            );
+            if (!planner) {
+              return { ok: true, degraded: 'data_collection_planner_failed', action: handoff.action };
+            }
+            reply = {
+              variants: [
+                {
+                  text: planner.reply,
+                  intent_target: planner.goal_satisfied ? 'soft_close' : 'qualify',
+                  rationale:
+                    planner.rationale ||
+                    (planner.goal_satisfied
+                      ? 'Все целевые данные собраны'
+                      : `Спрашиваем: ${planner.next_data_point ?? ''}`),
+                },
+              ],
+            };
+          } else {
+            // B2 (agency-sourcing-matching): the reply role resolves via the
+            // type's agentSet; maps `reply_composer → reply_composer` today.
+            // CustDev / flag-off stays on the literal `reply_composer`.
+            const replyAgent = resolveRoleAgent(conv.campaign, 'reply_composer', 'reply_composer');
+            reply = await runAgentSafe<ReplyComposerOut>(
+              replyAgent,
+              {
+                channel_analysis: conv.contact.channel?.analysis ?? {},
+                contact: buildContactPromptInput(conv.contact),
+                // Keep the legacy campaign block populated when we have one
+                // — old prompt templates still reference {{goal_text}} /
+                // {{value_prop}}. The new AJTBD block lives alongside.
+                campaign: {
+                  goal_text: conv.campaign?.goalText ?? '',
+                  value_prop: conv.campaign?.valueProp ?? '',
+                },
+                ...(ajtbd ? { ajtbd } : {}),
+                conversation_history: messages.map((m) => ({
+                  direction: m.direction === 'in_' ? 'in' : 'out',
+                  sender: m.sender,
+                  text: m.text,
+                  at: m.createdAt.toISOString(),
+                })),
+                last_inbound: { text: last.text, intent: intent.intent, sentiment: 'neutral' },
+              },
+              { conversationId: conv.id },
+            );
+          }
           if (!reply) {
             return { ok: true, degraded: 'reply_composer_failed', action: handoff.action };
           }

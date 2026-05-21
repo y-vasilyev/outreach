@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => {
     conversation: { findUnique: vi.fn(), update: vi.fn() },
     message: { findMany: vi.fn(), create: vi.fn() },
     suggestion: { create: vi.fn() },
+    bloggerProfile: { findUnique: vi.fn() },
     $transaction: vi.fn(),
   };
   const runAgentSafe = vi.fn();
@@ -67,7 +68,7 @@ function setupConversation(opts: { typeKey?: string; agentSet?: unknown }): void
     mode: 'assisted',
     summary: '',
     qualityDecision: null,
-    contact: { id: 'c1', value: '999', type: 'tg_username', channel: { analysis: {} } },
+    contact: { id: 'c1', channelId: 'ch1', value: '999', type: 'tg_username', channel: { analysis: {} } },
     campaign: {
       id: 'cmp1',
       ajtbd: SAMPLE_AJTBD,
@@ -108,6 +109,13 @@ function setAgentResponses(): void {
         return { action: 'ai_continue', reason: 'ok', urgency: 'normal' };
       case 'reply_composer':
         return { variants: [{ text: 't', intent_target: 'qualify', rationale: 'r' }] };
+      case 'data_collection_planner':
+        return {
+          reply: 'Какие у вас охваты на пост и сторис?',
+          next_data_point: 'reach',
+          goal_satisfied: false,
+          rationale: 'спрашиваем reach',
+        };
       case 'safety_filter':
         return { allow: true, reasons: [], risk_score: 0.1 };
       default:
@@ -125,6 +133,7 @@ beforeEach(() => {
   mocks.publishRealtime.mockResolvedValue(undefined);
   mocks.tryAutoApprove.mockResolvedValue(false);
   mocks.queueAdd.mockResolvedValue({});
+  mocks.prisma.bloggerProfile.findUnique.mockResolvedValue(null);
   setAgentResponses();
 });
 
@@ -146,14 +155,47 @@ describe('handleOnInbound — agency routing (B2)', () => {
     );
   });
 
-  it('resolves the reply role from the agency agentSet (still reply_composer here)', async () => {
+  it('drives the agency reply with data_collection_planner (not reply_composer)', async () => {
     flags.ENABLE_AGENCY_SOURCING = true;
     setupConversation({ typeKey: 'agency_sourcing', agentSet: AGENCY_AGENT_SET });
 
     await handleOnInbound({ conversationId: 'conv1' });
 
-    const replyCall = mocks.runAgentSafe.mock.calls.find((c) => c[0] === 'reply_composer');
-    expect(replyCall).toBeDefined();
+    const plannerCall = mocks.runAgentSafe.mock.calls.find(
+      (c) => c[0] === 'data_collection_planner',
+    );
+    expect(plannerCall).toBeDefined();
+    // The planner gets the default target set + collected (none → []) here.
+    expect(plannerCall?.[1]).toMatchObject({
+      target_data_points: expect.arrayContaining(['rate_card', 'reach']),
+      collected_data_points: [],
+    });
+    // Agency path does NOT call reply_composer.
+    expect(mocks.runAgentSafe.mock.calls.find((c) => c[0] === 'reply_composer')).toBeUndefined();
+    // The planner's reply is turned into a suggestion.
+    expect(mocks.prisma.suggestion.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ text: 'Какие у вас охваты на пост и сторис?' }),
+      }),
+    );
+  });
+
+  it('marks collected targets from the blogger profile so the planner skips them', async () => {
+    flags.ENABLE_AGENCY_SOURCING = true;
+    setupConversation({ typeKey: 'agency_sourcing', agentSet: AGENCY_AGENT_SET });
+    // Profile already has a rate-card data point → rate_card is "collected".
+    mocks.prisma.bloggerProfile.findUnique.mockResolvedValue({
+      dataPoints: [{ field: 'rate.post' }, { field: 'reach.story' }],
+    });
+
+    await handleOnInbound({ conversationId: 'conv1' });
+
+    const plannerCall = mocks.runAgentSafe.mock.calls.find(
+      (c) => c[0] === 'data_collection_planner',
+    );
+    expect(plannerCall?.[1]).toMatchObject({
+      collected_data_points: expect.arrayContaining(['rate_card', 'reach']),
+    });
   });
 
   it('does NOT enqueue profile-extract for CustDev (flag on, custdev type)', async () => {

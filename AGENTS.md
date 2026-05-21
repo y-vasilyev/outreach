@@ -604,11 +604,12 @@ SELECT conversations WHERE status=active
   бренд обязан встречаться и в тексте).
 - **DataCollectionPlanner — `data_collection_planner`.** Логика сбора данных:
   missing = target − collected, задаёт один недостающий вопрос за ход, не
-  переспрашивает собранное, авторитетный сигнал goal-satisfied. Агент
-  реализован, засижен в `agent_config` и покрыт unit-тестами, НО его вызов в
-  агентском inbound-пайплайне пока ОТЛОЖЕН: путь ответа на inbound сейчас
-  резолвится в `reply_composer` (см. ниже). Планировщик будет подключён, когда
-  агентский inbound начнёт потреблять состояние profile collected/target.
+  переспрашивает собранное, авторитетный сигнал goal-satisfied. ПОДКЛЮЧЁН в
+  агентский inbound-пайплайн (за `ENABLE_AGENCY_SOURCING`): для
+  `agency_sourcing`-конверсаций он ведёт диалог вместо `reply_composer` —
+  `target_data_points` берутся из `campaign.goal` (или дефолтный набор),
+  `collected` маппится из полей `profile_data_point` блогера; его единственный
+  reply идёт через тот же safety/gate/auto-approve путь.
 - **RateCardExtractor / AudienceStatsExtractor.** Парсят свободный текст
   блогера в `profile_data_point` (`rate.*`, `reach.*`, `audience.*`) с
   confidence и сырым `raw_snippet`; низкая уверенность не выкидывается.
@@ -626,9 +627,11 @@ SELECT conversations WHERE status=active
 
 ### Пайплайн агентского inbound (поверх `on_inbound`)
 
-Для `agency_sourcing`-конверсаций (за флагом): опенер/reply резолвятся из
-`agent_set` через `resolveAgentName(role, fallback)`; на сегодня роль
-`reply_composer` маппится в `reply_composer` (а не в `data_collection_planner`
-— его подключение отложено, см. выше). После inbound в очередь `profile-extract`
-уходит извлечение прайсов/охватов в `profile_data_point` + детерминированный
-roll-up в `blogger_profile`; входящие файлы оседают в S3 (`media_asset`).
+Для `agency_sourcing`-конверсаций (за флагом): опенер резолвится из
+`agent_set` (`agency_opening_composer`); на inbound вместо `reply_composer`
+работает `data_collection_planner` (следующий недостающий пункт / закрытие).
+После inbound в очередь `profile-extract` уходит извлечение прайсов/охватов в
+`profile_data_point` + детерминированный roll-up в `blogger_profile`; входящие
+файлы оседают в S3 (`media_asset`). Интенты `discusses_price`/`sends_quote`
+форсят `operator_now`. Всё за `ENABLE_AGENCY_SOURCING`; при выключенном флаге
+путь CustDev байт-в-байт.
