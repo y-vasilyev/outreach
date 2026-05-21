@@ -158,6 +158,22 @@ export function startTgListenWorker() {
         });
       }
 
+      // B2 parity (agency-sourcing-matching M6): tg-client now lets media-only
+      // inbounds (empty text) through so they can be recorded as media_asset
+      // rows. That is a NEW behavior — before M6, an empty-text inbound never
+      // produced a Message + on_inbound run. Keep the legacy CustDev path
+      // byte-for-byte when ENABLE_OBJECT_STORAGE is off: an inbound with no text
+      // is dropped here exactly as it was pre-M6 (mapIncomingEvent used to
+      // return null for it). Only when object storage is on do we persist the
+      // empty-text inbound + run the pipeline so its media is captured.
+      if (!data.text && !flags.ENABLE_OBJECT_STORAGE) {
+        logger.info(
+          { tgMsgId: data.tgMsgId, tgAccountId: data.tgAccountId },
+          'tg-listen: media-only inbound dropped (object storage disabled; legacy parity)',
+        );
+        return { ok: true, skipped: 'media_only_storage_off' };
+      }
+
       // 3. Idempotency: skip if we already stored this tgMsgId for this conv.
       if (data.tgMsgId) {
         const dup = await prisma.message.findFirst({
@@ -187,7 +203,28 @@ export function startTgListenWorker() {
           channelId: contact.channelId ?? null,
           sourceTgMsgId: data.tgMsgId || null,
           media: data.media,
-          // tg-client does not download media bytes; metadata-only asset row.
+          // B3: download the actual bytes via tg-client (GramJS downloadMedia)
+          // so the media_asset gets a real s3Key. The thunk resolves to null on
+          // any failure → media-store records an honest-pending (empty s3Key)
+          // row instead of a dead URL. Never throws (guarded both sides).
+          downloadBytes: async () => {
+            if (!data.tgMsgId) return null;
+            const tg = getTgClient();
+            if (!tg) return null;
+            try {
+              const handle = await tg.for(data.tgAccountId);
+              return await handle.downloadInboundMedia({
+                peerKey: data.fromTgUserId,
+                tgMsgId: data.tgMsgId,
+              });
+            } catch (err) {
+              logger.warn(
+                { conversationId: conv.id, err: (err as Error).message },
+                'tg-listen: media byte download failed; honest-pending asset',
+              );
+              return null;
+            }
+          },
         }).catch((err) => {
           logger.warn(
             { conversationId: conv.id, err: (err as Error).message },

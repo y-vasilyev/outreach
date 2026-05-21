@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const prisma = {
     conversation: { findUnique: vi.fn() },
-    message: { findMany: vi.fn() },
+    message: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn() },
     bloggerProfile: { upsert: vi.fn(), update: vi.fn() },
     profileDataPoint: { create: vi.fn(), findMany: vi.fn() },
     $transaction: vi.fn(),
@@ -35,6 +35,18 @@ beforeEach(() => {
     { id: 'm1', text: 'пост 15000', direction: 'in_', createdAt: new Date('2026-05-01T00:00:00Z') },
     { id: 'm2', text: 'охваты сторис 12к', direction: 'in_', createdAt: new Date('2026-05-02T00:00:00Z') },
   ]);
+  // S1: no sourceMessageId in the job → fall back to the latest inbound.
+  mocks.prisma.message.findFirst.mockResolvedValue({
+    id: 'm2',
+    text: 'пост 15000, охваты сторис 12к',
+  });
+  // S1: explicit sourceMessageId → extract from + attribute to that message.
+  mocks.prisma.message.findUnique.mockResolvedValue({
+    id: 'm1',
+    text: 'пост 15000, охваты сторис 12к',
+    conversationId: 'conv1',
+    direction: 'in_',
+  });
   mocks.prisma.bloggerProfile.upsert.mockResolvedValue({ id: 'prof1', channelId: 'ch1' });
   mocks.prisma.bloggerProfile.update.mockResolvedValue({});
   mocks.prisma.profileDataPoint.create.mockResolvedValue({});
@@ -84,6 +96,30 @@ describe('handleProfileExtract', () => {
       }),
     );
     expect(result).toMatchObject({ ok: true, profileId: 'prof1', dataPointsCreated: 2 });
+  });
+
+  it('attributes data points to the explicit triggering message (S1 provenance)', async () => {
+    mocks.runAgentSafe.mockImplementation(async (name: string) => {
+      if (name === 'rate_card_extractor') {
+        return { data_points: [{ field: 'rate.post', value: 15000, unit: 'RUB', confidence: 0.9, rawSnippet: 'x' }] };
+      }
+      return { data_points: [] };
+    });
+    mocks.prisma.profileDataPoint.findMany.mockResolvedValue([
+      { field: 'rate.post', value: 15000, unit: 'RUB', confidence: 0.9, capturedAt: new Date('2026-05-01T00:00:00Z') },
+    ]);
+
+    await handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1' });
+
+    // findUnique resolved the specific inbound; points attributed to it.
+    expect(mocks.prisma.message.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'm1' } }),
+    );
+    expect(mocks.prisma.message.findFirst).not.toHaveBeenCalled();
+    const created = mocks.prisma.profileDataPoint.create.mock.calls.map(
+      (c) => (c[0] as { data: { sourceMessageId: string } }).data,
+    );
+    expect(created.every((d) => d.sourceMessageId === 'm1')).toBe(true);
   });
 
   it('skips when the contact has no channel', async () => {

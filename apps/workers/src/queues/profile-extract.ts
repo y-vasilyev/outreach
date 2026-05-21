@@ -51,19 +51,44 @@ export async function handleProfileExtract(data: {
     return { ok: true, skipped: 'no_channel' };
   }
 
-  const messages = await prisma.message.findMany({
-    where: { conversationId: conv.id, direction: 'in_' },
-    orderBy: { createdAt: 'asc' },
-    take: 50,
-  });
-  if (messages.length === 0) return { ok: true, skipped: 'no_inbound' };
+  // S1 (provenance): a data point is attributed to the SINGLE inbound message
+  // it was extracted from — per-message extraction is the provenance unit. When
+  // the job carries `sourceMessageId` (the inbound that triggered this run, the
+  // normal path from on_inbound), we extract from THAT message only and
+  // attribute every emitted point to it. We do NOT re-run extraction over older
+  // history, which would mis-attribute facts mined from prior messages to the
+  // latest message's id. Only when no `sourceMessageId` is given (manual/legacy
+  // enqueue) do we fall back to the most recent inbound as both input + source.
+  let sourceMessage:
+    | { id: string; text: string }
+    | null = null;
+  if (data.sourceMessageId) {
+    const m = await prisma.message.findUnique({
+      where: { id: data.sourceMessageId },
+      select: { id: true, text: true, conversationId: true, direction: true },
+    });
+    // Guard: the id must be an inbound message of THIS conversation.
+    if (m && m.conversationId === conv.id && m.direction === 'in_') {
+      sourceMessage = { id: m.id, text: m.text };
+    }
+  }
+  if (!sourceMessage) {
+    const latest = await prisma.message.findFirst({
+      where: { conversationId: conv.id, direction: 'in_' },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, text: true },
+    });
+    if (!latest) return { ok: true, skipped: 'no_inbound' };
+    sourceMessage = { id: latest.id, text: latest.text };
+  }
 
-  // The message we attribute the data points to. Prefer the explicit one from
-  // the job (the inbound that triggered extraction), else the latest inbound.
-  const sourceMessageId =
-    data.sourceMessageId ?? messages[messages.length - 1]?.id ?? null;
+  const sourceMessageId = sourceMessage.id;
 
-  const replies = messages.map((m) => m.text).filter((t): t is string => Boolean(t));
+  // Extraction input is the single triggering message — the same message we
+  // attribute points to (provenance unit). `replies` is a one-element array so
+  // the extractor-agent input shape is unchanged.
+  const replies = sourceMessage.text ? [sourceMessage.text] : [];
+  if (replies.length === 0) return { ok: true, skipped: 'empty_inbound' };
   const channelTitle = conv.contact.channel?.title ?? '';
   const language = conv.contact.channel?.language ?? 'ru';
   const extractorInput = {
@@ -154,17 +179,28 @@ export async function handleProfileExtract(data: {
     return { profileId: profile.id, dataPointsCreated: drafts.length };
   });
 
-  // Snapshot the verbatim raw payload (last inbound + parsed extractor output)
-  // to object storage under a deterministic key and record a `raw_payload`
-  // media_asset linked to the same profile/conversation the data points
-  // reference (agency-sourcing-matching M6, task 6.3). Behind
+  // Snapshot the verbatim raw payload (triggering inbound + parsed extractor
+  // output) to object storage under a deterministic key and record a
+  // `raw_payload` media_asset linked to the same profile/conversation the data
+  // points reference (agency-sourcing-matching M6, task 6.3). Behind
   // ENABLE_OBJECT_STORAGE; degrades safely — never blocks extraction.
+  //
+  // S3 (provenance discoverability): there is no FK column from a
+  // profile_data_point to its raw-payload media_asset. The linkage is the tuple
+  // (profileId, sourceMessageId): every data point carries `profileId` +
+  // `sourceMessageId`, and the raw-payload object key is
+  // `rawPayloadKey({ conversationId, sourceMessageId })` — i.e. the snapshot
+  // key embeds the same sourceMessageId. So given a data point, the raw payload
+  // is the `kind='raw_payload'` media_asset on the same profileId whose s3Key
+  // ends with `/{sourceMessageId}.json`. No migration added.
   if (flags.ENABLE_OBJECT_STORAGE && sourceMessageId) {
     const snapshotKey = await snapshotRawPayload({
       conversationId: conv.id,
       sourceMessageId,
       rawText: extractorInput.last_inbound,
       parsed: { rate, audience },
+      // N1: namespace the snapshot under the profile we just rolled up.
+      profileId: result.profileId,
     }).catch(() => null);
     if (snapshotKey) {
       await prisma.mediaAsset

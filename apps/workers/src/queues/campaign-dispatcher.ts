@@ -1,10 +1,16 @@
 import { getPrisma, type Prisma } from '@nosquare/db';
-import { type CampaignSchedule, isWithinSchedule } from '@nosquare/shared';
+import {
+  type CampaignSchedule,
+  isWithinSchedule,
+  resolveAgentName,
+  flags,
+} from '@nosquare/shared';
 import { getRunner } from '../services/runner.js';
 import { logger } from '../logger.js';
 import { tryAutoApprove } from '../services/auto-approve.js';
 import { buildContactPromptInput } from '../services/agent-input.js';
 import { ensureContactTgProfile } from '../services/contact-profile.js';
+import { rolloverTgAccountDailyCounters } from '../services/tg-account-limits.js';
 
 interface OpenerOut {
   variants: Array<{ text: string; rationale: string; risk_score: number }>;
@@ -12,6 +18,27 @@ interface OpenerOut {
 interface SafetyOut {
   allow: boolean;
   risk_score: number;
+}
+
+/**
+ * Resolve the agent_config name for a pipeline role given the campaign's type
+ * (B4, agency-sourcing-matching). Mirrors `resolveRoleAgent` in agent-run.ts:
+ * behind ENABLE_AGENCY_SOURCING, an `agency_sourcing` campaign maps roles via
+ * the type's `agentSet` (e.g. `opening_composer → agency_opening_composer`).
+ * Flag off / non-agency type / no type → returns the literal `fallback`, so the
+ * CustDev dispatch path stays byte-for-byte on the legacy global agent names.
+ */
+function resolveRoleAgent(
+  campaign:
+    | { type?: { key?: string | null; agentSet?: unknown } | null }
+    | null
+    | undefined,
+  role: string,
+  fallback: string,
+): string {
+  if (!flags.ENABLE_AGENCY_SOURCING) return fallback;
+  if (campaign?.type?.key !== 'agency_sourcing') return fallback;
+  return resolveAgentName(campaign.type.agentSet ?? null, role, fallback);
 }
 
 // Tick every 10s (was 30) so a campaign that gets a fresh batch of
@@ -39,7 +66,13 @@ export function startCampaignDispatcher() {
     if (stopping) return;
     try {
       const prisma = getPrisma();
-      const campaigns = await prisma.campaign.findMany({ where: { status: 'running' } });
+      const campaigns = await prisma.campaign.findMany({
+        where: { status: 'running' },
+        // B4: load the campaign type so opener/safety roles resolve via the
+        // type's agentSet for agency_sourcing campaigns (behind the flag).
+        // The `include` is additive; CustDev campaigns simply have type=null.
+        include: { type: { select: { key: true, agentSet: true } } },
+      });
 
       for (const c of campaigns) {
         const schedule = (c.schedule ?? {}) as CampaignSchedule;
@@ -51,6 +84,8 @@ export function startCampaignDispatcher() {
         const filter = c.targetFilter as {
           platforms?: string[];
           roleGuess?: string[];
+          languages?: string[];
+          topics?: string[];
           minConfidence?: number;
           /**
            * Tags act as a narrowing filter: a contact must have at least one
@@ -77,8 +112,34 @@ export function startCampaignDispatcher() {
         // suggestion; a failed/empty opener run should be retried.
         const where: Prisma.ContactWhereInput = {
           reachability: 'reachable_tg',
-          ...(filter.platforms && filter.platforms.length > 0
-            ? { channel: { platform: { in: filter.platforms as never[] } } }
+          ...((filter.platforms && filter.platforms.length > 0) ||
+          (filter.languages && filter.languages.length > 0) ||
+          (filter.topics && filter.topics.length > 0)
+            ? {
+                channel: {
+                  ...(filter.platforms && filter.platforms.length > 0
+                    ? { platform: { in: filter.platforms as never[] } }
+                    : {}),
+                  ...(filter.languages && filter.languages.length > 0
+                    ? { language: { in: filter.languages } }
+                    : {}),
+                  ...(filter.topics && filter.topics.length > 0
+                    ? {
+                        OR: filter.topics.flatMap((topic) => [
+                          { title: { contains: topic, mode: 'insensitive' as const } },
+                          { description: { contains: topic, mode: 'insensitive' as const } },
+                          {
+                            analysis: {
+                              path: ['topic'],
+                              string_contains: topic,
+                              mode: 'insensitive' as const,
+                            },
+                          },
+                        ]),
+                      }
+                    : {}),
+                },
+              }
             : {}),
           conversations: {
             none: {
@@ -129,6 +190,7 @@ export function startCampaignDispatcher() {
           continue;
         }
 
+        await rolloverTgAccountDailyCounters(c.outreachAccountPool);
         const accounts = await prisma.tgAccount.findMany({
           where: { id: { in: c.outreachAccountPool }, status: 'active' },
         });
@@ -208,14 +270,41 @@ export function startCampaignDispatcher() {
             text: p.text ?? '',
           }));
 
+          // B4: resolve the opening + safety roles via the campaign type.
+          // CustDev / flag-off keeps the literal 'opening_composer' /
+          // 'safety_filter'. Agency types map opening_composer →
+          // agency_opening_composer (agency-shaped input below).
+          const openingAgent = resolveRoleAgent(c, 'opening_composer', 'opening_composer');
+          const safetyAgent = resolveRoleAgent(c, 'safety_filter', 'safety_filter');
+          const openerInput =
+            openingAgent === 'agency_opening_composer'
+              ? {
+                  channel_analysis: contactForPrompt.channel?.analysis ?? {},
+                  contact: buildContactPromptInput(contactForPrompt),
+                  campaign: { goal_text: c.goalText, client_brief: c.valueProp },
+                  // Recent posts are the only sponsored-integration evidence we
+                  // have at dispatch; pass as candidate snippets. The composer's
+                  // no-fabrication guard decides eligibility. Mirrors
+                  // handleOutreachFirstMessage in agent-run.ts.
+                  observed_integrations: recentPosts.map((p) => ({
+                    ...(p.date ? { date: p.date } : {}),
+                    snippet: p.text,
+                  })),
+                }
+              : {
+                  channel_analysis: contactForPrompt.channel?.analysis ?? {},
+                  contact: buildContactPromptInput(contactForPrompt),
+                  strategy: { approach: 'industry_fit' },
+                  campaign: { goal_text: c.goalText, value_prop: c.valueProp },
+                  recent_posts: recentPosts,
+                };
+
           try {
-            const opener = await runner.run<OpenerOut>('opening_composer', {
-              channel_analysis: contactForPrompt.channel?.analysis ?? {},
-              contact: buildContactPromptInput(contactForPrompt),
-              strategy: { approach: 'industry_fit' },
-              campaign: { goal_text: c.goalText, value_prop: c.valueProp },
-              recent_posts: recentPosts,
-            }, { conversationId: conv.id, campaignId: c.id, contactId: contact.id });
+            const opener = await runner.run<OpenerOut>(
+              openingAgent,
+              openerInput,
+              { conversationId: conv.id, campaignId: c.id, contactId: contact.id },
+            );
 
             // Track the highest-scoring variant after the safety loop, so
             // auto-approve sends the BEST one rather than the first to
@@ -225,7 +314,7 @@ export function startCampaignDispatcher() {
             let bestText = '';
 
             for (const v of opener.variants) {
-              const safety = await runner.run<SafetyOut>('safety_filter', {
+              const safety = await runner.run<SafetyOut>(safetyAgent, {
                 draft: v.text,
                 channel_analysis: contactForPrompt.channel?.analysis ?? {},
                 contact: { id: contact.id },
@@ -267,6 +356,7 @@ export function startCampaignDispatcher() {
                 text: bestText,
                 score: bestScore,
                 jitterMaxMs: 3 * 60 * 60 * 1000,
+                phase: 'first_touch',
               });
             }
           } catch (e) {

@@ -7,11 +7,13 @@ import type { Audience, BloggerProfile, RateCard } from './schemas/blogger-profi
  * `ProfileDataPoint` rows. Pure + side-effect-free so it's trivially
  * unit-testable and re-derivable from provenance at any time (design D4).
  *
- * Composition rule per field: **latest high-confidence wins**. We sort the
- * contributing points by `(confidence desc, capturedAt desc)` and take the
- * first that yields a usable value. This means a freshly-captured high-
- * confidence fact supersedes an older/lower-confidence one without dropping
- * the older data point (it remains individually retrievable on the row).
+ * Composition rule per field: **fresh-within-band, else higher confidence**.
+ * When two points' confidences are close (|Δconfidence| ≤ CONFIDENCE_BAND) we
+ * prefer the more recently captured one — a fresh fact of comparable certainty
+ * should supersede a stale one. Outside that band, the higher-confidence point
+ * wins regardless of age. The older data point is never dropped (it remains
+ * individually retrievable on its row). This avoids a stale high-confidence
+ * value beating a slightly-less-confident fresh value (S2).
  *
  * Field naming convention emitted by the extractor agents:
  *   - `rate.<format>`              → rate card entries (value = numeric price)
@@ -44,11 +46,28 @@ function toMillis(at: string | Date): number {
   return Number.isFinite(t) ? t : 0;
 }
 
-/** Sort copy by (confidence desc, capturedAt desc). */
+/**
+ * Confidence band within which freshness wins. Two points whose confidences
+ * differ by ≤ this are treated as "comparably certain", so the more recent one
+ * is preferred; beyond it, higher confidence dominates.
+ */
+const CONFIDENCE_BAND = 0.15;
+
+/**
+ * Sort copy so the best (first) is the freshest within a confidence band, else
+ * the highest confidence. Concretely: when |Δconfidence| ≤ CONFIDENCE_BAND,
+ * order by capturedAt desc (fresh wins); otherwise by confidence desc. Ties in
+ * the chosen key fall back to the other key for determinism.
+ */
 function byConfidenceThenRecency(points: RollupDataPoint[]): RollupDataPoint[] {
   return [...points].sort((a, b) => {
-    if (b.confidence !== a.confidence) return b.confidence - a.confidence;
-    return toMillis(b.capturedAt) - toMillis(a.capturedAt);
+    const sameBand = Math.abs(a.confidence - b.confidence) <= CONFIDENCE_BAND;
+    if (sameBand) {
+      const dt = toMillis(b.capturedAt) - toMillis(a.capturedAt);
+      if (dt !== 0) return dt;
+      return b.confidence - a.confidence;
+    }
+    return b.confidence - a.confidence;
   });
 }
 

@@ -93,6 +93,14 @@ export function mockTelegramClientHandle(
       return [];
     },
 
+    async downloadInboundMedia(_opts: {
+      peerKey: string;
+      tgMsgId: string;
+    }): Promise<Uint8Array | null> {
+      // No bytes by default — overrides supply concrete fixtures.
+      return null;
+    },
+
     async startLogin(_phone: string) {
       return { phoneCodeHash: 'mock_phone_code_hash' };
     },

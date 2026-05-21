@@ -725,6 +725,43 @@ export class SessionManager {
         });
       },
 
+      async downloadInboundMedia(opts: { peerKey: string; tgMsgId: string }) {
+        requireAuth();
+        // Best-effort: any failure (message gone, no media, download error)
+        // resolves to null so the inbound path records an honest "pending"
+        // media_asset instead of a dead presigned URL. We do NOT route through
+        // `wrap` (which maps to AppError + can touch account status) — a single
+        // un-downloadable attachment must never degrade the session.
+        try {
+          const msgId = Number(opts.tgMsgId);
+          if (!Number.isFinite(msgId)) return null;
+          // GramJS accepts `{ ids: [...] }` to fetch specific message(s); our
+          // narrow GramJSClient surface only enumerates `limit`, so pass the
+          // real options through `unknown`.
+          const fetched = (await client.getMessages(
+            opts.peerKey,
+            { ids: [msgId] } as unknown as { limit: number },
+          )) as Array<{ media?: unknown } | null> | undefined;
+          const message = Array.isArray(fetched) ? fetched[0] : undefined;
+          if (!message || !message.media) return null;
+          const dl = (client as unknown as {
+            downloadMedia?: (m: unknown, opts?: unknown) => Promise<unknown>;
+          }).downloadMedia;
+          if (typeof dl !== 'function') return null;
+          const bytes = await dl.call(client, message);
+          if (bytes == null) return null;
+          if (bytes instanceof Uint8Array) return bytes;
+          if (typeof bytes === 'string') return new TextEncoder().encode(bytes);
+          // Buffer is a Uint8Array subclass; covered above. Anything else → null.
+          return null;
+        } catch (err) {
+          console.warn(
+            `[tg-client] downloadInboundMedia failed tgAccountId=${tgAccountId} msg=${opts.tgMsgId}: ${(err as Error).message}`,
+          );
+          return null;
+        }
+      },
+
       subscribeIncoming(cb: IncomingHandler) {
         incomingSubs.add(cb);
         if (!gramJsBound) {
@@ -940,8 +977,12 @@ function mapIncomingEvent(event: unknown, tgAccountId: string): IncomingMessage 
   const text = typeof m.message === 'string' ? m.message : typeof m.text === 'string' ? m.text : '';
   const media = mapMedia(m.media);
   // Allow media-only inbounds (e.g. a media-kit PDF with no caption) through —
-  // they carry no text but ARE meaningful (a media_asset is recorded). Only
-  // drop when there's neither text nor media.
+  // they carry no text but MAY be meaningful (a media_asset is recorded). Only
+  // drop when there's neither text nor media. NOTE: surfacing an empty-text
+  // inbound here is INERT for the legacy CustDev path — the consumer
+  // (apps/workers tg-listen) gates whether to persist + run the pipeline on an
+  // otherwise-empty inbound behind ENABLE_OBJECT_STORAGE, so with the flag off
+  // behavior matches pre-M6 (the message is dropped downstream).
   if (!text && !media) return null;
   // `senderId` is most reliable; fallback to `peerId.userId` then `fromId`.
   const fromTgUserId =

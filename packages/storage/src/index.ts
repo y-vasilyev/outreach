@@ -62,11 +62,22 @@ export function mediaAssetKey(opts: {
  * (spec: "raw response payloads SHALL also be snapshotted ... under a
  * deterministic key"). Keyed by the source message so re-processing the same
  * message overwrites the same object instead of accumulating duplicates.
+ *
+ * N1: when the blogger profile is known, namespace the key under the profile
+ * (`bloggers/{profileId}/raw-payloads/{sourceMessageId}.json`) so a profile's
+ * snapshots are co-located and discoverable by prefix. The key still ends in
+ * `/{sourceMessageId}.json`, preserving the (profileId, sourceMessageId)
+ * linkage to data points (S3). When no profile exists yet, fall back to the
+ * conversation-scoped prefix.
  */
 export function rawPayloadKey(opts: {
   conversationId: string;
   sourceMessageId: string;
+  profileId?: string | null;
 }): string {
+  if (opts.profileId) {
+    return `bloggers/${opts.profileId}/raw-payloads/${opts.sourceMessageId}.json`;
+  }
   return `raw-payloads/${opts.conversationId}/${opts.sourceMessageId}.json`;
 }
 

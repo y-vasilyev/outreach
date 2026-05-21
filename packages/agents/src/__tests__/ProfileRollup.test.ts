@@ -51,6 +51,26 @@ describe('rollUpProfileFields', () => {
     expect(out.reach).toBe(12000);
   });
 
+  it('prefers the fresher value within a confidence band (S2)', () => {
+    // Stale 0.9 vs fresh 0.8 — within the 0.15 band, so recency wins.
+    const points: RollupDataPoint[] = [
+      { field: 'rate.post', value: 15000, confidence: 0.9, capturedAt: at('2026-01-01T00:00:00Z') },
+      { field: 'rate.post', value: 12000, confidence: 0.8, capturedAt: at('2026-05-01T00:00:00Z') },
+    ];
+    const out = rollUpProfileFields(points);
+    expect(out.rateCards).toEqual([{ format: 'post', price: 12000, currency: 'RUB' }]);
+  });
+
+  it('keeps higher confidence when the gap exceeds the band even if older', () => {
+    // 0.9 vs 0.6 — gap 0.3 > 0.15, so confidence dominates despite being older.
+    const points: RollupDataPoint[] = [
+      { field: 'rate.post', value: 15000, confidence: 0.9, capturedAt: at('2026-01-01T00:00:00Z') },
+      { field: 'rate.post', value: 12000, confidence: 0.6, capturedAt: at('2026-05-01T00:00:00Z') },
+    ];
+    const out = rollUpProfileFields(points);
+    expect(out.rateCards).toEqual([{ format: 'post', price: 15000, currency: 'RUB' }]);
+  });
+
   it('parses numeric strings and rounds reach/avgViews', () => {
     const points: RollupDataPoint[] = [
       { field: 'reach.story', value: '12 000', confidence: 0.8, capturedAt: at('2026-05-01T00:00:00Z') },

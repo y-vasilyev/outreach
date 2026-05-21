@@ -141,19 +141,21 @@ export function formatScore(brief: AdBrief, profile: MatchableProfile): { score:
 /* ------------------------------------------------------------------ */
 
 /**
- * Rate cards relevant to the brief: those whose format the brief asked for
- * (when formats are specified), else all rate cards. Returns the minimum
- * relevant price (the cheapest way to run with this blogger).
+ * Rate cards relevant to the brief: those whose format the brief asked for.
+ * When the brief specifies formats but the profile has NO rate card for any of
+ * them, this returns an empty list — NOT all rate cards (S5). Budgeting against
+ * an unrelated format's price would wrongly include or exclude a profile; the
+ * format-relevance check (not budget) governs that case. When the brief
+ * specifies no formats, all rate cards are relevant.
  */
 export function relevantRates(brief: AdBrief, profile: MatchableProfile): RateCard[] {
   if (brief.formats.length === 0) return profile.rateCards;
   const wanted = new Set(brief.formats.map(norm));
-  const relevant = profile.rateCards.filter((rc) => {
+  return profile.rateCards.filter((rc) => {
     const fk = new Set<string>([norm(rc.format), ...tokenize(rc.format)]);
     for (const w of wanted) if (fuzzyHas(fk, w)) return true;
     return false;
   });
-  return relevant.length > 0 ? relevant : profile.rateCards;
 }
 
 export function minRelevantRate(brief: AdBrief, profile: MatchableProfile): number | undefined {

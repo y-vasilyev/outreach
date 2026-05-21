@@ -21,8 +21,10 @@ export const mediaAssetsService = {
     const asset = await prisma.mediaAsset.findUnique({ where: { id } });
     if (!asset) throw Errors.notFound('media_asset', id);
     if (!asset.s3Key) {
-      // Metadata-only row (bytes were never downloaded). Nothing to fetch.
-      throw Errors.badRequest('media asset has no stored object');
+      // Honest-pending row: the bytes were never downloaded/uploaded, so the
+      // s3Key sentinel is empty. Returning a presigned URL here would be a dead
+      // link (no object exists). 409 = the asset exists but has no object yet.
+      throw Errors.conflict('media asset has no stored object (pending download)');
     }
     const store = getObjectStore();
     if (!store) throw Errors.badRequest('object storage is not available');

@@ -118,6 +118,10 @@ export const matchingService = {
     // and refine in memory (Prisma can't cleanly express topic/geo/budget
     // overlap across JSON columns + arrays). A coarse topic prefilter on the
     // indexed `topics` array narrows the load before the precise pure pass.
+    // S7: the in-memory prefilter is fine at this scale. Pushing a coarse
+    // topic/format filter into SQL (e.g. `topics` array overlap) to avoid
+    // loading the whole catalog is a DEFERRED optimization — revisit when the
+    // catalog outgrows a few hundred rows.
     const profilesRows = await prisma.bloggerProfile.findMany({
       orderBy: { updatedAt: 'desc' },
     });
@@ -188,7 +192,10 @@ export const matchingService = {
       }
     }
 
-    // Persist match_result rows for audit (replace prior results for this brief).
+    // Persist match_result rows for audit (replace prior results for this
+    // brief). S6: the deleteMany + createMany run in a SINGLE transaction
+    // (array form $transaction is atomic) so a concurrent reader never sees the
+    // brief mid-replace with prior rows deleted but new rows not yet written.
     await prisma.$transaction([
       prisma.matchResult.deleteMany({ where: { briefId } }),
       ...(ranked.length > 0

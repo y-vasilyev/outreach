@@ -22,6 +22,11 @@ describe('rawPayloadKey', () => {
     expect(k1).toBe(k2);
     expect(k1).toBe('raw-payloads/c1/m1.json');
   });
+  it('namespaces under the profile when known (N1), still ending in sourceMessageId', () => {
+    expect(
+      rawPayloadKey({ conversationId: 'c1', sourceMessageId: 'm1', profileId: 'p1' }),
+    ).toBe('bloggers/p1/raw-payloads/m1.json');
+  });
 });
 
 describe('buildRawPayloadSnapshot', () => {

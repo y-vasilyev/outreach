@@ -19,6 +19,8 @@ const DEFAULT_TTL_SECONDS = 300;
 export class ObjectStore {
   private readonly client: S3Client;
   readonly bucket: string;
+  /** Memoized one-time bucket-ensure, so the first putObject creates it. */
+  private bucketEnsured: Promise<boolean> | null = null;
 
   constructor(config: StorageConfig) {
     this.bucket = config.bucket;
@@ -40,6 +42,14 @@ export class ObjectStore {
     body: Uint8Array | Buffer | string,
     contentType?: string,
   ): Promise<void> {
+    // N2: ensure the bucket exists exactly once per instance before the first
+    // upload (MinIO dev buckets aren't pre-created). Memoized so concurrent
+    // puts share one ensure; a failed ensure doesn't hard-block the put — the
+    // put itself surfaces the real error.
+    if (!this.bucketEnsured) {
+      this.bucketEnsured = this.ensureBucket();
+    }
+    await this.bucketEnsured;
     await this.client.send(
       new PutObjectCommand({
         Bucket: this.bucket,
@@ -85,14 +95,21 @@ export class ObjectStore {
     try {
       await this.client.send(new HeadBucketCommand({ Bucket: this.bucket }));
       return true;
-    } catch {
-      // Most likely 404 (no bucket) or 403; try to create it. MinIO dev
-      // buckets are cheap to create idempotently.
+    } catch (err) {
+      // N2: narrow — only a genuine "bucket missing" (404 / NotFound /
+      // NoSuchBucket) warrants a create. A 403 (permission) or any other error
+      // is NOT masked: re-throw so a misconfigured credential / policy surfaces
+      // instead of being swallowed as "couldn't ensure".
+      if (!isBucketMissing(err)) throw err;
       try {
         await this.client.send(new CreateBucketCommand({ Bucket: this.bucket }));
         return true;
-      } catch {
-        return false;
+      } catch (createErr) {
+        // A concurrent create (BucketAlreadyOwnedByYou / BucketAlreadyExists)
+        // means the bucket is in fact present — treat as success. Anything else
+        // propagates so the caller sees the real failure.
+        if (isBucketAlreadyExists(createErr)) return true;
+        throw createErr;
       }
     }
   }
@@ -106,4 +123,27 @@ export class ObjectStore {
       return false;
     }
   }
+}
+
+/** S3/MinIO error shape — name + HTTP status hang off the SDK error object. */
+interface S3LikeError {
+  name?: string;
+  Code?: string;
+  $metadata?: { httpStatusCode?: number };
+}
+
+/** True only for a genuine "bucket does not exist" error (404 / NoSuchBucket). */
+function isBucketMissing(err: unknown): boolean {
+  const e = (err ?? {}) as S3LikeError;
+  const status = e.$metadata?.httpStatusCode;
+  const name = e.name ?? e.Code ?? '';
+  if (status === 404) return true;
+  return name === 'NotFound' || name === 'NoSuchBucket';
+}
+
+/** True when a create raced and the bucket already exists (owned by us). */
+function isBucketAlreadyExists(err: unknown): boolean {
+  const e = (err ?? {}) as S3LikeError;
+  const name = e.name ?? e.Code ?? '';
+  return name === 'BucketAlreadyOwnedByYou' || name === 'BucketAlreadyExists';
 }

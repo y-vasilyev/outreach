@@ -5,6 +5,8 @@ import {
   isShortlisted,
   rankProfiles,
   scoreProfile,
+  relevantRates,
+  budgetScore,
   type AdBrief,
   type MatchableProfile,
 } from '@nosquare/shared';
@@ -130,6 +132,45 @@ describe('budget-aware ranking', () => {
       }),
     ]);
     expect(ranked).toHaveLength(0);
+  });
+
+  it('does not budget-exclude on an unrelated format rate card (S5)', () => {
+    // Brief wants reels under 10k; profile only has a CHEAP "пост" card and no
+    // reels. The cheap пост price must NOT be used for the reels budget check —
+    // relevance (not budget) governs. relevantRates is empty → budget neutral.
+    const brief = mkBrief({ topic: 'крипта', budget: 10000, formats: ['reels'] });
+    const profile = mkProfile({
+      id: 'no_reels',
+      topics: ['крипта'],
+      formats: ['пост'],
+      rateCards: [{ format: 'пост', price: 3000, currency: 'RUB' }],
+    });
+    expect(relevantRates(brief, profile)).toEqual([]);
+    // Budget is neutral (not "fits" via an unrelated cheap card, not "over").
+    const b = budgetScore(brief, profile);
+    expect(b.minRate).toBeUndefined();
+    // Excluded — but by FORMAT (no reels), not budget.
+    const decision = isShortlisted(brief, profile);
+    expect(decision.ok).toBe(false);
+    expect(decision.reason).toMatch(/format/);
+  });
+
+  it('does not let an unrelated EXPENSIVE card wrongly exclude on budget (S5)', () => {
+    // Profile offers the requested "пост" cheaply AND an unrelated pricey
+    // "интеграция". The budget check must use only the relevant "пост" rate.
+    const brief = mkBrief({ topic: 'крипта', budget: 10000, formats: ['пост'] });
+    const profile = mkProfile({
+      id: 'mixed',
+      topics: ['крипта'],
+      formats: ['пост', 'интеграция'],
+      rateCards: [
+        { format: 'пост', price: 5000, currency: 'RUB' },
+        { format: 'интеграция', price: 99000, currency: 'RUB' },
+      ],
+    });
+    expect(relevantRates(brief, profile).map((r) => r.format)).toEqual(['пост']);
+    expect(budgetScore(brief, profile).fits).toBe(true);
+    expect(isShortlisted(brief, profile).ok).toBe(true);
   });
 
   it('produces scores within [0,1]', () => {

@@ -220,6 +220,19 @@ export interface TelegramClientHandle {
   }): Promise<HistoryMessage[]>;
 
   /**
+   * Download the media bytes of an inbound 1-1 message by its tg message id.
+   * Returns the raw bytes, or `null` when the message / its media can't be
+   * resolved (e.g. the message scrolled out of the access window, or it had no
+   * downloadable media). NEVER throws on a "no bytes" condition — callers in
+   * the inbound path treat `null` as "honest pending" (record a metadata-only
+   * media_asset, no dead presigned URL). Wraps GramJS `downloadMedia`.
+   */
+  downloadInboundMedia(opts: {
+    peerKey: string;
+    tgMsgId: string;
+  }): Promise<Uint8Array | null>;
+
+  /**
    * Subscribe to incoming TG private messages on this session. Returns an
    * unsubscribe function. Only fires for `direct` messages from users (not
    * channels/groups). Call repeatedly to register multiple consumers.

@@ -13,8 +13,19 @@ import { auditService } from '../services/audit.js';
  * top N) only runs when the caller opts in via `?rerank=true` (or `rerank` in
  * the body), keeping cost contained and the path deterministic by default.
  */
-const matchOptsZ = z.object({
-  rerank: z.coerce.boolean().optional(),
+// `z.coerce.boolean()` is broken for query strings: any non-empty string
+// (including 'false') coerces to true. Parse rerank explicitly so ONLY a real
+// `true` (boolean true, or the string 'true') enables the LLM re-rank; 'false'
+// / '0' / absent all mean "no re-rank, no LLM call" (S4).
+const rerankFlagZ = z
+  .union([z.boolean(), z.enum(['true', 'false'])])
+  .optional()
+  .transform((v) => v === true || v === 'true');
+
+// Exported for unit-testing the rerank coercion fix (S4) without a full HTTP
+// harness. The route parses query + body through this same schema.
+export const matchOptsZ = z.object({
+  rerank: rerankFlagZ,
   topN: z.coerce.number().int().min(1).max(50).optional(),
 });
 

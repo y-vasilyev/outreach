@@ -37,17 +37,29 @@ function resolveAssetKind(meta: InboundMediaMeta): MediaAssetKind {
  * inbound processing must never fail or drop the conversation because of media
  * persistence (spec: "degrade safely").
  *
- * tg-client does not download media bytes (see IncomingMedia doc), so we record
- * the metadata-only asset row referencing the source TG message. When/if a
- * byte-download path lands in tg-client, pass `bytes` here to also upload.
+ * Byte handling (B3): callers pass either the already-downloaded `bytes` OR a
+ * `downloadBytes` thunk (the tg-client `downloadInboundMedia` path). When bytes
+ * are obtained we upload to object storage and set `s3Key` + `bytes` + `sha256`.
+ * When NO bytes are available (download unavailable / failed / returned null),
+ * we record an HONEST metadata-only row with an EMPTY `s3Key` ('') — never a
+ * key that points at an object that does not exist (which would yield a dead
+ * presigned URL). The `s3Key` column is NOT NULL (no migration here), so '' is
+ * the sentinel for "no stored object"; the API download endpoint treats a
+ * falsy s3Key (covers '') as 4xx rather than issuing a presigned URL.
  */
 export async function persistInboundMedia(opts: {
   conversationId: string;
   channelId?: string | null;
   sourceTgMsgId?: string | null;
   media: InboundMediaMeta;
-  /** Downloaded bytes, when available (tg-client currently provides none). */
+  /** Already-downloaded bytes, when the caller has them. */
   bytes?: Uint8Array;
+  /**
+   * Lazy byte fetch (tg-client `downloadInboundMedia`). Invoked only when the
+   * storage flag is on and `bytes` weren't supplied. Must resolve to null
+   * (never throw) when bytes can't be obtained — honest-pending then applies.
+   */
+  downloadBytes?: () => Promise<Uint8Array | null>;
 }): Promise<{ persisted: boolean; assetId?: string; degraded?: string }> {
   if (!flags.ENABLE_OBJECT_STORAGE) {
     logger.warn(
@@ -70,16 +82,16 @@ export async function persistInboundMedia(opts: {
 
   try {
     const assetKind = resolveAssetKind(opts.media);
-    // Create the row first so we have a stable assetId for the key (and so the
-    // asset is recorded even if the byte upload below degrades). s3Key is set
-    // to the deterministic key we'd upload to; bytes/sha256 stay null when no
-    // bytes were downloaded.
+    // Create the row first so we have a stable assetId to derive the key from
+    // (and so the asset is recorded even if the byte upload below degrades).
+    // s3Key starts '' (the NOT-NULL "no object" sentinel) and is set to the
+    // real key ONLY after a successful upload — an empty s3Key is an honest
+    // "pending"/metadata-only record, never a dead URL.
     const created = await prisma.mediaAsset.create({
       data: {
         conversationId: opts.conversationId,
         profileId,
         kind: assetKind,
-        // Placeholder; rewritten below once we know the id-derived key.
         s3Key: '',
         mime: opts.media.mime ?? null,
         bytes: opts.media.bytes ?? null,
@@ -94,36 +106,49 @@ export async function persistInboundMedia(opts: {
       assetId: created.id,
     });
 
+    // Obtain bytes: prefer the eager `bytes`, else the lazy `downloadBytes`
+    // thunk (tg-client). The thunk must never throw; guard regardless so a
+    // download error degrades to honest-pending instead of failing inbound.
+    let bytes: Uint8Array | null = opts.bytes ?? null;
+    if ((!bytes || bytes.byteLength === 0) && opts.downloadBytes) {
+      bytes = await opts.downloadBytes().catch(() => null);
+    }
+
+    // '' = no stored object (NOT-NULL sentinel); set to real key on upload only.
+    let s3Key = '';
     let sha256: string | null = null;
     let storedBytes = opts.media.bytes ?? null;
 
-    if (opts.bytes && opts.bytes.byteLength > 0) {
+    if (bytes && bytes.byteLength > 0) {
       const store = getObjectStore();
       if (store) {
-        await store.putObject(key, opts.bytes, opts.media.mime);
-        sha256 = createHash('sha256').update(opts.bytes).digest('hex');
-        storedBytes = opts.bytes.byteLength;
+        await store.putObject(key, bytes, opts.media.mime);
+        s3Key = key;
+        sha256 = createHash('sha256').update(bytes).digest('hex');
+        storedBytes = bytes.byteLength;
       } else {
+        // Flag on but config absent. Honest-pending: no object was written, so
+        // leave s3Key empty rather than point at a non-existent object.
         logger.warn(
           { conversationId: opts.conversationId },
-          'inbound media: storage flag on but config absent; recorded asset row only',
+          'inbound media: storage flag on but config absent; recorded metadata-only media_asset',
         );
       }
     } else {
-      // No bytes available (tg-client doesn't download). Record metadata-only.
+      // No bytes (download unavailable / failed / empty). Honest-pending row.
       logger.warn(
         {
           conversationId: opts.conversationId,
           assetId: created.id,
           mediaClass: opts.media.className,
         },
-        'inbound media: byte download unavailable; recorded metadata-only media_asset',
+        'inbound media: byte download unavailable; recorded metadata-only media_asset (s3Key empty)',
       );
     }
 
     const asset = await prisma.mediaAsset.update({
       where: { id: created.id },
-      data: { s3Key: key, sha256, bytes: storedBytes },
+      data: { s3Key, sha256, bytes: storedBytes },
     });
 
     logger.info(
@@ -138,7 +163,7 @@ export async function persistInboundMedia(opts: {
       }),
       'inbound media asset recorded',
     );
-    return { persisted: true, assetId: asset.id };
+    return { persisted: s3Key !== '', assetId: asset.id, ...(s3Key === '' ? { degraded: 'no_bytes' } : {}) };
   } catch (err) {
     // NEVER fail inbound processing over media. Log + continue.
     logger.warn(
@@ -165,6 +190,8 @@ export async function snapshotRawPayload(opts: {
   sourceMessageId: string;
   rawText: string;
   parsed?: unknown;
+  /** When known, namespaces the key under the profile (N1). */
+  profileId?: string | null;
 }): Promise<string | null> {
   if (!flags.ENABLE_OBJECT_STORAGE) return null;
   const store = getObjectStore();
@@ -173,6 +200,7 @@ export async function snapshotRawPayload(opts: {
   const key = rawPayloadKey({
     conversationId: opts.conversationId,
     sourceMessageId: opts.sourceMessageId,
+    profileId: opts.profileId ?? null,
   });
   try {
     const body = buildRawPayloadSnapshot(opts);
