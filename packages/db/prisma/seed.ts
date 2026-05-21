@@ -2,7 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { encryptJson } from '../src/crypto.js';
 import { defaultAgentSeeds } from './agents.seed.js';
-import { resolveCapabilityMap } from '@nosquare/shared';
+import { resolveCapabilityMap, FEATURE_FLAG_KEYS, FEATURE_FLAG_DEFAULTS } from '@nosquare/shared';
 
 // AJTBD scaffold for the demo campaign. Kept inline (no shared import)
 // so this seed has no compile-time coupling to the shared zod schema —
@@ -323,26 +323,25 @@ async function main() {
     console.log(`✓ campaign_type: ${t.key}`);
   }
 
-  // Feature flags (runtime-feature-flags change). Idempotent: create missing
-  // rows at their default; NEVER overwrite an operator's toggle (only `create`
-  // defaults are set). Defaults mirror the prior compile-time flags.ts values.
-  const featureFlagSeeds: Array<{ key: string; enabled: boolean; description: string }> = [
-    { key: 'campaign_types', enabled: false, description: 'Реестр типов кампаний + конструктор' },
-    { key: 'agency_sourcing', enabled: false, description: 'Агентский режим: сбор прайсов/охватов у блогеров' },
-    { key: 'object_storage', enabled: false, description: 'Хранение медиа/сырья в S3 (нужен S3_*)' },
-    { key: 'blogger_matching', enabled: false, description: 'Подбор блогеров под бриф' },
-    { key: 'quality_review', enabled: false, description: 'Оффлайн quality-review сэмпл исходящих' },
-    { key: 'followup_cron', enabled: true, description: 'Крон фоллоуапов по тихим диалогам' },
-  ];
-  for (const f of featureFlagSeeds) {
+  // Feature flags (runtime-feature-flags change). Keys + defaults are derived
+  // from the shared registry (single source of truth — no drift). Idempotent:
+  // create missing rows at their registry default; NEVER overwrite an
+  // operator's toggle (only the label is refreshed on re-seed).
+  const FLAG_DESCRIPTIONS: Record<string, string> = {
+    campaign_types: 'Реестр типов кампаний + конструктор',
+    agency_sourcing: 'Агентский режим: сбор прайсов/охватов у блогеров',
+    object_storage: 'Хранение медиа/сырья в S3 (нужен S3_*)',
+    blogger_matching: 'Подбор блогеров под бриф',
+  };
+  for (const key of FEATURE_FLAG_KEYS) {
+    const description = FLAG_DESCRIPTIONS[key] ?? '';
     await prisma.featureFlag.upsert({
-      where: { key: f.key },
-      // Keep operator toggles intact across re-seeds; only refresh the label.
-      update: { description: f.description },
-      create: { key: f.key, enabled: f.enabled, description: f.description },
+      where: { key },
+      update: { description },
+      create: { key, enabled: FEATURE_FLAG_DEFAULTS[key], description },
     });
   }
-  console.log(`✓ feature_flag: ${featureFlagSeeds.length} flags ensured`);
+  console.log(`✓ feature_flag: ${FEATURE_FLAG_KEYS.length} flags ensured`);
 
   // Capability → endpoint/model map (agency-sourcing-matching M3, task 3.1).
   // The builder picks a tier (cheap/medium/strong) per role and binds it to

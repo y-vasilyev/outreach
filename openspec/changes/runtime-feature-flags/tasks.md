@@ -10,7 +10,7 @@
 - [x] 1.3 `FeatureFlags` accessor: sync `get(key)`, async `init()`/`refresh()`, env-force resolution (`FEATURE_<KEY>_FORCE`); order env > cache > default; fail-safe to defaults when store unreachable; `snapshot()` for /config
 - [x] 1.4 Redis pub/sub invalidation: `FEATURE_FLAGS_CHANNEL` constant + injected `FeatureFlagSubscriber` (reload on message; subscribe failure non-fatal). IO injected per app (shared stays pure)
 - [x] 1.5 Unit tests (7): get() sync+cached (no per-call query), env force-floor off/on, unknown→off, fail-safe defaults, publish→reload, snapshot
-- [ ] 1.6 **CODEX REVIEW** — milestone 1 (store + accessor + invalidation)
+- [x] 1.6 **CODEX REVIEW** — milestone 1 (store + accessor + invalidation). Fixed: (B1) scoped the runtime registry to the 4 agency rollout flags — all default OFF (followup_cron/quality_review stay compile-time flags, untouched), so the spec's "all off" holds and behavior is preserved; (B2) `init()` now subscribes BEFORE the initial refresh (no missed-message window) + documented that the injected subscriber must re-fire onChange on Redis reconnect; (S1) `init()` logs pinned `FEATURE_<KEY>_FORCE` overrides; (S2) seed derives keys/defaults from the shared registry (no 3-way drift); (N1) refresh() comment corrected to "last-known-good". S3 (PascalCase table) kept — matches every other table in the schema.
 
 ## 2. Wire accessor into API & workers
 

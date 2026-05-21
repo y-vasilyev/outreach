@@ -17,17 +17,19 @@ export const FEATURE_FLAGS_CHANNEL = 'feature_flags:changed';
 
 /**
  * Closed set of runtime-toggleable flags + their default value (used when the
- * store has no row, the key is unknown, or the store is unreachable). Defaults
- * mirror the prior compile-time `flags.ts` values so the cutover is
- * behavior-preserving.
+ * store has no row, the key is unknown, or the store is unreachable).
+ *
+ * Scope: the agency-sourcing-matching rollout/kill switches — all default
+ * OFF, exactly today's effective state, so the cutover is behavior-preserving.
+ * Pure product constants and other operational flags (e.g.
+ * `ENABLE_FOLLOWUP_CRON`, `ENABLE_QUALITY_REVIEW`) stay in `flags.ts` and are
+ * intentionally NOT runtime-managed here; the table can absorb them later.
  */
 export const FEATURE_FLAG_DEFAULTS = {
   campaign_types: false,
   agency_sourcing: false,
   object_storage: false,
   blogger_matching: false,
-  quality_review: false,
-  followup_cron: true,
 } as const;
 
 export type FeatureFlagKey = keyof typeof FEATURE_FLAG_DEFAULTS;
@@ -102,13 +104,24 @@ export class FeatureFlags {
     return new Map(FEATURE_FLAG_KEYS.map((k) => [k, FEATURE_FLAG_DEFAULTS[k]]));
   }
 
-  /** Load the cache once and subscribe to invalidation. Never throws. */
+  /**
+   * Subscribe to invalidation, then load the cache. Never throws.
+   *
+   * Order matters: we register the change handler BEFORE the initial load so a
+   * toggle that lands during startup still triggers a reload (no missed-message
+   * window). The injected subscriber MUST also invoke `onChange` on Redis
+   * (re)connect so a process can't stay stale across a reconnect (see the
+   * Redis-backed subscriber in the apps).
+   */
   async init(): Promise<void> {
-    await this.refresh();
+    // Surface any env force-overrides so operators know a flag is pinned.
+    const pinned = pinnedFeatureForces();
+    if (pinned.length > 0) {
+      this.warn({ pinned }, 'feature flags: env force-overrides active (FEATURE_<KEY>_FORCE)');
+    }
+
     if (this.subscriber) {
       try {
-        // Reload on every change AND on (re)subscribe to close the
-        // missed-message window across reconnects.
         await this.subscriber.subscribe(() => {
           void this.refresh();
         });
@@ -119,9 +132,14 @@ export class FeatureFlags {
         );
       }
     }
+    await this.refresh();
   }
 
-  /** Reload the cache from the store. Fail-safe: keeps defaults on error. */
+  /**
+   * Reload the cache from the store. Fail-safe: on error it keeps the
+   * last-known-good cache (registry defaults if no successful load yet) and
+   * never partially applies a load.
+   */
   async refresh(): Promise<void> {
     try {
       const rows = await this.loader.loadAll();

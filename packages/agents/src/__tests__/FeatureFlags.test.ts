@@ -39,7 +39,7 @@ describe('FeatureFlags', () => {
     const ff = new FeatureFlags(loader([]));
     await ff.init();
     expect(ff.get('agency_sourcing')).toBe(FEATURE_FLAG_DEFAULTS.agency_sourcing); // false
-    expect(ff.get('followup_cron')).toBe(FEATURE_FLAG_DEFAULTS.followup_cron); // true
+    expect(ff.get('object_storage')).toBe(FEATURE_FLAG_DEFAULTS.object_storage); // false
   });
 
   it('unknown key resolves to false without throwing', async () => {
@@ -73,7 +73,7 @@ describe('FeatureFlags', () => {
     });
     await expect(ff.init()).resolves.toBeUndefined();
     expect(ff.get('agency_sourcing')).toBe(false);
-    expect(ff.get('followup_cron')).toBe(true);
+    expect(ff.get('campaign_types')).toBe(false);
   });
 
   it('a published change triggers refresh and updates the cache', async () => {
