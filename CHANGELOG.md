@@ -6,6 +6,16 @@ All operator-visible changes worth noting between releases.
 
 ### Added
 
+- **Runtime feature flags** — operational rollout/kill-switch flags
+  (`campaign_types`, `agency_sourcing`, `object_storage`, `blogger_matching`)
+  moved from compile-time constants into the DB, toggleable from a new
+  admin-only **Settings → Features** page without a redeploy. Flips take
+  effect in the API and workers immediately (Redis pub/sub), give operators
+  an instant kill-switch for risky outreach, are audited, and show readiness
+  hints (e.g. "S3 not configured"). An emergency env override
+  (`FEATURE_<KEY>_FORCE`) can pin a flag during incidents. Defaults are all
+  off, so behavior is unchanged until a flag is turned on.
+
 - **Campaign types (agency sourcing & matching)** — campaign goal/framing/
   safety/agent-set moved out of hardcoded CustDev into a configurable
   `campaign_type` registry. CustDev is now the seeded `custdev` type; a new

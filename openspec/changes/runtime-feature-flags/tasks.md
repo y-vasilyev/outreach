@@ -32,6 +32,6 @@
 
 ## 4. Docs & rollout
 
-- [ ] 4.1 Update `CLAUDE.md` (flags now in DB+UI, env `FEATURE_*_FORCE` override), `DESIGN.md` (feature_flag table + accessor + invalidation), `.env.example` (`FEATURE_*_FORCE`)
-- [ ] 4.2 CHANGELOG.md entry
-- [ ] 4.3 `pnpm typecheck && pnpm lint && pnpm test` green; **CODEX REVIEW** — final pass over the full change
+- [x] 4.1 Updated `CLAUDE.md` (runtime flags in DB+UI + `getFeatureFlags().get`, env `FEATURE_*_FORCE` override, compile-time vs runtime split), `DESIGN.md` ("Runtime feature flags" section: table + accessor + invalidation + route gating + admin plane), `.env.example` (`FEATURE_*_FORCE`)
+- [x] 4.2 CHANGELOG.md entry
+- [x] 4.3 `pnpm typecheck && pnpm lint && pnpm test` green (17/17, 10/10, 16/16); **CODEX REVIEW** — final pass over the full change (below)

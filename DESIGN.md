@@ -569,3 +569,40 @@ JSON) снапшотятся в S3 детерминированным ключо
 `dashboardService.stats()` отдаёт блок `agency`: `bloggersProfiled`,
 `profileDataPoints` (+ разбивка по `field`), `matchRequests`, `agentCost7dUsd`
 (builder/extractor/matcher). Нули, пока фичи не используются.
+
+---
+
+## Runtime feature flags
+
+Operational rollout/kill-switch flags live in the DB (`feature_flag`), not in
+code — consistent with how endpoints/agents/types are configured (the
+`runtime-feature-flags` change). Toggled from the admin UI (Settings →
+Features) without a redeploy; instant kill-switch for risky outreach.
+
+```sql
+feature_flag ( key PK, enabled BOOL, description, updated_by_id, updated_at )
+```
+
+- **Registry**: closed set of keys + defaults in `packages/shared/src/feature-flags.ts`
+  (`FEATURE_FLAG_DEFAULTS`, all OFF). Currently managed: `campaign_types`,
+  `agency_sourcing`, `object_storage`, `blogger_matching`. Unknown key → off.
+  Compile-time product constants stay in `flags.ts`.
+- **Accessor** (`FeatureFlags`, shared, IO injected per app): synchronous
+  `get(key)` from an in-memory cache (hot-path safe), `init()`/`refresh()`,
+  `snapshot()`. Resolution order: **env force > cached DB value > default-off**.
+  Fail-safe: store unreachable ⇒ defaults (never auto-enables).
+- **Cross-process invalidation**: api + workers each hold a cache; a write
+  publishes to Redis channel `feature_flags:changed`; every subscriber
+  reloads (also on (re)connect, closing the reconnect window). Reuses the
+  existing Redis (BullMQ / Socket.IO) — no new dependency.
+- **Route gating**: flag-gated route plugins are registered unconditionally
+  and gated by a `requireFeature(key)` preHandler that returns a plain 404
+  when off — so toggling changes availability without a restart, and the web
+  distinguishes "feature off" from a real not-found.
+- **Env emergency override**: `FEATURE_<KEY>_FORCE=on|off` overrides the DB
+  value (incident kill-floor); pinned overrides are logged at startup.
+- **Admin control plane**: `GET/PATCH /feature-flags` (admin only, registered
+  unconditionally — never self-gated). A toggle updates the row + writes
+  `audit_log` atomically (one transaction), then publishes invalidation. The
+  UI shows non-blocking readiness hints (e.g. `object_storage` needs `S3_*`).
+  `GET /config` serves the public, secret-free flag snapshot the web gates UI on.

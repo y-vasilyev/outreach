@@ -74,9 +74,10 @@ pnpm db:reset                   # drop + migrate + seed (только dev!)
 
 ## Фичефлаги и env
 
-- Флаги в `packages/shared/src/flags.ts` с дефолтами.
+- **Рантайм-флаги (rollout/kill-switch)** — в БД (`feature_flag`), переключаются из админки (Settings → Features, только admin), кэшируются в процессе и инвалидируются по Redis pub/sub (`runtime-feature-flags`). Читать через `getFeatureFlags().get('<key>')` (синхронно, hot-path-safe) в api/workers — НЕ `flags.ENABLE_*`. Реестр ключей + дефолты — `packages/shared/src/feature-flags.ts` (`FEATURE_FLAG_DEFAULTS`, все off). Сейчас управляются: `campaign_types`, `agency_sourcing`, `object_storage`, `blogger_matching`. Гейт роутов — `requireFeature(key)` preHandler (404 когда off). Аварийный override: env `FEATURE_<KEY>_FORCE=on|off` (побеждает БД; floor для инцидентов). Дефолт при недоступном сторе — off (fail-safe).
+- **Compile-time флаги** — остаются в `packages/shared/src/flags.ts` (продуктовые константы: `ENABLE_LLM_CONTACT_EXTRACTION`, `ENABLE_AUTO_MODE`, `ENABLE_FOLLOWUP_CRON`, `ENABLE_QUALITY_REVIEW`, лимиты).
 - Обязательные env: `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `ENCRYPTION_KEY`, `TG_API_ID`, `TG_API_HASH`.
-- Опциональные: `SCRAPECREATORS_API_KEY`, `YANDEX_*`, `OPENROUTER_API_KEY`, `SENTRY_DSN`, `LOG_LEVEL`.
+- Опциональные: `SCRAPECREATORS_API_KEY`, `YANDEX_*`, `OPENROUTER_API_KEY`, `SENTRY_DSN`, `LOG_LEVEL`, `S3_*`, `FEATURE_<KEY>_FORCE`.
 
 ## PR-чеклист
 
