@@ -1,4 +1,3 @@
-import { flags } from '@nosquare/shared';
 import { ObjectStore } from './ObjectStore.js';
 import { loadStorageConfig } from './config.js';
 
@@ -12,18 +11,17 @@ export {
 let _store: ObjectStore | null | undefined;
 
 /**
- * Flag-aware, lazy accessor for the shared `ObjectStore`. Returns `null`
- * (never throws) when `ENABLE_OBJECT_STORAGE` is off OR the S3_* env is
- * incomplete — so every call site can degrade gracefully. The instance is
- * constructed at most once. Pass `force` in tests to bypass the flag (e.g. the
- * MinIO integration test) — config still must be present.
+ * Lazy accessor for the shared `ObjectStore`. Returns `null` (never throws)
+ * when the S3_* env is incomplete — so every call site can degrade
+ * gracefully. The instance is constructed at most once.
+ *
+ * Feature gating lives at the CALL SITES (the `object_storage` runtime flag,
+ * checked via the feature-flags accessor) — storage is a leaf package and
+ * stays flag-agnostic; this only checks that config is present. `force` is
+ * retained for symmetry/tests but no longer bypasses a flag.
  */
 export function getObjectStore(opts: { force?: boolean } = {}): ObjectStore | null {
   if (_store !== undefined && !opts.force) return _store;
-  if (!opts.force && !flags.ENABLE_OBJECT_STORAGE) {
-    _store = null;
-    return _store;
-  }
   const config = loadStorageConfig();
   if (!config) {
     if (!opts.force) _store = null;

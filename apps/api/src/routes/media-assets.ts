@@ -2,14 +2,16 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { MediaAssetKindZ } from '@nosquare/shared';
 import { mediaAssetsService } from '../services/media-assets.js';
+import { requireFeature } from '../require-feature.js';
 
 /**
  * Presigned media-asset endpoints (agency-sourcing-matching M6, task 6.4).
- * Registered behind ENABLE_OBJECT_STORAGE. Access for admin/operator. The UI
- * fetches/uploads assets only via these short-lived presigned URLs; bucket
- * credentials are never returned or logged.
+ * Gated at request time by the `object_storage` runtime flag. Access for
+ * admin/operator. The UI fetches/uploads assets only via these short-lived
+ * presigned URLs; bucket credentials are never returned or logged.
  */
 export async function mediaAssetsRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireFeature('object_storage'));
   app.addHook('onRequest', app.authenticate);
 
   app.get(

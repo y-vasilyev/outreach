@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { flags, redact, type MediaAssetKind } from '@nosquare/shared';
+import { getFeatureFlags } from '../feature-flags.js';
+import { redact, type MediaAssetKind } from '@nosquare/shared';
 import {
   getObjectStore,
   mediaAssetKey,
@@ -61,7 +62,7 @@ export async function persistInboundMedia(opts: {
    */
   downloadBytes?: () => Promise<Uint8Array | null>;
 }): Promise<{ persisted: boolean; assetId?: string; degraded?: string }> {
-  if (!flags.ENABLE_OBJECT_STORAGE) {
+  if (!getFeatureFlags().get('object_storage')) {
     logger.warn(
       { conversationId: opts.conversationId, mediaClass: opts.media.className },
       'inbound media skipped: object storage disabled (ENABLE_OBJECT_STORAGE off)',
@@ -193,7 +194,7 @@ export async function snapshotRawPayload(opts: {
   /** When known, namespaces the key under the profile (N1). */
   profileId?: string | null;
 }): Promise<string | null> {
-  if (!flags.ENABLE_OBJECT_STORAGE) return null;
+  if (!getFeatureFlags().get('object_storage')) return null;
   const store = getObjectStore();
   if (!store) return null;
 

@@ -1,9 +1,9 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import sensible from '@fastify/sensible';
-import { flags } from '@nosquare/shared';
 import { env } from './env.js';
 import { logger } from './logger.js';
+import { initFeatureFlags } from './feature-flags.js';
 import { registerAuth } from './auth/plugin.js';
 import { registerErrorHandler } from './error-handler.js';
 import { healthRoutes } from './routes/health.js';
@@ -46,31 +46,24 @@ async function main() {
   await app.register(channelsRoutes);
   await app.register(contactsRoutes);
   await app.register(campaignsRoutes);
-  // Campaign-type registry endpoints stay dark until the flag is enabled
-  // (agency-sourcing-matching rollout step 1).
-  if (flags.ENABLE_CAMPAIGN_TYPES) {
-    await app.register(campaignTypesRoutes);
-    await app.register(campaignTypeBuilderRoutes);
-  }
-  // Blogger commercial profile read endpoints stay dark until agency sourcing
-  // is enabled (agency-sourcing-matching rollout).
-  if (flags.ENABLE_AGENCY_SOURCING) {
-    await app.register(bloggerProfilesRoutes);
-  }
-  // Presigned media-asset endpoints stay dark until object storage is enabled
-  // (agency-sourcing-matching rollout step 3).
-  if (flags.ENABLE_OBJECT_STORAGE) {
-    await app.register(mediaAssetsRoutes);
-  }
-  // Ad-brief intake + blogger matching stay dark until matching is enabled
-  // (agency-sourcing-matching rollout step 4).
-  if (flags.ENABLE_BLOGGER_MATCHING) {
-    await app.register(matchingRoutes);
-  }
+  // Flag-gated capability routes are registered UNCONDITIONALLY and gated at
+  // request time by a `requireFeature(...)` hook inside each plugin
+  // (runtime-feature-flags) — so toggling a flag in the admin UI changes
+  // availability without restarting the API. When a flag is off the routes
+  // return a plain 404 (feature disabled).
+  await app.register(campaignTypesRoutes);
+  await app.register(campaignTypeBuilderRoutes);
+  await app.register(bloggerProfilesRoutes);
+  await app.register(mediaAssetsRoutes);
+  await app.register(matchingRoutes);
   await app.register(conversationsRoutes);
   await app.register(usersRoutes);
   await app.register(auditRoutes);
   await app.register(metricsRoutes);
+
+  // Load the feature-flag cache + subscribe to cross-process invalidation
+  // before serving, so route gating + reads are correct from the first request.
+  await initFeatureFlags();
 
   await app.listen({ port: env.API_PORT, host: env.API_HOST });
   attachIo(app.server);

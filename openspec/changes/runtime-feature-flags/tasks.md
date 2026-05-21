@@ -14,12 +14,12 @@
 
 ## 2. Wire accessor into API & workers
 
-- [ ] 2.1 Initialize `FeatureFlags` at API boot (load cache + subscribe) and at workers boot
-- [ ] 2.2 `requireFeature(key)` Fastify preHandler (404 when off); register agency/campaign-types/blogger-matching/media-assets routes unconditionally, gated by it (compose before `requireRole`)
-- [ ] 2.3 Replace `flags.ENABLE_*` reads with `featureFlags.get(...)` in workers: `agent-run.ts` (isAgencyConversation, resolveRoleAgent, safetyExtras, force-handoff, profile-extract trigger), `campaign-dispatcher.ts`, `tg-listen.ts`
-- [ ] 2.4 Replace flag reads in API: `campaigns` service (reject non-custdev typeId), any other `flags.ENABLE_*` site
-- [ ] 2.5 Make `/config` endpoint DB-backed (serve resolved flag state)
-- [ ] 2.6 Regression tests: gated route 404 when off / 200 after enable (no restart); CustDev path unchanged with all flags off; worker hot path reads cached accessor
+- [x] 2.1 Initialize `FeatureFlags` at API boot + workers boot (`apps/{api,workers}/src/feature-flags.ts` accessor singleton + prisma loader + dedicated Redis subscriber that reloads on message AND on (re)connect; `initFeatureFlags()` called before listen/before workers start)
+- [x] 2.2 `requireFeature(key)` preHandler (`reply.callNotFound()` plain 404 when off — same shape as an unregistered route, so the web's feature-off detection still works); gated route plugins (campaign-types, campaign-type-builder, blogger-profiles, media-assets, matching) registered unconditionally + gated via the hook
+- [x] 2.3 Replaced `flags.ENABLE_*` reads in workers: `agent-run.ts` (4), `campaign-dispatcher.ts`, `profile-extract.ts`, `tg-listen.ts` (2), `media-store.ts` (2) → `getFeatureFlags().get(...)`; storage pkg `getObjectStore` now gates on config only (flag check moved to call sites)
+- [x] 2.4 Replaced API flag reads: `campaigns` service (reject non-custdev typeId) → accessor
+- [x] 2.5 `/config` DB-backed (serves `getFeatureFlags().snapshot()`, resolved through env force-override)
+- [x] 2.6 Regression tests: `require-feature.test.ts` (404 off / passthrough after enable, no restart); worker hot-path tests (agencyRouting, mediaStore) re-driven via the mocked accessor; CustDev path unchanged with flags off
 - [ ] 2.7 **CODEX REVIEW** — milestone 2 (API/worker cutover + route gating)
 
 ## 3. Admin API + UI

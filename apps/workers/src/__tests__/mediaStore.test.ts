@@ -1,16 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { flags as readonlyFlags } from '@nosquare/shared';
-
-const flags = readonlyFlags as unknown as { ENABLE_OBJECT_STORAGE: boolean };
 
 const mocks = vi.hoisted(() => {
   const prisma = {
     bloggerProfile: { findUnique: vi.fn() },
     mediaAsset: { create: vi.fn(), update: vi.fn() },
   };
-  return { prisma };
+  // Runtime feature-flag state (object_storage off by default here).
+  const flagState: Record<string, boolean> = {};
+  return { prisma, flagState };
 });
 
+vi.mock('../feature-flags.js', () => ({
+  getFeatureFlags: () => ({ get: (k: string) => mocks.flagState[k] ?? false }),
+}));
 vi.mock('@nosquare/db', () => ({ getPrisma: () => mocks.prisma }));
 
 import { persistInboundMedia, snapshotRawPayload } from '../services/media-store.js';
@@ -18,11 +20,11 @@ import { persistInboundMedia, snapshotRawPayload } from '../services/media-store
 describe('persistInboundMedia degrades safely when storage is disabled', () => {
   afterEach(() => {
     vi.clearAllMocks();
-    flags.ENABLE_OBJECT_STORAGE = false;
+    mocks.flagState.object_storage = false;
   });
 
   it('does NOT throw and does NOT write a media_asset when the flag is off', async () => {
-    flags.ENABLE_OBJECT_STORAGE = false;
+    mocks.flagState.object_storage = false;
     const res = await persistInboundMedia({
       conversationId: 'c1',
       channelId: 'ch1',
@@ -35,7 +37,7 @@ describe('persistInboundMedia degrades safely when storage is disabled', () => {
   });
 
   it('snapshotRawPayload returns null (no throw) when the flag is off', async () => {
-    flags.ENABLE_OBJECT_STORAGE = false;
+    mocks.flagState.object_storage = false;
     const key = await snapshotRawPayload({
       conversationId: 'c1',
       sourceMessageId: 'm1',

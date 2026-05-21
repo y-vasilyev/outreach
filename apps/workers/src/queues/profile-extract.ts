@@ -8,7 +8,7 @@ import {
   type RollupDataPoint,
 } from '@nosquare/shared';
 import { getPrisma, Prisma } from '@nosquare/db';
-import { flags } from '@nosquare/shared';
+import { getFeatureFlags } from '../feature-flags.js';
 import { logger } from '../logger.js';
 import { runAgentSafe } from '../services/run-agent-safe.js';
 import { snapshotRawPayload } from '../services/media-store.js';
@@ -193,7 +193,7 @@ export async function handleProfileExtract(data: {
   // key embeds the same sourceMessageId. So given a data point, the raw payload
   // is the `kind='raw_payload'` media_asset on the same profileId whose s3Key
   // ends with `/{sourceMessageId}.json`. No migration added.
-  if (flags.ENABLE_OBJECT_STORAGE && sourceMessageId) {
+  if (getFeatureFlags().get('object_storage') && sourceMessageId) {
     const snapshotKey = await snapshotRawPayload({
       conversationId: conv.id,
       sourceMessageId,

@@ -5,9 +5,11 @@ import {
   UpdateCampaignTypeInputZ,
 } from '@nosquare/shared';
 import { campaignTypesService } from '../services/campaign-types.js';
+import { requireFeature } from '../require-feature.js';
 import { auditService } from '../services/audit.js';
 
 export async function campaignTypesRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireFeature('campaign_types'));
   app.addHook('onRequest', app.authenticate);
 
   app.get(

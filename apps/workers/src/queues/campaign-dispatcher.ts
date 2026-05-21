@@ -1,9 +1,9 @@
 import { getPrisma, type Prisma } from '@nosquare/db';
+import { getFeatureFlags } from '../feature-flags.js';
 import {
   type CampaignSchedule,
   isWithinSchedule,
   resolveAgentName,
-  flags,
 } from '@nosquare/shared';
 import { getRunner } from '../services/runner.js';
 import { logger } from '../logger.js';
@@ -36,7 +36,7 @@ function resolveRoleAgent(
   role: string,
   fallback: string,
 ): string {
-  if (!flags.ENABLE_AGENCY_SOURCING) return fallback;
+  if (!getFeatureFlags().get('agency_sourcing')) return fallback;
   if (campaign?.type?.key !== 'agency_sourcing') return fallback;
   return resolveAgentName(campaign.type.agentSet ?? null, role, fallback);
 }

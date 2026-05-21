@@ -10,10 +10,16 @@ import {
 import { startFollowupScheduler } from './queues/followup-scheduler.js';
 import { startQualityReviewScheduler } from './queues/quality-review-scheduler.js';
 import { startProfileExtractWorker } from './queues/profile-extract.js';
+import { initFeatureFlags } from './feature-flags.js';
 import { logger } from './logger.js';
 
 async function main() {
   logger.info('Starting workers…');
+
+  // Load the feature-flag cache + subscribe to invalidation before any job
+  // runs, so the inbound hot path reads correct flag state from the first
+  // message (runtime-feature-flags).
+  await initFeatureFlags();
 
   const workers = [
     startChannelScrapeWorker(),

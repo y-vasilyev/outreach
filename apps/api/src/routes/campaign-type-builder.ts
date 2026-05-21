@@ -6,15 +6,17 @@ import {
 } from '@nosquare/shared';
 
 import { campaignTypeBuilderService } from '../services/campaign-type-builder.js';
+import { requireFeature } from '../require-feature.js';
 
 /**
  * Campaign-type builder endpoints (agency-sourcing-matching M3, task 3.5).
  *
- * Flag-gated behind ENABLE_CAMPAIGN_TYPES (registered conditionally in
- * apps/api/src/index.ts, mirroring campaign-types routes). Admin only — the
- * builder authors live agent configs on save.
+ * Gated at request time by the `campaign_types` runtime flag (registered
+ * unconditionally; the hook 404s when off). Admin only — the builder authors
+ * live agent configs on save.
  */
 export async function campaignTypeBuilderRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireFeature('campaign_types'));
   app.addHook('onRequest', app.authenticate);
 
   // 3.5: build a draft from a plain-language goal.

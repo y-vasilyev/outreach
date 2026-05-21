@@ -1,10 +1,11 @@
 import { getPrisma } from '@nosquare/db';
-import { buildAjtbdScaffold, Errors, flags } from '@nosquare/shared';
+import { buildAjtbdScaffold, Errors } from '@nosquare/shared';
 import type { z } from 'zod';
 import type { CreateCampaignInputZ } from '@nosquare/shared';
 
 import { getQueues } from '../queues.js';
 import { campaignTypesService } from './campaign-types.js';
+import { getFeatureFlags } from '../feature-flags.js';
 
 const DEFAULT_CAMPAIGN_TYPE_KEY = 'custdev';
 
@@ -33,7 +34,7 @@ async function resolveTypeAndGoal(opts: {
   // While the registry is dark, only the default custdev type is selectable
   // — a client cannot opt a campaign into agency_sourcing (or any custom
   // type) until ENABLE_CAMPAIGN_TYPES is on.
-  if (!flags.ENABLE_CAMPAIGN_TYPES && type.key !== DEFAULT_CAMPAIGN_TYPE_KEY) {
+  if (!getFeatureFlags().get('campaign_types') && type.key !== DEFAULT_CAMPAIGN_TYPE_KEY) {
     throw Errors.badRequest('campaign types are not enabled', { typeKey: type.key });
   }
   const candidateGoal =

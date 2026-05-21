@@ -1,20 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { flags as readonlyFlags } from '@nosquare/shared';
-
-// `flags` is declared `as const` (readonly at the type level) but is a plain
-// runtime object — toggle a mutable view in tests, restored in afterEach.
-const flags = readonlyFlags as unknown as {
-  ENABLE_AGENCY_SOURCING: boolean;
-  ENABLE_CAMPAIGN_TYPES: boolean;
-};
-
 /**
  * B2 worker wiring (agency-sourcing-matching): on_inbound resolves the
  * reply-role agent via the campaign type's agentSet for agency_sourcing
- * conversations (behind ENABLE_AGENCY_SOURCING), and fans out a
+ * conversations (gated by the runtime `agency_sourcing` flag), and fans out a
  * profile-extract job. CustDev / flag-off stays on the literal agent names
- * and never enqueues profile extraction.
+ * and never enqueues profile extraction. Feature flags are now read via the
+ * runtime accessor, so we mock it (runtime-feature-flags).
  */
 
 const mocks = vi.hoisted(() => {
@@ -29,9 +21,14 @@ const mocks = vi.hoisted(() => {
   const publishRealtime = vi.fn();
   const tryAutoApprove = vi.fn();
   const queueAdd = vi.fn();
-  return { prisma, runAgentSafe, publishRealtime, tryAutoApprove, queueAdd };
+  // Mutable runtime-flag state driving getFeatureFlags().get(key).
+  const flagState: Record<string, boolean> = {};
+  return { prisma, runAgentSafe, publishRealtime, tryAutoApprove, queueAdd, flagState };
 });
 
+vi.mock('../feature-flags.js', () => ({
+  getFeatureFlags: () => ({ get: (k: string) => mocks.flagState[k] ?? false }),
+}));
 vi.mock('@nosquare/db', () => ({ getPrisma: () => mocks.prisma }));
 vi.mock('bullmq', () => ({
   Worker: class {},
@@ -138,13 +135,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  flags.ENABLE_AGENCY_SOURCING = false;
-  flags.ENABLE_CAMPAIGN_TYPES = false;
+  mocks.flagState.agency_sourcing = false;
+  mocks.flagState.campaign_types = false;
 });
 
 describe('handleOnInbound — agency routing (B2)', () => {
   it('enqueues profile-extract for an agency_sourcing conversation when the flag is on', async () => {
-    flags.ENABLE_AGENCY_SOURCING = true;
+    mocks.flagState.agency_sourcing = true;
     setupConversation({ typeKey: 'agency_sourcing', agentSet: AGENCY_AGENT_SET });
 
     await handleOnInbound({ conversationId: 'conv1' });
@@ -156,7 +153,7 @@ describe('handleOnInbound — agency routing (B2)', () => {
   });
 
   it('drives the agency reply with data_collection_planner (not reply_composer)', async () => {
-    flags.ENABLE_AGENCY_SOURCING = true;
+    mocks.flagState.agency_sourcing = true;
     setupConversation({ typeKey: 'agency_sourcing', agentSet: AGENCY_AGENT_SET });
 
     await handleOnInbound({ conversationId: 'conv1' });
@@ -181,7 +178,7 @@ describe('handleOnInbound — agency routing (B2)', () => {
   });
 
   it('marks collected targets from the blogger profile so the planner skips them', async () => {
-    flags.ENABLE_AGENCY_SOURCING = true;
+    mocks.flagState.agency_sourcing = true;
     setupConversation({ typeKey: 'agency_sourcing', agentSet: AGENCY_AGENT_SET });
     // Profile already has a rate-card data point → rate_card is "collected".
     mocks.prisma.bloggerProfile.findUnique.mockResolvedValue({
@@ -199,7 +196,7 @@ describe('handleOnInbound — agency routing (B2)', () => {
   });
 
   it('does NOT enqueue profile-extract for CustDev (flag on, custdev type)', async () => {
-    flags.ENABLE_AGENCY_SOURCING = true;
+    mocks.flagState.agency_sourcing = true;
     setupConversation({ typeKey: 'custdev', agentSet: {} });
 
     await handleOnInbound({ conversationId: 'conv1' });
@@ -208,7 +205,7 @@ describe('handleOnInbound — agency routing (B2)', () => {
   });
 
   it('does NOT enqueue profile-extract when the flag is off (even for agency type)', async () => {
-    flags.ENABLE_AGENCY_SOURCING = false;
+    mocks.flagState.agency_sourcing = false;
     setupConversation({ typeKey: 'agency_sourcing', agentSet: AGENCY_AGENT_SET });
 
     await handleOnInbound({ conversationId: 'conv1' });

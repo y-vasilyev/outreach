@@ -1,6 +1,7 @@
 import { Worker, Queue } from 'bullmq';
+import { getFeatureFlags } from '../feature-flags.js';
 import { getRedis } from '../redis.js';
-import { TgListenJobZ, QueueNames, flags } from '@nosquare/shared';
+import { TgListenJobZ, QueueNames } from '@nosquare/shared';
 import { getPrisma } from '@nosquare/db';
 import { getTgClient } from '../services/tg-client.js';
 import { logger } from '../logger.js';
@@ -166,7 +167,7 @@ export function startTgListenWorker() {
       // is dropped here exactly as it was pre-M6 (mapIncomingEvent used to
       // return null for it). Only when object storage is on do we persist the
       // empty-text inbound + run the pipeline so its media is captured.
-      if (!data.text && !flags.ENABLE_OBJECT_STORAGE) {
+      if (!data.text && !getFeatureFlags().get('object_storage')) {
         logger.info(
           { tgMsgId: data.tgMsgId, tgAccountId: data.tgAccountId },
           'tg-listen: media-only inbound dropped (object storage disabled; legacy parity)',
@@ -197,7 +198,7 @@ export function startTgListenWorker() {
       // 3b. Inbound media → S3 + media_asset (agency-sourcing-matching M6).
       // Behind ENABLE_OBJECT_STORAGE; degrades safely (logs + continues) so
       // media never blocks inbound processing or drops the conversation.
-      if (data.media && flags.ENABLE_OBJECT_STORAGE) {
+      if (data.media && getFeatureFlags().get('object_storage')) {
         await persistInboundMedia({
           conversationId: conv.id,
           channelId: contact.channelId ?? null,

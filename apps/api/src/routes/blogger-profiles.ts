@@ -1,13 +1,15 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { bloggerProfilesService } from '../services/blogger-profiles.js';
+import { requireFeature } from '../require-feature.js';
 
 /**
  * Blogger commercial profile read endpoints (agency-sourcing-matching M5,
- * task 5.4). Registered behind ENABLE_AGENCY_SOURCING. Read access for
- * admin/operator/viewer.
+ * task 5.4). Gated at request time by the `agency_sourcing` runtime flag.
+ * Read access for admin/operator/viewer.
  */
 export async function bloggerProfilesRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireFeature('agency_sourcing'));
   app.addHook('onRequest', app.authenticate);
 
   app.get(

@@ -5,7 +5,6 @@ import {
   QueueNames,
   CampaignAjtbdZ,
   isWithinSchedule,
-  flags,
   resolveSafetyContext,
   resolveForceHandoffIntents,
   resolveAgentName,
@@ -20,6 +19,7 @@ import { publishRealtime } from '../services/realtime-emit.js';
 import { tryAutoApprove } from '../services/auto-approve.js';
 import { buildContactPromptInput } from '../services/agent-input.js';
 import { runAgentSafe } from '../services/run-agent-safe.js';
+import { getFeatureFlags } from '../feature-flags.js';
 import { ensureContactTgProfile } from '../services/contact-profile.js';
 
 interface IntentOut {
@@ -175,7 +175,7 @@ interface SafetyExtras {
 function safetyExtrasForCampaign(
   campaign: { type?: { safetyProfile: unknown } | null } | null | undefined,
 ): SafetyExtras | null {
-  if (!flags.ENABLE_CAMPAIGN_TYPES) return null;
+  if (!getFeatureFlags().get('campaign_types')) return null;
   const ctx: ResolvedSafetyContext = resolveSafetyContext(campaign?.type?.safetyProfile ?? null);
   return {
     forbidden_topics: ctx.forbidden_topics,
@@ -201,7 +201,7 @@ function resolveRoleAgent(
   role: string,
   fallback: string,
 ): string {
-  if (!flags.ENABLE_AGENCY_SOURCING) return fallback;
+  if (!getFeatureFlags().get('agency_sourcing')) return fallback;
   if (campaign?.type?.key !== 'agency_sourcing') return fallback;
   return resolveAgentName(campaign.type.agentSet ?? null, role, fallback);
 }
@@ -209,7 +209,7 @@ function resolveRoleAgent(
 function isAgencyConversation(
   campaign: { type?: { key?: string | null } | null } | null | undefined,
 ): boolean {
-  return Boolean(flags.ENABLE_AGENCY_SOURCING && campaign?.type?.key === 'agency_sourcing');
+  return Boolean(getFeatureFlags().get('agency_sourcing') && campaign?.type?.key === 'agency_sourcing');
 }
 
 interface DataCollectionPlannerOut {
@@ -328,7 +328,7 @@ export async function handleOnInbound(data: { conversationId?: string }): Promis
           // vars) and no extra escalation intents apply, so the SafetyFilter
           // invocation is byte-for-byte the pre-registry path.
           const safetyExtras = safetyExtrasForCampaign(conv.campaign);
-          const forceHandoffIntents = flags.ENABLE_CAMPAIGN_TYPES
+          const forceHandoffIntents = getFeatureFlags().get('campaign_types')
             ? resolveForceHandoffIntents(conv.campaign?.type?.autonomyPolicy ?? null)
             : [];
 

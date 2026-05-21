@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { CreateAdBriefInputZ } from '@nosquare/shared';
 import { matchingService } from '../services/matching.js';
 import { auditService } from '../services/audit.js';
+import { requireFeature } from '../require-feature.js';
 
 /**
  * Ad-brief intake + blogger matching endpoints (agency-sourcing-matching M7,
@@ -30,6 +31,7 @@ export const matchOptsZ = z.object({
 });
 
 export async function matchingRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireFeature('blogger_matching'));
   app.addHook('onRequest', app.authenticate);
 
   // 7.1 — AdBrief intake.
