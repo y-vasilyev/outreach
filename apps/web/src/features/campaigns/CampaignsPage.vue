@@ -9,12 +9,14 @@ import Spinner from '../../components/Spinner.vue';
 import EmptyState from '../../components/EmptyState.vue';
 import CampaignForm from './CampaignForm.vue';
 import { api } from '../../lib/api';
+import { useFlags } from '../../lib/config';
 import { toast } from '../../lib/toast';
 import { formatNumber, formatPct, formatRelative, truncate } from '../../lib/format';
 import type { Campaign } from './types';
 
 const qc = useQueryClient();
 const router = useRouter();
+const flags = useFlags();
 
 const formOpen = ref(false);
 const editing = ref<Campaign | null>(null);
@@ -42,7 +44,7 @@ function openNew(): void { editing.value = null; formOpen.value = true; }
 <template>
   <PageHead title="Кампании" :sub="`${list.length} кампаний · ${list.filter((c) => c.status === 'running').length} активных`">
     <template #actions>
-      <button class="btn" @click="router.push('/campaign-types/new')">
+      <button v-if="flags.campaignTypes" class="btn" @click="router.push('/campaign-types/new')">
         <Icon name="sparkle" :size="12" /><span>Конструктор типов</span>
       </button>
       <button class="btn primary" @click="openNew">

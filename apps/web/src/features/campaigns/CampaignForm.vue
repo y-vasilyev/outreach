@@ -11,6 +11,7 @@ import TagInput from '../../components/TagInput.vue';
 import Icon from '../../components/Icon.vue';
 import AgencyGoalEditor from './AgencyGoalEditor.vue';
 import { api } from '../../lib/api';
+import { useFlags } from '../../lib/config';
 import { isFeatureOff } from '../../lib/featureGate';
 import { toast } from '../../lib/toast';
 import type { Campaign, CampaignAjtbd } from './types';
@@ -32,15 +33,22 @@ const mode = ref<'auto' | 'semi_auto' | 'assisted' | 'manual'>('assisted');
 // AJTBD editor only) instead of crashing.
 const typeId = ref<string>('');
 
+const flags = useFlags();
+
 const { data: campaignTypesRaw, error: typesError } = useQuery({
   queryKey: ['campaign-types'],
   queryFn: () => api.get<CampaignType[]>('/campaign-types'),
-  enabled: computed(() => props.open),
+  // Only fetch when the registry flag is on and the form is open; with the flag
+  // off we skip the request and degrade to the legacy custdev-only form.
+  enabled: computed(() => props.open && flags.value.campaignTypes),
   retry: false,
   staleTime: 60_000,
 });
 
-const typesAvailable = computed(() => !isFeatureOff(typesError.value));
+// Available when the flag is on AND the endpoint didn't answer flag-off 404.
+const typesAvailable = computed(
+  () => flags.value.campaignTypes && !isFeatureOff(typesError.value),
+);
 const campaignTypes = computed<CampaignType[]>(() => campaignTypesRaw.value ?? []);
 const typeOptions = computed(() =>
   campaignTypes.value.map((t) => ({ value: t.id, label: t.name })),

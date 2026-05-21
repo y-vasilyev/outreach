@@ -4,6 +4,7 @@ import { computed, ref, onBeforeUnmount, onMounted } from 'vue';
 import Icon from './Icon.vue';
 import type { IconName } from '../lib/icons';
 import { useAuth } from '../lib/auth';
+import { useFlags } from '../lib/config';
 import { initials } from '../lib/format';
 
 interface NavItem {
@@ -20,6 +21,7 @@ const props = defineProps<{
 const route = useRoute();
 const router = useRouter();
 const { user, logout } = useAuth();
+const flags = useFlags();
 
 const groups = computed<{ group: string; items: NavItem[] }[]>(() => [
   {
@@ -29,8 +31,14 @@ const groups = computed<{ group: string; items: NavItem[] }[]>(() => [
       { to: '/campaigns', label: 'Кампании', icon: 'zap', badge: props.counts?.campaigns ?? null },
       { to: '/channels', label: 'Каналы', icon: 'layers', badge: props.counts?.channels ?? null },
       { to: '/contacts', label: 'Контакты', icon: 'users_round', badge: props.counts?.contacts ?? null },
-      { to: '/bloggers', label: 'Каталог', icon: 'globe', badge: null },
-      { to: '/match', label: 'Подбор', icon: 'search', badge: null },
+      // Agency surfaces only render when their flag is on, so a legacy operator
+      // sees the unchanged nav.
+      ...(flags.value.agencySourcing
+        ? [{ to: '/bloggers', label: 'Каталог', icon: 'globe' as const, badge: null }]
+        : []),
+      ...(flags.value.bloggerMatching
+        ? [{ to: '/match', label: 'Подбор', icon: 'search' as const, badge: null }]
+        : []),
       { to: '/manual', label: 'Manual', icon: 'mail', badge: props.counts?.manual ?? null },
     ],
   },

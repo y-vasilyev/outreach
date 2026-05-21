@@ -17,6 +17,14 @@ export interface Audience {
   geo?: Record<string, number>;
 }
 
+export interface MediaAsset {
+  id: string;
+  kind: string;
+  mime: string | null;
+  bytes: number | null;
+  createdAt: string;
+}
+
 export interface BloggerProfile {
   id: string;
   channelId: string | null;
@@ -32,6 +40,7 @@ export interface BloggerProfile {
   updatedAt: string;
   // detail-only relations / list-only counts
   dataPoints?: ProfileDataPoint[];
+  mediaAssets?: MediaAsset[];
   _count?: { dataPoints: number };
 }
 

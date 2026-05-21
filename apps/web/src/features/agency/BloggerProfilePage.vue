@@ -11,10 +11,10 @@ import ConfBar from '../../components/ConfBar.vue';
 import FeatureOff from '../../components/FeatureOff.vue';
 import EmptyState from '../../components/EmptyState.vue';
 import MediaKitDownload from './MediaKitDownload.vue';
-import { api } from '../../lib/api';
+import { api, ApiError } from '../../lib/api';
 import { isFeatureOff } from '../../lib/featureGate';
 import { formatCompact, formatDateTime } from '../../lib/format';
-import type { BloggerProfile, ProfileDataPoint } from './types';
+import type { BloggerProfile, ProfileDataPoint, MediaAsset } from './types';
 
 const route = useRoute();
 const router = useRouter();
@@ -27,7 +27,14 @@ const { data: profile, isLoading, error } = useQuery({
   retry: false,
 });
 
+// A flag-off route is a 404 without an application NOT_FOUND code; a genuinely
+// missing profile is a 404 whose body carries code NOT_FOUND. We must show a
+// proper "не найдено" state for the latter rather than the disabled-feature
+// panel (which would lie about why the page is empty).
 const featureOff = computed(() => isFeatureOff(error.value));
+const notFound = computed(
+  () => error.value instanceof ApiError && error.value.status === 404 && error.value.code === 'NOT_FOUND',
+);
 
 const standardKv = computed<KvItem[]>(() => {
   const p = profile.value;
@@ -43,20 +50,12 @@ const standardKv = computed<KvItem[]>(() => {
 });
 
 const dataPoints = computed<ProfileDataPoint[]>(() => profile.value?.dataPoints ?? []);
+const mediaAssets = computed<MediaAsset[]>(() => profile.value?.mediaAssets ?? []);
 
-// A data point references a downloadable asset when its value is an asset id
-// and the field signals media (media kit / screenshot). The profile read
-// endpoint does not currently embed media_asset rows, so we surface a download
-// affordance for any provenance that carries an explicit assetId.
-function assetId(dp: ProfileDataPoint): string | null {
-  if (dp.field.startsWith('media') || dp.field === 'media_kit') {
-    if (typeof dp.value === 'string' && dp.value) return dp.value;
-    if (dp.value && typeof dp.value === 'object' && 'assetId' in (dp.value as object)) {
-      const v = (dp.value as { assetId?: unknown }).assetId;
-      if (typeof v === 'string') return v;
-    }
-  }
-  return null;
+function assetLabel(a: MediaAsset): string {
+  const kind = a.kind === 'media_kit' ? 'Медиа-кит' : a.kind === 'screenshot' ? 'Скриншот' : a.kind;
+  const size = a.bytes != null ? ` · ${formatCompact(a.bytes)} Б` : '';
+  return `${kind}${size}`;
 }
 
 function renderValue(v: unknown): string {
@@ -77,7 +76,17 @@ function renderValue(v: unknown): string {
 
   <FeatureOff v-if="featureOff" flag="ENABLE_AGENCY_SOURCING" />
   <div v-else-if="isLoading" class="center"><Spinner /></div>
-  <EmptyState v-else-if="!profile" title="Профиль не найден" icon="users_round" />
+  <EmptyState
+    v-else-if="notFound"
+    title="Профиль не найден"
+    description="Профиль блогера с таким id не существует или был удалён."
+    icon="users_round"
+  >
+    <template #action>
+      <button class="btn" @click="router.push('/bloggers')"><Icon name="arrow_left" :size="12" /><span>К каталогу</span></button>
+    </template>
+  </EmptyState>
+  <EmptyState v-else-if="!profile" title="Профиль недоступен" icon="users_round" />
 
   <template v-else>
     <!-- Standardized fields -->
@@ -142,6 +151,27 @@ function renderValue(v: unknown): string {
       </div>
     </div>
 
+    <!-- Media kits & screenshots -->
+    <div class="card" style="margin-top: 12px;">
+      <div class="card-head"><Icon name="download" :size="12" /><span>Медиа-киты ({{ mediaAssets.length }})</span></div>
+      <div class="card-body">
+        <div v-if="!mediaAssets.length" class="placeholder" style="min-height: 48px;">Файлы не получены.</div>
+        <table v-else class="tbl">
+          <thead><tr><th>Файл</th><th>MIME</th><th>Получен</th><th></th></tr></thead>
+          <tbody>
+            <tr v-for="a in mediaAssets" :key="a.id">
+              <td class="cell-strong">{{ assetLabel(a) }}</td>
+              <td><span class="muted-2 mono" style="font-size: 11.5px;">{{ a.mime ?? '—' }}</span></td>
+              <td><span class="muted-2" style="font-size: 11px;">{{ formatDateTime(a.createdAt) }}</span></td>
+              <td style="text-align: right;">
+                <MediaKitDownload :asset-id="a.id" :mime="a.mime" label="Скачать" />
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- Data points with provenance -->
     <div class="card" style="margin-top: 12px;">
       <div class="card-head">
@@ -153,7 +183,7 @@ function renderValue(v: unknown): string {
         <table v-else class="tbl">
           <thead>
             <tr>
-              <th>Поле</th><th>Значение</th><th>Уверенность</th><th>Источник (raw)</th><th>Снято</th><th></th>
+              <th>Поле</th><th>Значение</th><th>Уверенность</th><th>Источник (raw)</th><th>Снято</th>
             </tr>
           </thead>
           <tbody>
@@ -173,13 +203,6 @@ function renderValue(v: unknown): string {
                 <span class="muted-2" style="font-size: 11.5px; font-style: italic;">{{ dp.rawSnippet || '—' }}</span>
               </td>
               <td><span class="muted-2" style="font-size: 11px;">{{ formatDateTime(dp.capturedAt) }}</span></td>
-              <td>
-                <MediaKitDownload
-                  v-if="assetId(dp)"
-                  :asset-id="assetId(dp)!"
-                  label="Медиа-кит"
-                />
-              </td>
             </tr>
           </tbody>
         </table>

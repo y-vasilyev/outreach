@@ -602,9 +602,13 @@ SELECT conversations WHERE status=active
   агентства со ссылкой на реальную интеграцию в постах канала; детерминированный
   no-fabrication guard (нет наблюдаемой интеграции → не auto-send; цитируемый
   бренд обязан встречаться и в тексте).
-- **DataCollectionPlanner — `data_collection_planner`.** Ведёт сбор данных:
+- **DataCollectionPlanner — `data_collection_planner`.** Логика сбора данных:
   missing = target − collected, задаёт один недостающий вопрос за ход, не
-  переспрашивает собранное, авторитетный сигнал goal-satisfied.
+  переспрашивает собранное, авторитетный сигнал goal-satisfied. Агент
+  реализован, засижен в `agent_config` и покрыт unit-тестами, НО его вызов в
+  агентском inbound-пайплайне пока ОТЛОЖЕН: путь ответа на inbound сейчас
+  резолвится в `reply_composer` (см. ниже). Планировщик будет подключён, когда
+  агентский inbound начнёт потреблять состояние profile collected/target.
 - **RateCardExtractor / AudienceStatsExtractor.** Парсят свободный текст
   блогера в `profile_data_point` (`rate.*`, `reach.*`, `audience.*`) с
   confidence и сырым `raw_snippet`; низкая уверенность не выкидывается.
@@ -623,6 +627,8 @@ SELECT conversations WHERE status=active
 ### Пайплайн агентского inbound (поверх `on_inbound`)
 
 Для `agency_sourcing`-конверсаций (за флагом): опенер/reply резолвятся из
-`agent_set`; после inbound в очередь `profile-extract` уходит извлечение
-прайсов/охватов в `profile_data_point` + детерминированный roll-up в
-`blogger_profile`; входящие файлы оседают в S3 (`media_asset`).
+`agent_set` через `resolveAgentName(role, fallback)`; на сегодня роль
+`reply_composer` маппится в `reply_composer` (а не в `data_collection_planner`
+— его подключение отложено, см. выше). После inbound в очередь `profile-extract`
+уходит извлечение прайсов/охватов в `profile_data_point` + детерминированный
+roll-up в `blogger_profile`; входящие файлы оседают в S3 (`media_asset`).

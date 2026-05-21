@@ -31,9 +31,28 @@ export const bloggerProfilesService = {
       where: { id },
       include: {
         dataPoints: { orderBy: [{ field: 'asc' }, { capturedAt: 'desc' }] },
+        // Surface the media kits / stat screenshots attached to this profile so
+        // the detail view can offer a (presigned) download per asset. We expose
+        // only safe metadata — never the s3Key or any credential.
+        mediaAssets: { orderBy: { createdAt: 'desc' } },
       },
     });
     if (!profile) throw Errors.notFound('blogger_profile', id);
-    return profile;
+    return {
+      ...profile,
+      // Prisma serializes Decimal to a string over JSON; map confidence back to
+      // a JS number at the API boundary so the frontend gets a real number.
+      dataPoints: profile.dataPoints.map((dp) => ({
+        ...dp,
+        confidence: Number(dp.confidence),
+      })),
+      mediaAssets: profile.mediaAssets.map((a) => ({
+        id: a.id,
+        kind: a.kind,
+        mime: a.mime,
+        bytes: a.bytes,
+        createdAt: a.createdAt,
+      })),
+    };
   },
 };
