@@ -4,6 +4,7 @@ export * from './types/index.js';
 export * from './redact.js';
 export * from './realtime.js';
 export * from './flags.js';
+export * from './feature-flags.js';
 export * from './scheduling.js';
 export * from './campaign-type-resolve.js';
 export * from './profile-rollup.js';

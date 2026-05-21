@@ -520,6 +520,19 @@ model CampaignType {
   campaigns Campaign[]
 }
 
+// Runtime feature flag (runtime-feature-flags change). Source of truth for
+// operational rollout/kill switches; toggled from the admin UI, cached in
+// each process and invalidated via Redis pub/sub. `updatedById` is a plain
+// column (the actor + change are also recorded in audit_log).
+model FeatureFlag {
+  key         String   @id
+  enabled     Boolean  @default(false)
+  description String   @default("")
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}
+
 // Standardized, queryable catalog row for a blogger/channel. Composed
 // deterministically from ProfileDataPoint rows (latest high-confidence).
 model BloggerProfile {
