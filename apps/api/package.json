@@ -22,6 +22,7 @@
     "@nosquare/llm": "workspace:*",
     "@nosquare/platforms": "workspace:*",
     "@nosquare/shared": "workspace:*",
+    "@nosquare/storage": "workspace:*",
     "@nosquare/tg-client": "workspace:*",
     "@socket.io/redis-adapter": "^8.3.0",
     "bcryptjs": "^2.4.3",

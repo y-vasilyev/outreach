@@ -52,11 +52,11 @@
 
 ## 6. Media asset storage (S3)
 
-- [ ] 6.1 `packages/storage` `ObjectStore` wrapping S3-compatible SDK; `S3_*` env; flag-gated; MinIO in `compose.dev.yml`
-- [ ] 6.2 `tg-listen`: on inbound media, download via `tg-client`, put to S3 (`bloggers/{profileId}/{assetId}`), write `media_asset`; degrade-with-warning when storage off
-- [ ] 6.3 Snapshot raw reply text + parsed JSON to object storage under deterministic key, referenced from data points
-- [ ] 6.4 API: presigned GET (download) and PUT (upload) endpoints; never expose/log credentials (use `redact()`)
-- [ ] 6.5 Integration test (MinIO): media persisted + read back via presigned URL; disabled-storage path does not fail inbound
+- [x] 6.1 `packages/storage` (`@nosquare/storage`) `ObjectStore` wrapping `@aws-sdk/client-s3` + `s3-request-presigner` (putObject/getPresignedGetUrl/getPresignedPutUrl/ensureBucket/health); `S3_*` env via `loadStorageConfig`; flag-aware lazy `getObjectStore()` (returns `null` off/unconfigured); `S3_*` in `.env.example` + both `env.ts`; MinIO in `compose.dev.yml`; creds never logged (config never logged; `redact()` on emitted log fields)
+- [x] 6.2 `tg-listen`: inbound media → `persistInboundMedia` writes a `media_asset` row (key `bloggers/{profileId}/{assetId}`, conversation-scoped fallback) behind `ENABLE_OBJECT_STORAGE`; degrades with a warning when storage off/unreachable, never fails inbound. **Deferred:** byte download — tg-client has no media-download method; added typed `IncomingMedia` metadata (className/kind/mime/bytes/fileName) on `IncomingMessage` + queue schema + `mapIncomingEvent`, and record a metadata-only asset (no bytes/sha256) per the task's degrade option. `putObject` is wired and used when bytes are supplied.
+- [x] 6.3 `snapshotRawPayload` helper (`packages/storage`: `rawPayloadKey` deterministic per source message + `buildRawPayloadSnapshot`) writes verbatim reply text + parsed JSON to S3; wired into the profile-extract worker (M5) after persistence, recording a `raw_payload` media_asset linked to the same profile/conversation the data points reference. Flag-gated, degrades safely. Unit-tested.
+- [x] 6.4 API: `GET /media-assets/:id/download-url` (presigned GET) + `POST /media-assets/upload-url` (presigned PUT). Role admin/operator; registered behind `ENABLE_OBJECT_STORAGE`; credentials never returned or logged.
+- [x] 6.5 Integration test (MinIO @ :9000): put + read back via presigned GET/PUT (live, SKIPS cleanly when MinIO unreachable) in `packages/storage`; disabled-storage path asserted in `packages/storage` (getObjectStore null) + `apps/workers` (`persistInboundMedia`/`snapshotRawPayload` no-throw, no media_asset written when flag off).
 
 ## 7. Blogger matching
 

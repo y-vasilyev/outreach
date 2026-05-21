@@ -21,6 +21,16 @@ const EnvZ = z.object({
     .optional()
     .transform((v) => v === 'true' || v === '1'),
   LOG_LEVEL: z.string().default('info'),
+  // Object storage (S3 / MinIO). Optional — only consumed when
+  // ENABLE_OBJECT_STORAGE is on; storage degrades to a no-op when absent.
+  // Read by packages/storage via loadStorageConfig(process.env); kept here so
+  // a misconfigured prod surfaces in validation rather than at first inbound.
+  S3_ENDPOINT: z.string().optional(),
+  S3_REGION: z.string().optional(),
+  S3_ACCESS_KEY: z.string().optional(),
+  S3_SECRET_KEY: z.string().optional(),
+  S3_BUCKET: z.string().optional(),
+  S3_FORCE_PATH_STYLE: z.string().optional(),
 });
 
 export const env = EnvZ.parse(process.env);

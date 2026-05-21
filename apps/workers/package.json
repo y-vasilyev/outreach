@@ -18,6 +18,7 @@
     "@nosquare/llm": "workspace:*",
     "@nosquare/platforms": "workspace:*",
     "@nosquare/shared": "workspace:*",
+    "@nosquare/storage": "workspace:*",
     "@nosquare/tg-client": "workspace:*",
     "bullmq": "^5.8.0",
     "ioredis": "^5.4.1",

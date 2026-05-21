@@ -8,8 +8,10 @@ import {
   type RollupDataPoint,
 } from '@nosquare/shared';
 import { getPrisma, Prisma } from '@nosquare/db';
+import { flags } from '@nosquare/shared';
 import { logger } from '../logger.js';
 import { runAgentSafe } from '../services/run-agent-safe.js';
+import { snapshotRawPayload } from '../services/media-store.js';
 
 interface ExtractionOut {
   data_points: ProfileDataPointDraft[];
@@ -151,6 +153,40 @@ export async function handleProfileExtract(data: {
 
     return { profileId: profile.id, dataPointsCreated: drafts.length };
   });
+
+  // Snapshot the verbatim raw payload (last inbound + parsed extractor output)
+  // to object storage under a deterministic key and record a `raw_payload`
+  // media_asset linked to the same profile/conversation the data points
+  // reference (agency-sourcing-matching M6, task 6.3). Behind
+  // ENABLE_OBJECT_STORAGE; degrades safely — never blocks extraction.
+  if (flags.ENABLE_OBJECT_STORAGE && sourceMessageId) {
+    const snapshotKey = await snapshotRawPayload({
+      conversationId: conv.id,
+      sourceMessageId,
+      rawText: extractorInput.last_inbound,
+      parsed: { rate, audience },
+    }).catch(() => null);
+    if (snapshotKey) {
+      await prisma.mediaAsset
+        .create({
+          data: {
+            conversationId: conv.id,
+            profileId: result.profileId,
+            kind: 'raw_payload',
+            s3Key: snapshotKey,
+            mime: 'application/json',
+            sourceTgMsgId: null,
+          },
+        })
+        .catch((err) => {
+          logger.warn(
+            { conversationId: conv.id, err: (err as Error).message },
+            'raw payload media_asset row failed; snapshot still written',
+          );
+          return null;
+        });
+    }
+  }
 
   logger.info(
     {

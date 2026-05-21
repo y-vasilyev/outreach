@@ -122,6 +122,28 @@ export interface IncomingMessage {
   fromUsername?: string;
   fromFirstName?: string;
   fromLastName?: string;
+  /**
+   * Lightweight media metadata lifted off the GramJS message when the inbound
+   * carries a photo/document. We deliberately do NOT download the bytes here
+   * (the listener stays sync + light, and GramJS byte-download needs an async
+   * round-trip + access_hash). Consumers behind ENABLE_OBJECT_STORAGE record a
+   * `media_asset` row from this metadata and degrade when bytes are absent.
+   */
+  media?: IncomingMedia;
+}
+
+/** Minimal, GramJS-version-agnostic view of an inbound message's media. */
+export interface IncomingMedia {
+  /** GramJS media className, e.g. `MessageMediaPhoto` / `MessageMediaDocument`. */
+  className: string;
+  /** Coarse kind for the media_asset row. */
+  kind: 'image' | 'video' | 'document' | 'other';
+  /** MIME type when present (documents carry it; photos usually don't). */
+  mime?: string;
+  /** Declared size in bytes when present. */
+  bytes?: number;
+  /** Original file name when present (documents). */
+  fileName?: string;
 }
 
 export type IncomingHandler = (msg: IncomingMessage) => void | Promise<void>;

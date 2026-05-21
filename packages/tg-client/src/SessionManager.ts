@@ -4,6 +4,7 @@ import { fetchHistorySinceImpl } from './methods/fetchHistorySince.js';
 import type {
   HistoryMessage,
   IncomingHandler,
+  IncomingMedia,
   IncomingMessage,
   RecentPost,
   ResolvedChannel,
@@ -919,6 +920,9 @@ function mapIncomingEvent(event: unknown, tgAccountId: string): IncomingMessage 
       senderId?: { toString(): string };
       fromId?: { userId?: { toString(): string } };
       date?: number;
+      media?: unknown;
+      document?: unknown;
+      photo?: unknown;
       sender?: SenderEntity | null;
       _sender?: SenderEntity | null;
     };
@@ -934,7 +938,11 @@ function mapIncomingEvent(event: unknown, tgAccountId: string): IncomingMessage 
   // Defensively skip our own outgoing echoes that GramJS sometimes redelivers.
   if (m.out === true) return null;
   const text = typeof m.message === 'string' ? m.message : typeof m.text === 'string' ? m.text : '';
-  if (!text) return null;
+  const media = mapMedia(m.media);
+  // Allow media-only inbounds (e.g. a media-kit PDF with no caption) through —
+  // they carry no text but ARE meaningful (a media_asset is recorded). Only
+  // drop when there's neither text nor media.
+  if (!text && !media) return null;
   // `senderId` is most reliable; fallback to `peerId.userId` then `fromId`.
   const fromTgUserId =
     m.senderId?.toString?.() ??
@@ -974,7 +982,60 @@ function mapIncomingEvent(event: unknown, tgAccountId: string): IncomingMessage 
     ...(fromUsername !== undefined && { fromUsername }),
     ...(fromFirstName !== undefined && { fromFirstName }),
     ...(fromLastName !== undefined && { fromLastName }),
+    ...(media !== undefined && { media }),
   };
+}
+
+/**
+ * Extract lightweight, version-agnostic media metadata from a GramJS message's
+ * `media` field. We don't download bytes here (see IncomingMedia doc) — just
+ * enough to record a `media_asset` row. Returns undefined for non-media or
+ * webpage previews (which aren't a real attachment).
+ */
+function mapMedia(raw: unknown): IncomingMedia | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const media = raw as {
+    className?: string;
+    document?: {
+      mimeType?: string;
+      size?: number | { toString(): string };
+      attributes?: Array<{ className?: string; fileName?: string }>;
+    };
+  };
+  const className = media.className ?? 'Unknown';
+  // Link previews aren't an attachment we want to persist.
+  if (className === 'MessageMediaWebPage' || className === 'MessageMediaEmpty') {
+    return undefined;
+  }
+
+  if (className === 'MessageMediaPhoto') {
+    return { className, kind: 'image' };
+  }
+
+  if (className === 'MessageMediaDocument' && media.document) {
+    const doc = media.document;
+    const mime = typeof doc.mimeType === 'string' ? doc.mimeType : undefined;
+    const size =
+      typeof doc.size === 'number'
+        ? doc.size
+        : typeof doc.size === 'object' && doc.size
+          ? Number(doc.size.toString())
+          : undefined;
+    const fileName = doc.attributes?.find(
+      (a) => a.className === 'DocumentAttributeFilename' && a.fileName,
+    )?.fileName;
+    const isVideo = !!mime && mime.startsWith('video/');
+    const isImage = !!mime && mime.startsWith('image/');
+    return {
+      className,
+      kind: isVideo ? 'video' : isImage ? 'image' : 'document',
+      ...(mime ? { mime } : {}),
+      ...(typeof size === 'number' && Number.isFinite(size) ? { bytes: size } : {}),
+      ...(fileName ? { fileName } : {}),
+    };
+  }
+
+  return { className, kind: 'other' };
 }
 
 // ---------- helpers ----------

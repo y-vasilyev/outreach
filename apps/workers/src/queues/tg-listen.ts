@@ -1,10 +1,11 @@
 import { Worker, Queue } from 'bullmq';
 import { getRedis } from '../redis.js';
-import { TgListenJobZ, QueueNames } from '@nosquare/shared';
+import { TgListenJobZ, QueueNames, flags } from '@nosquare/shared';
 import { getPrisma } from '@nosquare/db';
 import { getTgClient } from '../services/tg-client.js';
 import { logger } from '../logger.js';
 import { publishRealtime } from '../services/realtime-emit.js';
+import { persistInboundMedia } from '../services/media-store.js';
 
 let _agentRunQueue: Queue | undefined;
 function agentRunQueue(): Queue {
@@ -53,7 +54,34 @@ export function startTgListenWorker() {
       // "Could not find the input entity"). The username from the inline
       // sender entity is reliable when present. On hit we back-fill
       // tgUserId + profile fields so future inbounds use the fast path.
-      let contact = await prisma.contact.findFirst({
+      let conv = await prisma.conversation.findFirst({
+        where: {
+          tgAccountId: data.tgAccountId,
+          contact: { tgUserId: data.fromTgUserId },
+        },
+        include: { contact: true },
+        orderBy: { updatedAt: 'desc' },
+      });
+
+      if (!conv && data.fromUsername) {
+        const username = data.fromUsername.toLowerCase();
+        conv = await prisma.conversation.findFirst({
+          where: {
+            tgAccountId: data.tgAccountId,
+            contact: {
+              type: 'tg_username',
+              OR: [
+                { tgUsername: { equals: username, mode: 'insensitive' } },
+                { value: { equals: username, mode: 'insensitive' } },
+              ],
+            },
+          },
+          include: { contact: true },
+          orderBy: { updatedAt: 'desc' },
+        });
+      }
+
+      let contact = conv?.contact ?? await prisma.contact.findFirst({
         where: { tgUserId: data.fromTgUserId },
       });
 
@@ -100,14 +128,17 @@ export function startTgListenWorker() {
       }
 
       // 2. Find or create the conversation.
-      let conv = await prisma.conversation.findUnique({
-        where: {
-          tgAccountId_contactId: {
-            tgAccountId: data.tgAccountId,
-            contactId: contact.id,
+      if (!conv) {
+        conv = await prisma.conversation.findUnique({
+          where: {
+            tgAccountId_contactId: {
+              tgAccountId: data.tgAccountId,
+              contactId: contact.id,
+            },
           },
-        },
-      });
+          include: { contact: true },
+        });
+      }
       if (!conv) {
         // No campaign context at this point — the inbound is from a
         // contact that never had a conversation with this account
@@ -123,6 +154,7 @@ export function startTgListenWorker() {
             status: 'active',
             mode: 'assisted',
           },
+          include: { contact: true },
         });
       }
 
@@ -145,6 +177,30 @@ export function startTgListenWorker() {
           tgMsgId: data.tgMsgId || null,
         },
       });
+
+      // 3b. Inbound media → S3 + media_asset (agency-sourcing-matching M6).
+      // Behind ENABLE_OBJECT_STORAGE; degrades safely (logs + continues) so
+      // media never blocks inbound processing or drops the conversation.
+      if (data.media && flags.ENABLE_OBJECT_STORAGE) {
+        await persistInboundMedia({
+          conversationId: conv.id,
+          channelId: contact.channelId ?? null,
+          sourceTgMsgId: data.tgMsgId || null,
+          media: data.media,
+          // tg-client does not download media bytes; metadata-only asset row.
+        }).catch((err) => {
+          logger.warn(
+            { conversationId: conv.id, err: (err as Error).message },
+            'tg-listen: media persistence threw; ignoring (inbound continues)',
+          );
+          return undefined;
+        });
+      } else if (data.media) {
+        logger.warn(
+          { conversationId: conv.id, mediaClass: data.media.className },
+          'tg-listen: inbound media present but object storage disabled; skipping',
+        );
+      }
 
       // 4. Touch `lastInboundAt` and bring the conversation back to active
       // (in case it was closed/paused).

@@ -27,6 +27,15 @@ const EnvZ = z.object({
     .transform((v) => v === 'true' || v === '1'),
   LOG_LEVEL: z.string().default('info'),
   LOG_MESSAGE_BODIES: z.string().default('false'),
+  // Object storage (S3 / MinIO). Optional — only consumed when
+  // ENABLE_OBJECT_STORAGE is on. Read by packages/storage via
+  // loadStorageConfig(process.env). Credentials are never logged (redact()).
+  S3_ENDPOINT: z.string().optional(),
+  S3_REGION: z.string().optional(),
+  S3_ACCESS_KEY: z.string().optional(),
+  S3_SECRET_KEY: z.string().optional(),
+  S3_BUCKET: z.string().optional(),
+  S3_FORCE_PATH_STYLE: z.string().optional(),
 });
 
 export const env = EnvZ.parse(process.env);

@@ -18,6 +18,7 @@ import { campaignsRoutes } from './routes/campaigns.js';
 import { campaignTypesRoutes } from './routes/campaign-types.js';
 import { campaignTypeBuilderRoutes } from './routes/campaign-type-builder.js';
 import { bloggerProfilesRoutes } from './routes/blogger-profiles.js';
+import { mediaAssetsRoutes } from './routes/media-assets.js';
 import { conversationsRoutes } from './routes/conversations.js';
 import { usersRoutes } from './routes/users.js';
 import { auditRoutes } from './routes/audit.js';
@@ -54,6 +55,11 @@ async function main() {
   // is enabled (agency-sourcing-matching rollout).
   if (flags.ENABLE_AGENCY_SOURCING) {
     await app.register(bloggerProfilesRoutes);
+  }
+  // Presigned media-asset endpoints stay dark until object storage is enabled
+  // (agency-sourcing-matching rollout step 3).
+  if (flags.ENABLE_OBJECT_STORAGE) {
+    await app.register(mediaAssetsRoutes);
   }
   await app.register(conversationsRoutes);
   await app.register(usersRoutes);
