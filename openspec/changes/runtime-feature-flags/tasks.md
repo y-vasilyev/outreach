@@ -24,10 +24,10 @@
 
 ## 3. Admin API + UI
 
-- [ ] 3.1 Admin-only flags API: `GET /feature-flags` (list with state + readiness hints), `PATCH /feature-flags/:key` (toggle); write `audit_log`; publish invalidation on change
-- [ ] 3.2 Web Settings → Features page (admin): list flags with toggles + prerequisite hints; persist via the API; reflect state from `/config`/list
-- [ ] 3.3 Readiness hints: annotate `object_storage` (needs `S3_*`), `agency_sourcing` (needs endpoints + TG accounts) — non-blocking
-- [ ] 3.4 Tests: admin can toggle (audited + published), non-admin gets 403, list returns state + hints; web typecheck/build
+- [x] 3.1 Admin-only flags API: `GET /feature-flags` (list with state + readiness hints), `PATCH /feature-flags/:key` (toggle); write `audit_log`; publish invalidation on change — route `apps/api/src/routes/feature-flags.ts` (admin-only, registered UNCONDITIONALLY in index.ts), service `apps/api/src/services/feature-flags.ts`; zod enum from FEATURE_FLAG_KEYS validates `:key`, body via zod; on write: upsert row (enabled + updatedById from req.user) → `auditService.log('feature_flag.update')` → `publishFeatureFlagsChanged()`
+- [x] 3.2 Web Settings → Features page (admin): `apps/web/src/features/settings/FeaturesPage.vue` lists flags from `GET /feature-flags` with a Switch per flag + description + readiness hint; PATCH on toggle invalidates `['feature-flags']` AND `['config']` (nav `useFlags()` updates live); admin-only route `settings/features` + Rail nav entry gated on `user.role === 'admin'` + router `meta.admin` guard
+- [x] 3.3 Readiness hints (`evaluateReadiness` in the service, best-effort/never throws): `object_storage` → ready iff S3_ENDPOINT/S3_ACCESS_KEY/S3_SECRET_KEY/S3_BUCKET set; `agency_sourcing` → ready iff ≥1 enabled endpoint AND ≥1 tg_account; `blogger_matching` → ready iff ≥1 blogger_profile (else "каталог пуст — сначала соберите профили"); `campaign_types` → always ready; on query error → ready:false + neutral hint (no 500). Hints are non-blocking Russian strings — never block the toggle
+- [x] 3.4 Tests: `apps/api/src/routes/__tests__/feature-flags.test.ts` (10) — admin PATCH updates row + audit_log + publish (all mocked); operator/viewer → 403, nothing persisted/published; unauth → 401; unknown key/bad body → 400; GET returns all keys with resolved state + readiness; readiness ready-path + throw-path (no 500). `pnpm --filter @nosquare/api test` 44/44 green; `pnpm --filter @nosquare/web typecheck` + build green
 - [ ] 3.5 **CODEX REVIEW** — milestone 3 (admin API + UI)
 
 ## 4. Docs & rollout

@@ -56,6 +56,11 @@ const groups = computed<{ group: string; items: NavItem[] }[]>(() => [
     items: [
       { to: '/users', label: 'Пользователи', icon: 'users' },
       { to: '/audit', label: 'Аудит', icon: 'shield' },
+      // Runtime feature-flag control plane — admin only (the API enforces it
+      // too; this just hides the nav entry for non-admins).
+      ...(user.value?.role === 'admin'
+        ? [{ to: '/settings/features', label: 'Фичи', icon: 'sliders' as const, badge: null }]
+        : []),
     ],
   },
   {

@@ -126,6 +126,13 @@ const routes: RouteRecordRaw[] = [
         component: () => import('../features/audit/AuditPage.vue'),
         meta: { crumbs: ['Команда', 'Аудит'] },
       },
+      {
+        path: 'settings/features',
+        name: 'settings-features',
+        component: () => import('../features/settings/FeaturesPage.vue'),
+        // Admin-only: runtime feature-flag control plane.
+        meta: { crumbs: ['Настройки', 'Фичи'], admin: true },
+      },
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: '/' },
@@ -143,5 +150,8 @@ router.beforeEach(async (to) => {
     return { name: 'login', query: to.fullPath !== '/' ? { next: to.fullPath } : undefined };
   }
   if (to.name === 'login' && user.value) return { path: '/' };
+  // Admin-only routes (e.g. the feature-flag control plane). Non-admins are
+  // bounced to the dashboard; the API also enforces admin on every flag write.
+  if (to.meta?.admin && user.value?.role !== 'admin') return { path: '/' };
   return true;
 });

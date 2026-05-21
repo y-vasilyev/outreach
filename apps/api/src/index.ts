@@ -24,6 +24,7 @@ import { conversationsRoutes } from './routes/conversations.js';
 import { usersRoutes } from './routes/users.js';
 import { auditRoutes } from './routes/audit.js';
 import { metricsRoutes } from './routes/metrics.js';
+import { featureFlagsRoutes } from './routes/feature-flags.js';
 import { attachIo } from './realtime/io.js';
 
 async function main() {
@@ -60,6 +61,9 @@ async function main() {
   await app.register(usersRoutes);
   await app.register(auditRoutes);
   await app.register(metricsRoutes);
+  // Admin control plane for runtime flags — registered UNCONDITIONALLY (never
+  // behind requireFeature), so admins can always reach the toggle UI.
+  await app.register(featureFlagsRoutes);
 
   // Load the feature-flag cache + subscribe to cross-process invalidation
   // before serving, so route gating + reads are correct from the first request.
