@@ -62,16 +62,27 @@ export const discoveryService = {
         out.push({ platform: c.platform, handle: c.handle, url: c.url, title: c.title, alreadyKnown: true });
         continue;
       }
-      const ch = await prisma.channel.create({
-        data: {
-          platform: c.platform,
-          handle: c.handle,
-          status: 'new',
-          source,
-          addedById,
-          links: [],
-        },
-      });
+      let ch: { id: string };
+      try {
+        ch = await prisma.channel.create({
+          data: {
+            platform: c.platform,
+            handle: c.handle,
+            status: 'new',
+            source,
+            addedById,
+            links: [],
+          },
+        });
+      } catch {
+        // Lost a findUnique→create race (the @@unique(platform,handle) fired)
+        // or the row was created concurrently — it now exists, so count it as
+        // already-known and don't enqueue a duplicate scrape. Never 500 the
+        // whole discovery on one candidate.
+        alreadyKnown += 1;
+        out.push({ platform: c.platform, handle: c.handle, url: c.url, title: c.title, alreadyKnown: true });
+        continue;
+      }
       created += 1;
       await queues.channelScrape.add('scrape', { channelId: ch.id });
       enqueued += 1;

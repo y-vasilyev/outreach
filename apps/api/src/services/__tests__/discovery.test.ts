@@ -78,6 +78,21 @@ describe('discoveryService.search', () => {
     expect(res.candidates.find((c) => c.handle === 'new_chan')?.alreadyKnown).toBe(false);
   });
 
+  it('handles a findUnique→create race without 500ing (counts as known, no enqueue)', async () => {
+    mocks.candidates.mockReturnValue([
+      { platform: 'telegram', handle: 'racy_chan', url: 'https://t.me/racy_chan', title: '' },
+    ]);
+    mocks.prisma.channel.findUnique.mockResolvedValue(null); // looked free…
+    mocks.prisma.channel.create.mockRejectedValue(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }), // …but created concurrently
+    );
+
+    const res = await discoveryService.search({ query: 'q', limit: 20 }, 'u1');
+    expect(res).toMatchObject({ created: 0, enqueued: 0, alreadyKnown: 1 });
+    expect(mocks.scrapeAdd).not.toHaveBeenCalled();
+    expect(res.candidates[0]?.alreadyKnown).toBe(true);
+  });
+
   it('respects the limit (slices candidates)', async () => {
     mocks.candidates.mockReturnValue(
       Array.from({ length: 5 }, (_, i) => ({

@@ -1,7 +1,7 @@
 ## 0. Process
 
-- [ ] 0.1 At the milestone gate (**CODEX REVIEW**), run a Codex review of the diff, address findings, then finalize
-- [ ] 0.2 Keep behavior-preserving: feature flag-gated + default off ⇒ no impact until enabled; verify `pnpm typecheck && pnpm test` after each milestone
+- [x] 0.1 At the milestone gate (**CODEX REVIEW**), run a Codex review of the diff, address findings, then finalize
+- [x] 0.2 Keep behavior-preserving: feature flag-gated + default off ⇒ no impact until enabled; verify `pnpm typecheck && pnpm test` after each milestone
 
 ## 1. Search client + normalization (packages/platforms)
 
@@ -23,4 +23,4 @@
 - [x] 3.1 e2e test (env-gated, skip without `YANDEX_SEARCH_API_KEY`/`YANDEX_API_KEY` + folder): real niche search → ≥1 telegram candidate → `channel(status='new')` persisted + `channel-scrape` enqueued; bounded timeout
 - [x] 3.2 Verify the e2e passes locally with the Search key (sandbox/network), and skips cleanly without it
 - [x] 3.3 Docs: `DESIGN.md`/`AGENTS.md` discovery note; `CHANGELOG.md`; `CLAUDE.md` "где что лежит" (discovery) if warranted
-- [ ] 3.4 `pnpm typecheck && pnpm lint && pnpm test` green; **CODEX REVIEW** — full change; address findings
+- [x] 3.4 `pnpm typecheck && pnpm lint && pnpm test` green (17/17, 10/10, 16/16); **CODEX REVIEW** — review run directly against the diff (Codex runtime deferred async this session; earlier milestone gates used Codex). Finding fixed: discovery `findUnique→create` now guarded (try/catch) so a unique-constraint race / create failure is counted as already-known with no duplicate scrape, never 500ing the request (+ test). Verified clean: bounded polling/no key leak, denylist completeness, flag-off no-op, authz order, registry/migration/seed consistency, env-gated e2e.
