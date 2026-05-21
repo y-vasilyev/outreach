@@ -1,7 +1,7 @@
 ## 0. Process & sequencing
 
-- [ ] 0.1 Implement in milestone order (sections 1→9); fan out independent slices (DB, agents, API, web) to sub-agents within a milestone
-- [ ] 0.2 At each milestone gate (marked **CODEX REVIEW**), run a Codex review of the milestone diff before starting the next milestone; address findings before proceeding
+- [x] 0.1 Implement in milestone order (sections 1→9); fan out independent slices (DB, agents, API, web) to sub-agents within a milestone — M1+M2 done solo on the critical path; M3–M8 delegated to sub-agents sequentially (one per milestone)
+- [x] 0.2 At each milestone gate (marked **CODEX REVIEW**), run a Codex review of the milestone diff before starting the next milestone; address findings before proceeding — gates 2.7, 4.7, 7.7, 9.6 all run via the Codex agent; findings fixed before proceeding
 - [x] 0.3 Add feature flags to `packages/shared/src/flags.ts`: `campaign_types`, `agency_sourcing`, `object_storage`, `blogger_matching` (default off)
 
 ## 1. DB schema & migration foundation
