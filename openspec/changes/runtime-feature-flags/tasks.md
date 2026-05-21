@@ -34,4 +34,4 @@
 
 - [x] 4.1 Updated `CLAUDE.md` (runtime flags in DB+UI + `getFeatureFlags().get`, env `FEATURE_*_FORCE` override, compile-time vs runtime split), `DESIGN.md` ("Runtime feature flags" section: table + accessor + invalidation + route gating + admin plane), `.env.example` (`FEATURE_*_FORCE`)
 - [x] 4.2 CHANGELOG.md entry
-- [x] 4.3 `pnpm typecheck && pnpm lint && pnpm test` green (17/17, 10/10, 16/16); **CODEX REVIEW** — final pass over the full change (below)
+- [x] 4.3 `pnpm typecheck && pnpm lint && pnpm test` green (17/17, 10/10, 16/16); **CODEX REVIEW** — final pass. Fixed: (B1/B2) bounded `FeatureFlags.init()` initial load with a timeout (default 5000ms) in the shared accessor so a slow/unreachable DB can't hang api/worker boot (proceeds with defaults; in-flight load / reconnect-reload still updates the cache) + test; (NIT) removed the 4 dead `ENABLE_*` consts from `flags.ts` (now runtime flags in the DB). Confirmed clean: end-to-end toggle chain, registry consistency across 5 sites, security/audit.

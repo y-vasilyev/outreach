@@ -81,6 +81,13 @@ export interface FeatureFlagSubscriber {
 export interface FeatureFlagsOptions {
   /** Structured warning sink (e.g. pino). */
   warn?: (meta: Record<string, unknown>, msg: string) => void;
+  /**
+   * Max time the INITIAL load may take before `init()` gives up and proceeds
+   * with defaults (boot must never hang on a slow/unreachable DB). The load
+   * still completes in the background and updates the cache if it later
+   * resolves. Default 5000ms.
+   */
+  initTimeoutMs?: number;
 }
 
 export class FeatureFlags {
@@ -88,6 +95,7 @@ export class FeatureFlags {
   private readonly loader: FeatureFlagLoader;
   private readonly subscriber?: FeatureFlagSubscriber;
   private readonly warn: (meta: Record<string, unknown>, msg: string) => void;
+  private readonly initTimeoutMs: number;
 
   constructor(
     loader: FeatureFlagLoader,
@@ -97,6 +105,7 @@ export class FeatureFlags {
     this.loader = loader;
     this.subscriber = subscriber;
     this.warn = opts.warn ?? (() => {});
+    this.initTimeoutMs = opts.initTimeoutMs ?? 5000;
     this.cache = this.defaultsMap();
   }
 
@@ -132,7 +141,22 @@ export class FeatureFlags {
         );
       }
     }
-    await this.refresh();
+    // Bound the initial load: boot must never hang on a slow/unreachable DB.
+    // `refresh()` itself never throws (keeps defaults on error); the race only
+    // guards against it HANGING. If the timeout wins, we proceed with defaults
+    // and the in-flight load (or the next reconnect-reload) updates the cache.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), this.initTimeoutMs);
+    });
+    const result = await Promise.race([this.refresh().then(() => 'ok' as const), timeout]);
+    if (timer) clearTimeout(timer);
+    if (result === 'timeout') {
+      this.warn(
+        { initTimeoutMs: this.initTimeoutMs },
+        'feature flags: initial load timed out; starting with defaults (all rollout flags off)',
+      );
+    }
   }
 
   /**

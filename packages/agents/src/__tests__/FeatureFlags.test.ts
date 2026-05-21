@@ -65,6 +65,16 @@ describe('FeatureFlags', () => {
     expect(ff.get('campaign_types')).toBe(true); // force-on
   });
 
+  it('does not hang boot: init resolves with defaults when the loader hangs', async () => {
+    // loadAll never resolves (e.g. DB unreachable, connection hangs).
+    const ff = new FeatureFlags({ loadAll: () => new Promise(() => {}) }, undefined, {
+      initTimeoutMs: 20,
+    });
+    await expect(ff.init()).resolves.toBeUndefined();
+    expect(ff.get('agency_sourcing')).toBe(false);
+    expect(ff.get('campaign_types')).toBe(false);
+  });
+
   it('is fail-safe: a loader error keeps registry defaults and does not throw', async () => {
     const ff = new FeatureFlags({
       loadAll: async () => {
