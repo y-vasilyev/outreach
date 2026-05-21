@@ -67,8 +67,23 @@ export const ProfileDataPointDraftZ = z.object({
   rawSnippet: z.string().default(''),
 });
 
+/**
+ * Output shape shared by the extractor agents (RateCardExtractor,
+ * AudienceStatsExtractor). Each emits an array of drafts plus a free-text
+ * note. Low-confidence/ambiguous facts are emitted (with a low `confidence`
+ * and a rationale baked into `rawSnippet`/note) rather than dropped — an
+ * operator reviews them downstream (spec: "Low-confidence extractions are
+ * flagged not dropped silently").
+ */
+export const ProfileExtractionOutputZ = z.object({
+  data_points: z.array(ProfileDataPointDraftZ).default([]),
+  /** Optional free-text note (e.g. why nothing was extracted). */
+  note: z.string().optional(),
+});
+
 export type RateCard = z.infer<typeof RateCardZ>;
 export type Audience = z.infer<typeof AudienceZ>;
 export type BloggerProfile = z.infer<typeof BloggerProfileZ>;
 export type ProfileDataPoint = z.infer<typeof ProfileDataPointZ>;
 export type ProfileDataPointDraft = z.infer<typeof ProfileDataPointDraftZ>;
+export type ProfileExtractionOutput = z.infer<typeof ProfileExtractionOutputZ>;

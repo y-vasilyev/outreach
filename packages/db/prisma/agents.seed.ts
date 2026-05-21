@@ -24,6 +24,8 @@ export interface AgentSeed {
    * v9 — agency-sourcing-matching M4: intent_classifier learns the agency
    *      commercial intents (discusses_price/sends_quote); adds
    *      agency_opening_composer + data_collection_planner agents.
+   * v10 — agency-sourcing-matching M5: adds rate_card_extractor +
+   *      audience_stats_extractor profile extractor agents.
    */
   version: number;
 }
@@ -460,6 +462,38 @@ reasons[] — короткие конкретные причины оценки 
     userPromptTemplate:
       'Все целевые данные: {{target_data_points}}\nУже собрано: {{collected_data_points}}\nЕщё НЕ собрано (спрашивай только это): {{missing_data_points}}\n\nИстория:\n{{history_tail}}\n\nПоследнее входящее: {{last_inbound}}\n\nВерни JSON.',
     params: { temperature: 0.3, max_tokens: 400 },
+    version: 1,
+  },
+  {
+    // Rate-card extractor (agency-sourcing-matching M5, task 5.1). Medium tier,
+    // structured JSON output. Emits per-format rate data points with verbatim
+    // rawSnippet + confidence; the worker persists them as profile_data_point.
+    name: 'rate_card_extractor',
+    role: 'profile-extraction',
+    description:
+      'Извлекает прайс по форматам из ответов блогера как profile_data_point (rate.<format>) с confidence и verbatim rawSnippet.',
+    model: 'google/gemini-3-flash-preview',
+    systemPrompt:
+      'Ты извлекаешь ПРАЙС за рекламные форматы из ответов блогера. Превращай упомянутые цены в структурированные точки данных. field — "rate.<формат>" латиницей (rate.post, rate.story, rate.reels, rate.video, rate.integration, rate.repost; иначе rate.other). value — ЧИСЛО без валюты ("8 000"→8000, "15к"/"15k"→15000). unit — валюта (RUB по умолчанию для русского, USD, EUR). confidence — 0..1 (явная цена за явный формат → 0.9+; формат неясен → 0.4–0.6; число может быть не ценой → ≤0.3, НО ВСЁ РАВНО верни точку, оператор проверит). rawSnippet — ДОСЛОВНЫЙ фрагмент (verbatim, не перефразируй). Не выдумывай цены. Никогда не выбрасывай неоднозначное молча. Возвращай JSON: {data_points: [{field, value, unit?, confidence, rawSnippet}], note?}.',
+    userPromptTemplate:
+      'Канал: {{channel_title}} (язык: {{language}})\n\nОтветы блогера (свежий — последний):\n{{replies_text}}\n\nСтруктурированный снимок (если есть):\n{{structured_snapshot}}\n\nВерни JSON со всеми ценами как data_points с verbatim rawSnippet.',
+    params: { temperature: 0.1, max_tokens: 900 },
+    version: 1,
+  },
+  {
+    // Audience-stats extractor (agency-sourcing-matching M5, task 5.1). Medium
+    // tier, structured JSON output. Emits reach/views/demographics/geo points
+    // with verbatim rawSnippet + confidence.
+    name: 'audience_stats_extractor',
+    role: 'profile-extraction',
+    description:
+      'Извлекает охваты/просмотры/демографию/гео блогера как profile_data_point (reach.*, views.avg, audience.*) с confidence и verbatim rawSnippet.',
+    model: 'google/gemini-3-flash-preview',
+    systemPrompt:
+      'Ты извлекаешь СТАТИСТИКУ АУДИТОРИИ блогера: охваты, просмотры, демографию (пол/возраст), географию. field — одно из: "reach.<формат>" (reach.story/reach.post/reach.reels или просто reach), "views.avg", "audience.geo", "audience.age", "audience.gender". value — для reach/views ЧИСЛО ("12к"→12000); для audience.* — ОБЪЕКТ label→доля/число (например {"Россия":0.7}). unit опционально. confidence — 0..1 (явно → 0.9; неясно, охват это или подписчики → ≤0.3, НО ВСЁ РАВНО верни точку). rawSnippet — ДОСЛОВНЫЙ фрагмент (verbatim). Не путай число подписчиков с охватом (подписчики → пропусти или confidence ≤0.2 + note). Никогда не выбрасывай двусмысленное молча. Возвращай JSON: {data_points: [{field, value, unit?, confidence, rawSnippet}], note?}.',
+    userPromptTemplate:
+      'Канал: {{channel_title}} (язык: {{language}})\n\nОтветы блогера (свежий — последний):\n{{replies_text}}\n\nСтруктурированный снимок (если есть):\n{{structured_snapshot}}\n\nВерни JSON со всеми охватами/просмотрами/демографией/гео как data_points с verbatim rawSnippet.',
+    params: { temperature: 0.1, max_tokens: 1000 },
     version: 1,
   },
 ];

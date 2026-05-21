@@ -23,6 +23,8 @@ import { qualityReviewer } from './QualityReviewer.js';
 import { campaignTypeBuilder } from './CampaignTypeBuilder.js';
 import { agencyOpeningComposer } from './AgencyOpeningComposer.js';
 import { dataCollectionPlanner } from './DataCollectionPlanner.js';
+import { rateCardExtractor } from './RateCardExtractor.js';
+import { audienceStatsExtractor } from './AudienceStatsExtractor.js';
 
 agentRegistry.register(channelAnalyzer);
 agentRegistry.register(contactExtractor);
@@ -40,6 +42,8 @@ agentRegistry.register(qualityReviewer);
 agentRegistry.register(campaignTypeBuilder);
 agentRegistry.register(agencyOpeningComposer);
 agentRegistry.register(dataCollectionPlanner);
+agentRegistry.register(rateCardExtractor);
+agentRegistry.register(audienceStatsExtractor);
 
 export {
   channelAnalyzer,
@@ -58,6 +62,8 @@ export {
   campaignTypeBuilder,
   agencyOpeningComposer,
   dataCollectionPlanner,
+  rateCardExtractor,
+  audienceStatsExtractor,
 };
 
 export * from './ChannelAnalyzer.js';
@@ -76,3 +82,5 @@ export * from './QualityReviewer.js';
 export * from './CampaignTypeBuilder.js';
 export * from './AgencyOpeningComposer.js';
 export * from './DataCollectionPlanner.js';
+export * from './RateCardExtractor.js';
+export * from './AudienceStatsExtractor.js';

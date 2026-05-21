@@ -17,6 +17,7 @@ import { contactsRoutes } from './routes/contacts.js';
 import { campaignsRoutes } from './routes/campaigns.js';
 import { campaignTypesRoutes } from './routes/campaign-types.js';
 import { campaignTypeBuilderRoutes } from './routes/campaign-type-builder.js';
+import { bloggerProfilesRoutes } from './routes/blogger-profiles.js';
 import { conversationsRoutes } from './routes/conversations.js';
 import { usersRoutes } from './routes/users.js';
 import { auditRoutes } from './routes/audit.js';
@@ -48,6 +49,11 @@ async function main() {
   if (flags.ENABLE_CAMPAIGN_TYPES) {
     await app.register(campaignTypesRoutes);
     await app.register(campaignTypeBuilderRoutes);
+  }
+  // Blogger commercial profile read endpoints stay dark until agency sourcing
+  // is enabled (agency-sourcing-matching rollout).
+  if (flags.ENABLE_AGENCY_SOURCING) {
+    await app.register(bloggerProfilesRoutes);
   }
   await app.register(conversationsRoutes);
   await app.register(usersRoutes);

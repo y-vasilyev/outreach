@@ -44,11 +44,11 @@
 
 ## 5. Blogger commercial profile & extractors
 
-- [ ] 5.1 `RateCardExtractor` + `AudienceStatsExtractor` agents → emit `profile_data_point`s with confidence + `raw_snippet`; write `agent_run`
-- [ ] 5.2 Profile-extraction worker queue triggered on agency inbound (and on demand); persists data points
-- [ ] 5.3 Deterministic roll-up composing `blogger_profile` standardized fields from data points (latest high-confidence), with `captured_at`
-- [ ] 5.4 API: blogger-profile read endpoints (list/detail with data points)
-- [ ] 5.5 Tests: rate-card/audience extraction mapping, raw-snippet preservation, low-confidence flagged-not-dropped, deterministic roll-up
+- [x] 5.1 `RateCardExtractor` + `AudienceStatsExtractor` agents → emit `profile_data_point`s with confidence + `raw_snippet`; write `agent_run` — `packages/agents/src/agents/RateCardExtractor.ts` (`rate_card_extractor`, emits `rate.<format>`) + `AudienceStatsExtractor.ts` (`audience_stats_extractor`, emits `reach.*`/`views.avg`/`audience.*`); both validate I/O via `ProfileExtractionOutputZ` (added to `packages/shared/.../blogger-profile.ts`), preserve verbatim `rawSnippet` (backfilled from source when the model omits it), never threshold-drop low-confidence points. Registered in `agents/index.ts`, seeded (medium tier) in `agents.seed.ts` v10.
+- [x] 5.2 Profile-extraction worker queue triggered on agency inbound (and on demand); persists data points — `QueueNames.profileExtract` + `ProfileExtractJobZ` (shared/queue.ts), `apps/workers/src/queues/profile-extract.ts` (runs both extractors, upserts `BloggerProfile` keyed by channelId, persists `ProfileDataPoint` rows with `sourceMessageId` = inbound Message.id, then rolls up — in one tx), registered in `apps/workers/src/index.ts`. Triggered from `on_inbound` in `agent-run.ts` ONLY for agency_sourcing convs behind `ENABLE_AGENCY_SOURCING` (additive; CustDev path untouched). On-demand enqueue supported via the queue.
+- [x] 5.3 Deterministic roll-up composing `blogger_profile` standardized fields from data points (latest high-confidence), with `captured_at` — pure `rollUpProfileFields` in `packages/shared/src/profile-rollup.ts` (latest-high-confidence per field; ties broken by recency); called by the worker after persistence. Unit-tested.
+- [x] 5.4 API: blogger-profile read endpoints (list/detail with data points) — `apps/api/src/services/blogger-profiles.ts` + `routes/blogger-profiles.ts` (GET `/blogger-profiles` list, GET `/blogger-profiles/:id` detail incl. dataPoints; role admin/operator/viewer; zod-validated params), registered behind `ENABLE_AGENCY_SOURCING`.
+- [x] 5.5 Tests: rate-card/audience extraction mapping, raw-snippet preservation, low-confidence flagged-not-dropped, deterministic roll-up — `packages/agents/.../ProfileExtractors.test.ts` (6) + `ProfileRollup.test.ts` (9, pure roll-up); B2 routing covered by `apps/workers/.../agencyRouting.test.ts` (4).
 
 ## 6. Media asset storage (S3)
 
