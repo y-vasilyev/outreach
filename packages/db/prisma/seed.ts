@@ -162,6 +162,22 @@ async function main() {
     }
   }
 
+  // Bind any agent that still has no endpoint to the default endpoint
+  // (e.g. configs created on an earlier seed run before any endpoint was
+  // configured — the versioned upsert above only rebinds on a version bump).
+  // Idempotent: only fills nulls, never overrides an operator's choice. Prefers
+  // the OpenRouter endpoint since the built-in agent models are OpenRouter ids.
+  if (defaultEndpoint) {
+    const bound = await prisma.agentConfig.updateMany({
+      where: { endpointId: null },
+      data: { endpointId: defaultEndpoint.id },
+    });
+    if (bound.count > 0) {
+      const epName = defaultEndpoint.id === openrouterEndpoint?.id ? 'openrouter-default' : 'default endpoint';
+      console.log(`✓ bound ${bound.count} unbound agent_config(s) → ${epName}`);
+    }
+  }
+
   // Campaign-type registry (agency-sourcing-matching change). Idempotent
   // upsert of the two built-in types. `update` re-syncs the config so seed
   // changes propagate to dev/CI; operator-authored types are untouched
