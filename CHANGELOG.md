@@ -6,6 +6,27 @@ All operator-visible changes worth noting between releases.
 
 ### Added
 
+- **Campaign types (agency sourcing & matching)** — campaign goal/framing/
+  safety/agent-set moved out of hardcoded CustDev into a configurable
+  `campaign_type` registry. CustDev is now the seeded `custdev` type; a new
+  `agency_sourcing` type poses as a media-buying agency to collect rate cards,
+  reach and audience stats into a standardized, matchable blogger catalog.
+  Behind feature flags (off by default); CustDev behavior is unchanged until
+  enabled.
+  - **Campaign-type builder**: describe a campaign goal in plain language and
+    a meta-agent drafts the agent set (prompts, models, output schemas), dry-
+    runs them, and saves an editable type — never auto-published.
+  - **Agency dialogue**: agency-framed opener referencing the blogger's own
+    ad, a data-collection planner, and a commercial-language safety profile;
+    price/quote intents force operator handoff.
+  - **Blogger catalog**: standardized profiles (rate cards, reach, audience)
+    with per-fact provenance; uploaded media kits + raw replies stored in S3
+    (presigned download).
+  - **Matching**: submit an ad brief → ranked relevant bloggers with rationale
+    (deterministic, optional bounded LLM re-rank).
+  - Web: campaign-type builder, type-aware campaign goal editor, blogger
+    catalog/profile views, and a brief→match screen.
+
 - **Chat autonomy modes** — per-conversation `auto` / `semi_auto` / `assisted` /
   `manual` with a model-driven goal-fit gate (`GoalFitEvaluator`). In `auto`
   mode, when the gate detects the conversation has drifted off the campaign's

@@ -77,9 +77,9 @@
 
 ## 9. Docs, telemetry & rollout
 
-- [ ] 9.1 Update `DESIGN.md` (new tables, S3, matching) and `AGENTS.md` (new agents + agency pipeline + per-type safety/goal)
-- [ ] 9.2 Reword `CLAUDE.md` "Чего не делать #7" to be campaign-type-aware (don't drift outside the type's declared framing/safety)
-- [ ] 9.3 Add metrics: `bloggers_profiled_total`, `profile_data_points_total{field}`, `match_requests_total`, builder/extractor agent cost; add to `/metrics`
-- [ ] 9.4 Follow-up migration: flip `campaign.type_id` to NOT NULL after backfill verified; retain `ajtbd` column one release then drop
-- [ ] 9.5 CHANGELOG.md entry for operator-visible changes
+- [x] 9.1 Update `DESIGN.md` (new tables, S3, matching) and `AGENTS.md` (new agents + agency pipeline + per-type safety/goal) — appended "Agency sourcing & matching" sections to both
+- [x] 9.2 Reword `CLAUDE.md` "Чего не делать #7" to be campaign-type-aware (don't drift outside the type's declared framing/safety)
+- [x] 9.3 Add metrics: `bloggers_profiled_total`, `profile_data_points_total{field}`, `match_requests_total`, builder/extractor agent cost; add to `/metrics` — added an `agency` block to `dashboardService.stats()` (the project's JSON `/metrics/dashboard`, not Prometheus): bloggersProfiled, profileDataPoints (+ by field), matchRequests, agentCost7dUsd
+- [x] 9.4 Follow-up migration: flip `campaign.type_id` to NOT NULL after backfill verified; retain `ajtbd` column one release then drop — migration `7_campaign_type_required` (typeId NOT NULL + FK RESTRICT); `ajtbd` retained for rollback (drop deferred to a later release); schema + demo seed updated; applied + client regenerated
+- [x] 9.5 CHANGELOG.md entry for operator-visible changes
 - [ ] 9.6 `pnpm typecheck && pnpm lint && pnpm test` green; **CODEX REVIEW** — final pass over the full change

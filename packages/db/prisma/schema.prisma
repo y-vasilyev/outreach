@@ -303,10 +303,10 @@ model Campaign {
   // explicitly if it is still null when an agent needs it.
   ajtbd               Json?
   // Campaign type from the registry (agency-sourcing-matching change).
-  // Nullable during the backfill window; flipped to required in a
-  // follow-up migration once every row carries a type + goal.
-  typeId              String?
-  type                CampaignType?    @relation(fields: [typeId], references: [id], onDelete: SetNull)
+  // Required as of migration 7 (backfill in migration 6 set every existing
+  // campaign to `custdev`). RESTRICT: a campaign type in use can't be deleted.
+  typeId              String
+  type                CampaignType     @relation(fields: [typeId], references: [id], onDelete: Restrict)
   // Structured goal validated against the type's `goalSchema`. For
   // `custdev` this mirrors the legacy `ajtbd` shape; for `agency_sourcing`
   // it carries the data-collection objective. The runtime fails explicitly

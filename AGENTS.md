@@ -578,3 +578,51 @@ SELECT conversations WHERE status=active
 - **MemoryAgent** — долговременная память по контакту между кампаниями.
 - **Inline-обучение** — оператор оценивает каждую подсказку (👍/👎 + комментарий) → данные накапливаются в `suggestion.feedback` и используются как few-shot в композерах.
 - **Email-композер** — отдельный агент с другим этикетом для email-канала отправки.
+
+---
+
+## Агентство и подбор (типы кампаний)
+
+Поведение пайплайнов теперь задаёт `campaign_type` (реестр, см. `DESIGN.md`):
+`agent_set` (роль → агент + оверрайды), `safety_profile`, `autonomy_policy`,
+`goal_schema`. Всё за фичефлагами (по умолчанию off) — при выключенных
+поведение CustDev байт-в-байт. `SafetyFilter` получает `forbidden_topics`/
+`allowed_topics` из `safety_profile` типа (custdev — запрет рекламной лексики
+через risk; agency — она разрешена, запрещены гарантии/давление/деньги).
+
+### Новые агенты
+
+- **CampaignTypeBuilder — `campaign_type_builder`.** Мета-агент: из описания
+  цели кампании на естественном языке драфтит `goal_schema`, `safety_profile`
+  и по агенту на каждую pipeline-роль (промпты, модель по tier из
+  capability-map, params, output-schema). Драфт прогоняется через `dryRun`
+  (токены/стоимость/латентность прикладываются) и НЕ публикуется до явного
+  Save (тогда создаются `agent_config` v1 + `agent_config_history`, аудит).
+- **AgencyOpeningComposer — `agency_opening_composer`.** Опенер от лица
+  агентства со ссылкой на реальную интеграцию в постах канала; детерминированный
+  no-fabrication guard (нет наблюдаемой интеграции → не auto-send; цитируемый
+  бренд обязан встречаться и в тексте).
+- **DataCollectionPlanner — `data_collection_planner`.** Ведёт сбор данных:
+  missing = target − collected, задаёт один недостающий вопрос за ход, не
+  переспрашивает собранное, авторитетный сигнал goal-satisfied.
+- **RateCardExtractor / AudienceStatsExtractor.** Парсят свободный текст
+  блогера в `profile_data_point` (`rate.*`, `reach.*`, `audience.*`) с
+  confidence и сырым `raw_snippet`; низкая уверенность не выкидывается.
+- **BloggerMatcher — `blogger_matcher`.** Опциональный LLM-реранк топ-N
+  кандидатов под бриф; по умолчанию off (детерминированный скоринг без LLM).
+
+### Интенты и режимы
+
+`IntentClassifier` получил `discusses_price` / `sends_quote` — для
+`agency_sourcing` они в `autonomy_policy.forceHandoffIntents` и форсят
+`operator_now` (человек подтверждает коммерческие условия). Дефолтный режим
+`agency_sourcing` — `assisted`. `agent-run` и `campaign-dispatcher` резолвят
+агента роли через `resolveAgentName(type.agentSet, role, fallback)` за
+`ENABLE_AGENCY_SOURCING`.
+
+### Пайплайн агентского inbound (поверх `on_inbound`)
+
+Для `agency_sourcing`-конверсаций (за флагом): опенер/reply резолвятся из
+`agent_set`; после inbound в очередь `profile-extract` уходит извлечение
+прайсов/охватов в `profile_data_point` + детерминированный roll-up в
+`blogger_profile`; входящие файлы оседают в S3 (`media_asset`).

@@ -14,6 +14,15 @@ export interface DashboardData {
   conversations: { active: number; assisted: number; manual: number; auto: number };
   campaigns: { running: number; paused: number };
   cost: { tokensToday: number; costTodayUsd: number; cost7dUsd: number };
+  // Agency-sourcing-matching (agency_sourcing / blogger_matching). All zero
+  // until those features are used.
+  agency: {
+    bloggersProfiled: number;
+    profileDataPoints: number;
+    profileDataPointsByField: Record<string, number>;
+    matchRequests: number;
+    agentCost7dUsd: number;
+  };
   replyRate7d: number;
   recentActivity: Array<{
     id: string;
@@ -44,6 +53,10 @@ export const dashboardService = {
       messagesReplied7d,
       recentChannels,
       recentMessages,
+      bloggersProfiled,
+      dataPointsByField,
+      matchRequests,
+      agencyAgentCost7d,
     ] = await Promise.all([
       prisma.channel.groupBy({ by: ['status'], _count: { _all: true } }),
       prisma.contact.count(),
@@ -90,6 +103,24 @@ export const dashboardService = {
             include: {
               contact: { select: { value: true } },
             },
+          },
+        },
+      }),
+      // Agency-sourcing-matching metrics (return 0 when the feature is unused).
+      prisma.bloggerProfile.count(),
+      prisma.profileDataPoint.groupBy({ by: ['field'], _count: { _all: true } }),
+      prisma.adBrief.count(),
+      prisma.agentRun.aggregate({
+        _sum: { costUsd: true },
+        where: {
+          createdAt: { gte: sevenDaysAgo },
+          agentName: {
+            in: [
+              'campaign_type_builder',
+              'rate_card_extractor',
+              'audience_stats_extractor',
+              'blogger_matcher',
+            ],
           },
         },
       }),
@@ -166,6 +197,15 @@ export const dashboardService = {
         tokensToday: tokensTodayTotal,
         costTodayUsd: costToday,
         cost7dUsd: cost7dUsd,
+      },
+      agency: {
+        bloggersProfiled,
+        profileDataPoints: dataPointsByField.reduce((s, r) => s + r._count._all, 0),
+        profileDataPointsByField: Object.fromEntries(
+          dataPointsByField.map((r) => [r.field, r._count._all]),
+        ),
+        matchRequests,
+        agentCost7dUsd: Number(agencyAgentCost7d._sum.costUsd ?? 0),
       },
       replyRate7d: replyRate,
       recentActivity: recent.slice(0, 10),

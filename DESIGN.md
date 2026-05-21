@@ -488,3 +488,78 @@ Prometheus + страница `/metrics`:
 - Multi-tenant (org_id + RLS).
 - Email/IG-DM/YT отправка — каналы для следующих итераций.
 - A/B-тесты опенеров (сейчас — через ручные оверрайды кампаний).
+
+---
+
+## Agency sourcing & matching (campaign types)
+
+Расширение под вторую модель работы — агентство по размещению рекламы — поверх
+CustDev. Реализовано как **реестр типов кампаний** (`campaign_type`), а не
+второй хардкод-режим. Всё новое — за фичефлагами (`ENABLE_CAMPAIGN_TYPES`,
+`ENABLE_AGENCY_SOURCING`, `ENABLE_OBJECT_STORAGE`, `ENABLE_BLOGGER_MATCHING`,
+по умолчанию off) — при выключенных флагах поведение CustDev байт-в-байт.
+
+### Новые сущности БД (миграции 6–7)
+
+```sql
+campaign_type (                       -- справочник типов кампаний
+  id, key UNIQUE, name, description,
+  goal_schema JSONB,                  -- JSON-schema для campaign.goal
+  agent_set JSONB,                    -- map: pipeline-role -> { agentName, overrides }
+  safety_profile JSONB,               -- forbidden_topics, allowed_topics, allow_links, max_length
+  autonomy_policy JSONB,              -- defaultMode, пороги, forceHandoffIntents
+  built_in BOOL, enabled BOOL, ...
+)
+campaign.type_id  FK campaign_type   -- NOT NULL с миграции 7 (backfill → custdev)
+campaign.goal     JSONB              -- валидируется против type.goal_schema (для custdev = AJTBD)
+
+blogger_profile (                    -- стандартизованный каталог блогеров
+  id, channel_id UNIQUE,
+  topics[], languages[], formats[],
+  audience JSONB, rate_cards JSONB, reach, avg_views, captured_at, ...
+)
+profile_data_point (                 -- провенанс: один факт + сырой фрагмент
+  id, profile_id FK, field, value JSONB, unit, confidence,
+  extracted_by, source_message_id, raw_snippet, captured_at
+)
+media_asset (                        -- файлы в S3 + снапшоты сырья
+  id, conversation_id, profile_id FK, kind, s3_key, mime, bytes, sha256, source_tg_msg_id
+)
+ad_brief (                           -- входящая заявка на рекламу
+  id, topic, audience_target, budget, formats[], geo[], deadline, notes
+)
+match_result (                       -- ранжированные кандидаты под бриф (аудит)
+  id, brief_id FK, profile_id FK, score, rationale, reranked_by_llm
+)
+```
+
+`custdev` AJTBD больше не обязателен на каждой кампании — это `goal_schema`
+типа `custdev`; `campaign.ajtbd` оставлен на один релиз для отката, потом
+дропается. `GoalFitEvaluator` оценивает `campaign.goal` относительно
+определения цели активного типа.
+
+### Object storage (`packages/storage`)
+
+`ObjectStore` — обёртка над S3-совместимым SDK (MinIO в dev, `S3_*` env),
+ленивая и за `ENABLE_OBJECT_STORAGE`. Ключи `bloggers/{profileId}/{assetId}`.
+Доступ из UI — только через presigned URL (API выдаёт короткоживущие GET/PUT),
+креды не логируются (`redact()`). Входящие файлы из TG: `tg-listen` качает
+байты через `tg-client.downloadInboundMedia` → `putObject` → `media_asset`
+(s3_key проставляется только при успешной загрузке, иначе honest-pending +
+API отдаёт 409 вместо мёртвой ссылки). Сырые ответы (текст + распарсенный
+JSON) снапшотятся в S3 детерминированным ключом. При выключенном/недоступном
+сторадже — лог-варнинг, диалог не падает.
+
+### Подбор (matching)
+
+`ad_brief` → детерминированный prefilter по `blogger_profile` (overlap по
+теме/гео/форматам + отсечение over-budget по релевантному прайсу) → взвешенный
+скоринг с rationale → `match_result`. Опциональный LLM-реранк (`BloggerMatcher`)
+ограничен топ-N (по умолчанию off, детерминированный путь без LLM). Всё за
+`ENABLE_BLOGGER_MATCHING`. API: `POST /ad-briefs`, `POST /ad-briefs/:id/match`.
+
+### Метрики
+
+`dashboardService.stats()` отдаёт блок `agency`: `bloggersProfiled`,
+`profileDataPoints` (+ разбивка по `field`), `matchRequests`, `agentCost7dUsd`
+(builder/extractor/matcher). Нули, пока фичи не используются.

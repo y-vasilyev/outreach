@@ -367,6 +367,9 @@ async function main() {
         goalText: DEMO_AJTBD.job,
         valueProp: DEMO_AJTBD.desired_outcome,
         ajtbd: DEMO_AJTBD,
+        // typeId is required as of migration 7; goal mirrors AJTBD for custdev.
+        typeId: 'custdev',
+        goal: DEMO_AJTBD,
         defaultMode: 'semi_auto',
         status: 'draft',
         createdById: admin.id,
