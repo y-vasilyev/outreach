@@ -32,17 +32,24 @@ export interface FeatureFlagView {
   readiness: FeatureFlagReadiness;
 }
 
-/** S3 prerequisites for `object_storage` — pure env check, never throws. */
+/**
+ * S3 prerequisites for `object_storage` — pure env check, never throws.
+ * Matches what `packages/storage` `loadStorageConfig()` actually requires:
+ * access key, secret, bucket. `S3_ENDPOINT` is OPTIONAL (defaults to the AWS
+ * regional endpoint), so it is NOT required here.
+ */
 function objectStorageReadiness(): FeatureFlagReadiness {
-  const ok = Boolean(env.S3_ENDPOINT && env.S3_ACCESS_KEY && env.S3_SECRET_KEY && env.S3_BUCKET);
+  const ok = Boolean(env.S3_ACCESS_KEY && env.S3_SECRET_KEY && env.S3_BUCKET);
   return ok
     ? { ready: true }
-    : { ready: false, hint: 'не заданы S3_* (endpoint, ключи, bucket) — медиа не сохранится' };
+    : { ready: false, hint: 'не заданы S3_ACCESS_KEY/S3_SECRET_KEY/S3_BUCKET — медиа не сохранится' };
 }
 
 /**
  * `agency_sourcing` needs at least one enabled LLM endpoint AND at least one
- * TG account to actually run outreach. Best-effort: on a query error report
+ * USABLE outreach TG account (status `active`, role `outreach`/`both`) — the
+ * runtime send paths filter on exactly that, so a banned/parser-only/cooldown
+ * account must not count as "ready". Best-effort: on a query error report
  * not-ready with a neutral hint rather than throwing.
  */
 async function agencySourcingReadiness(): Promise<FeatureFlagReadiness> {
@@ -50,13 +57,13 @@ async function agencySourcingReadiness(): Promise<FeatureFlagReadiness> {
     const prisma = getPrisma();
     const [endpoints, tgAccounts] = await Promise.all([
       prisma.endpoint.count({ where: { enabled: true } }),
-      prisma.tgAccount.count(),
+      prisma.tgAccount.count({ where: { status: 'active', role: { in: ['outreach', 'both'] } } }),
     ]);
     if (endpoints === 0 && tgAccounts === 0) {
-      return { ready: false, hint: 'нет активных endpoint и TG-аккаунтов' };
+      return { ready: false, hint: 'нет активного endpoint и активного outreach TG-аккаунта' };
     }
     if (endpoints === 0) return { ready: false, hint: 'нет активного endpoint' };
-    if (tgAccounts === 0) return { ready: false, hint: 'нет TG-аккаунтов' };
+    if (tgAccounts === 0) return { ready: false, hint: 'нет активного outreach TG-аккаунта' };
     return { ready: true };
   } catch {
     return { ready: false, hint: 'не удалось проверить готовность' };
@@ -99,12 +106,19 @@ export async function evaluateReadiness(key: FeatureFlagKey): Promise<FeatureFla
 export const featureFlagsService = {
   /** List every known flag with its resolved state, description, and readiness. */
   async list(): Promise<FeatureFlagView[]> {
-    const prisma = getPrisma();
-    const rows = await prisma.featureFlag.findMany({
-      select: { key: true, description: true },
-    });
-    const descByKey = new Map(rows.map((r) => [r.key, r.description]));
     const ff = getFeatureFlags();
+    // Descriptions are best-effort: a failed read must not 500 the list
+    // (it falls back to empty descriptions). Resolved state comes from the
+    // in-memory accessor, not this query.
+    let descByKey = new Map<string, string>();
+    try {
+      const rows = await getPrisma().featureFlag.findMany({
+        select: { key: true, description: true },
+      });
+      descByKey = new Map(rows.map((r) => [r.key, r.description]));
+    } catch {
+      descByKey = new Map();
+    }
 
     return Promise.all(
       FEATURE_FLAG_KEYS.map(async (key) => ({
@@ -117,16 +131,31 @@ export const featureFlagsService = {
   },
 
   /**
-   * Set a flag's enabled state and record who changed it. The caller is
-   * responsible for the audit_log entry + cache invalidation publish.
+   * Atomically set a flag's enabled state AND write the audit_log entry in one
+   * transaction — so a change can never land without an audit (or vice versa).
+   * Cross-process cache invalidation (publish) is the caller's responsibility,
+   * done AFTER this commits (a failed publish only delays other processes
+   * until their next reconnect-reload — it never un-does the audited change).
    */
   async setEnabled(key: FeatureFlagKey, enabled: boolean, updatedById: string | null) {
     const prisma = getPrisma();
-    return prisma.featureFlag.upsert({
-      where: { key },
-      update: { enabled, updatedById },
-      create: { key, enabled, updatedById, description: '' },
-    });
+    const [updated] = await prisma.$transaction([
+      prisma.featureFlag.upsert({
+        where: { key },
+        update: { enabled, updatedById },
+        create: { key, enabled, updatedById, description: '' },
+      }),
+      prisma.auditLog.create({
+        data: {
+          userId: updatedById,
+          action: 'feature_flag.update',
+          targetType: 'feature_flag',
+          targetId: key,
+          payload: { enabled },
+        },
+      }),
+    ]);
+    return updated;
   },
 };
 

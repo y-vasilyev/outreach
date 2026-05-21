@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { FEATURE_FLAG_KEYS, type FeatureFlagKey } from '@nosquare/shared';
 
 import { featureFlagsService } from '../services/feature-flags.js';
-import { auditService } from '../services/audit.js';
 import { publishFeatureFlagsChanged } from '../feature-flags.js';
 
 /**
@@ -40,17 +39,11 @@ export async function featureFlagsRoutes(app: FastifyInstance) {
       const { enabled } = ToggleBodyZ.parse(req.body);
       const userId = (req.user as { id: string }).id;
 
+      // Row update + audit_log are atomic (one transaction) inside setEnabled.
       const updated = await featureFlagsService.setEnabled(key, enabled, userId);
 
-      await auditService.log({
-        userId,
-        action: 'feature_flag.update',
-        targetType: 'feature_flag',
-        targetId: key,
-        payload: { enabled },
-      });
-
-      // Refresh this process's cache and notify api + workers.
+      // Refresh this process's cache and notify api + workers (best-effort —
+      // a failed publish only delays others until their reconnect-reload).
       await publishFeatureFlagsChanged();
 
       return {

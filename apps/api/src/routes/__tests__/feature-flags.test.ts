@@ -21,9 +21,12 @@ const prismaMock = vi.hoisted(() => ({
     findMany: vi.fn(),
     upsert: vi.fn(),
   },
+  auditLog: { create: vi.fn() },
   endpoint: { count: vi.fn() },
   tgAccount: { count: vi.fn() },
   bloggerProfile: { count: vi.fn() },
+  // setEnabled wraps the row upsert + audit_log insert in one transaction.
+  $transaction: vi.fn((ops: Array<Promise<unknown>>) => Promise.all(ops)),
 }));
 
 vi.mock('@nosquare/db', () => ({ getPrisma: () => prismaMock }));
@@ -40,12 +43,6 @@ const publishMock = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('../../feature-flags.js', () => ({
   getFeatureFlags: () => ({ get: (k: string) => flagState[k] ?? false }),
   publishFeatureFlagsChanged: publishMock,
-}));
-
-const auditLogMock = vi.hoisted(() => vi.fn(async () => ({})));
-
-vi.mock('../../services/audit.js', () => ({
-  auditService: { log: auditLogMock },
 }));
 
 import { registerAuth } from '../../auth/plugin.js';
@@ -82,6 +79,7 @@ beforeEach(async () => {
   prismaMock.endpoint.count.mockResolvedValue(0);
   prismaMock.tgAccount.count.mockResolvedValue(0);
   prismaMock.bloggerProfile.count.mockResolvedValue(0);
+  prismaMock.auditLog.create.mockResolvedValue({});
   app = await buildApp();
 });
 
@@ -132,6 +130,15 @@ describe('GET /feature-flags', () => {
     expect(res.statusCode).toBe(403);
   });
 
+  it('rejects a non-admin (viewer) with 403', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/feature-flags',
+      headers: { authorization: `Bearer ${tokenFor(app, 'viewer')}` },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
   it('rejects an unauthenticated request with 401', async () => {
     const res = await app.inject({ method: 'GET', url: '/feature-flags' });
     expect(res.statusCode).toBe(401);
@@ -164,14 +171,17 @@ describe('PATCH /feature-flags/:key', () => {
       }),
     );
 
-    expect(auditLogMock).toHaveBeenCalledTimes(1);
-    expect(auditLogMock).toHaveBeenCalledWith(
+    // Audit is written atomically with the row update (one $transaction).
+    expect(prismaMock.$transaction).toHaveBeenCalledTimes(1);
+    expect(prismaMock.auditLog.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        userId: 'u_admin',
-        action: 'feature_flag.update',
-        targetType: 'feature_flag',
-        targetId: 'agency_sourcing',
-        payload: { enabled: true },
+        data: expect.objectContaining({
+          userId: 'u_admin',
+          action: 'feature_flag.update',
+          targetType: 'feature_flag',
+          targetId: 'agency_sourcing',
+          payload: { enabled: true },
+        }),
       }),
     );
 
@@ -187,7 +197,7 @@ describe('PATCH /feature-flags/:key', () => {
     });
     expect(res.statusCode).toBe(403);
     expect(prismaMock.featureFlag.upsert).not.toHaveBeenCalled();
-    expect(auditLogMock).not.toHaveBeenCalled();
+    expect(prismaMock.auditLog.create).not.toHaveBeenCalled();
     expect(publishMock).not.toHaveBeenCalled();
   });
 
@@ -199,6 +209,16 @@ describe('PATCH /feature-flags/:key', () => {
       payload: { enabled: true },
     });
     expect(res.statusCode).toBe(403);
+    expect(prismaMock.featureFlag.upsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unauthenticated PATCH with 401', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/feature-flags/agency_sourcing',
+      payload: { enabled: true },
+    });
+    expect(res.statusCode).toBe(401);
     expect(prismaMock.featureFlag.upsert).not.toHaveBeenCalled();
   });
 
