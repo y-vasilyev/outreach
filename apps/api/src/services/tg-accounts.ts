@@ -11,6 +11,28 @@ function isRecordNotFound(err: unknown): boolean {
 
 let _tgClient: TgClient | undefined;
 
+function sameUtcDay(a: Date, b: Date): boolean {
+  return (
+    a.getUTCFullYear() === b.getUTCFullYear() &&
+    a.getUTCMonth() === b.getUTCMonth() &&
+    a.getUTCDate() === b.getUTCDate()
+  );
+}
+
+async function rolloverDailyCountersForList(): Promise<void> {
+  const prisma = getPrisma();
+  const now = new Date();
+  const rows = await prisma.tgAccount.findMany({ select: { id: true, dayRolledAt: true } });
+  const stale = rows
+    .filter((r) => !r.dayRolledAt || !sameUtcDay(r.dayRolledAt, now))
+    .map((r) => r.id);
+  if (stale.length === 0) return;
+  await prisma.tgAccount.updateMany({
+    where: { id: { in: stale } },
+    data: { sentTodayMsg: 0, sentTodayNew: 0, dayRolledAt: now },
+  });
+}
+
 export function getTgClient(): TgClient {
   if (!_tgClient) {
     if (!env.TG_API_ID || !env.TG_API_HASH) {
@@ -78,6 +100,7 @@ export function getTgClient(): TgClient {
 export const tgAccountsService = {
   async list() {
     const prisma = getPrisma();
+    await rolloverDailyCountersForList();
     return prisma.tgAccount.findMany({ orderBy: { createdAt: 'desc' } });
   },
 

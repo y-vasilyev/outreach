@@ -6,17 +6,17 @@ import { channelsService } from '../services/channels.js';
 export async function channelsRoutes(app: FastifyInstance) {
   app.addHook('onRequest', app.authenticate);
 
-  app.get('/channels', async (req) => {
+  app.get('/channels', { preHandler: [app.requireRole(['admin', 'operator', 'viewer'])] }, async (req) => {
     const q = ChannelFiltersZ.parse(req.query);
     return channelsService.list(q);
   });
 
-  app.get('/channels/:id', async (req) => {
+  app.get('/channels/:id', { preHandler: [app.requireRole(['admin', 'operator', 'viewer'])] }, async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
     return channelsService.get(params.id);
   });
 
-  app.post('/channels/import', async (req) => {
+  app.post('/channels/import', { preHandler: [app.requireRole(['admin', 'operator'])] }, async (req) => {
     const body = ImportChannelsInputZ.parse(req.body);
     return channelsService.import({
       platform: body.platform,
@@ -28,7 +28,7 @@ export async function channelsRoutes(app: FastifyInstance) {
     });
   });
 
-  app.post('/channels/:id/scrape', async (req) => {
+  app.post('/channels/:id/scrape', { preHandler: [app.requireRole(['admin', 'operator'])] }, async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
     return channelsService.rescrape(params.id);
   });

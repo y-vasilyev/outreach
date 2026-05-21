@@ -43,6 +43,12 @@ export interface AutoApproveContext {
   scheduledAt?: string;
   /** Optional random delay window for first-touch outreach. */
   jitterMaxMs?: number;
+  /**
+   * First-touch openers do not have an inbound exchange, so GoalFitEvaluator
+   * cannot run. They are still allowed in strict `auto` mode when the caller
+   * explicitly marks the phase and the SafetyFilter score clears T_SAFETY.
+   */
+  phase?: 'first_touch' | 'reply';
 }
 
 /**
@@ -122,15 +128,17 @@ export async function tryAutoApprove(ctx: AutoApproveContext): Promise<boolean> 
     }
     // No gate provided (opener) — semi_auto behaves like legacy auto.
   } else if (conv.mode === 'auto') {
-    if (!ctx.gate) {
+    if (!ctx.gate && ctx.phase !== 'first_touch') {
       logger.warn(
         { conversationId: ctx.conversationId, score: ctx.score },
         'tryAutoApprove called for auto-mode conversation without gate decision; refusing to auto-send',
       );
       return false;
     }
-    if (ctx.gate.action !== 'continue') return false;
-    if (ctx.gate.score < T_AUTO_GOALFIT) return false;
+    if (ctx.gate) {
+      if (ctx.gate.action !== 'continue') return false;
+      if (ctx.gate.score < T_AUTO_GOALFIT) return false;
+    }
   }
 
   // Mark the suggestion as approved (so the inbox doesn't show it as

@@ -4,6 +4,7 @@ import type { z } from 'zod';
 import type { ConversationFiltersZ } from '@nosquare/shared';
 import { getQueues } from '../queues.js';
 import { emitToRoom } from '../realtime/io.js';
+import { getAgentRunner } from './agents.js';
 
 type Filters = z.infer<typeof ConversationFiltersZ>;
 
@@ -11,6 +12,48 @@ function readOutreachStartAt(meta: unknown): string | undefined {
   if (!meta || typeof meta !== 'object') return undefined;
   const v = (meta as { outreachStartAt?: unknown }).outreachStartAt;
   return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+async function assertOutboundSafe(input: { conversationId: string; text: string }) {
+  const prisma = getPrisma();
+  const conv = await prisma.conversation.findUnique({
+    where: { id: input.conversationId },
+    include: {
+      contact: { include: { channel: true } },
+      campaign: true,
+    },
+  });
+  if (!conv) throw Errors.notFound('conversation', input.conversationId);
+
+  const safety = await getAgentRunner().run<{
+    allow: boolean;
+    reasons: string[];
+    risk_score: number;
+    rewrite_hint?: string;
+  }>(
+    'safety_filter',
+    {
+      draft: input.text,
+      channel_analysis: conv.contact.channel?.analysis ?? {},
+      contact: { id: conv.contact.id, value: conv.contact.value, role: conv.contact.roleGuess },
+      campaign: conv.campaign
+        ? { name: conv.campaign.name, goal_text: conv.campaign.goalText, value_prop: conv.campaign.valueProp }
+        : {},
+    },
+    {
+      conversationId: conv.id,
+      contactId: conv.contactId,
+      ...(conv.campaignId ? { campaignId: conv.campaignId } : {}),
+    },
+  );
+  if (!safety.allow) {
+    throw Errors.badRequest('SafetyFilter blocked outbound message', {
+      reasons: safety.reasons,
+      risk_score: safety.risk_score,
+      rewrite_hint: safety.rewrite_hint,
+    });
+  }
+  return conv;
 }
 
 export const conversationsService = {
@@ -130,11 +173,12 @@ export const conversationsService = {
     fromSuggestionId?: string;
     scheduledAt?: string;
     operatorId: string;
+    bypassSafety?: boolean;
   }) {
     const prisma = getPrisma();
-    const conv = await prisma.conversation.findUnique({
-      where: { id: input.conversationId },
-    });
+    const conv = input.bypassSafety
+      ? await prisma.conversation.findUnique({ where: { id: input.conversationId } })
+      : await assertOutboundSafe({ conversationId: input.conversationId, text: input.text });
     if (!conv) throw Errors.notFound('conversation', input.conversationId);
 
     const message = await prisma.message.create({
@@ -187,6 +231,7 @@ export const conversationsService = {
     });
     if (!s) throw Errors.notFound('suggestion', suggestionId);
     const text = overrideText ?? s.text;
+    await assertOutboundSafe({ conversationId: s.conversationId, text });
     if (overrideText && overrideText !== s.text) {
       await prisma.suggestion.update({
         where: { id: s.id },
@@ -199,6 +244,7 @@ export const conversationsService = {
       fromSuggestionId: s.id,
       scheduledAt: scheduledAt ?? readOutreachStartAt(s.conversation.meta),
       operatorId,
+      bypassSafety: true,
     });
   },
 

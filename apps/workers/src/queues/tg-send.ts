@@ -7,6 +7,7 @@ import { getPrisma } from '@nosquare/db';
 import { getTgClient } from '../services/tg-client.js';
 import { logger } from '../logger.js';
 import { publishRealtime } from '../services/realtime-emit.js';
+import { rolloverTgAccountDailyCounters } from '../services/tg-account-limits.js';
 
 function jitterMs() {
   return 30_000 + Math.floor(Math.random() * 150_000);
@@ -117,6 +118,7 @@ export function startTgSendWorker() {
       await new Promise((r) => setTimeout(r, Math.min(5000, jitterMs())));
 
       const handle = await tg.for(tgAccountId);
+      await rolloverTgAccountDailyCounters([tgAccountId]);
 
       // Resolve and persist the recipient's TG profile on the first send.
       // Two reasons this matters:

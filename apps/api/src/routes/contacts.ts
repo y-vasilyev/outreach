@@ -13,7 +13,7 @@ import { contactsService } from '../services/contacts.js';
 export async function contactsRoutes(app: FastifyInstance) {
   app.addHook('onRequest', app.authenticate);
 
-  app.get('/contacts', async (req) => {
+  app.get('/contacts', { preHandler: [app.requireRole(['admin', 'operator', 'viewer'])] }, async (req) => {
     const q = ContactFiltersZ.parse(req.query);
     return contactsService.list(q);
   });
@@ -23,7 +23,7 @@ export async function contactsRoutes(app: FastifyInstance) {
    * `extractedBy='manual'` (so the contact-extract worker won't clobber it
    * later) and gets a default confidence of 1.0.
    */
-  app.post('/contacts', async (req, reply) => {
+  app.post('/contacts', { preHandler: [app.requireRole(['admin', 'operator'])] }, async (req, reply) => {
     const input = ContactCreateInputZ.parse(req.body);
     const row = await contactsService.create(input);
     reply.code(201);
@@ -35,12 +35,12 @@ export async function contactsRoutes(app: FastifyInstance) {
    * or structured items. Tolerant: dedupes against existing rows on the same
    * channel, returns `{ accepted, skipped, created, errors }`.
    */
-  app.post('/contacts/bulk', async (req) => {
+  app.post('/contacts/bulk', { preHandler: [app.requireRole(['admin', 'operator'])] }, async (req) => {
     const input = ContactBulkCreateInputZ.parse(req.body);
     return contactsService.bulkCreate(input);
   });
 
-  app.patch('/contacts/:id', async (req) => {
+  app.patch('/contacts/:id', { preHandler: [app.requireRole(['admin', 'operator'])] }, async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
     const body = z
       .object({
@@ -58,7 +58,7 @@ export async function contactsRoutes(app: FastifyInstance) {
     return contactsService.update(params.id, body);
   });
 
-  app.get('/contacts/:id/draft', async (req) => {
+  app.get('/contacts/:id/draft', { preHandler: [app.requireRole(['admin', 'operator', 'viewer'])] }, async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
     return contactsService.draft(params.id);
   });
@@ -68,7 +68,7 @@ export async function contactsRoutes(app: FastifyInstance) {
    * upsert refreshes the contact's roleGuess / confidence / rationale; rows
    * marked `extractedBy: 'manual'` are skipped so operator overrides survive.
    */
-  app.post('/contacts/:id/re-extract', async (req) => {
+  app.post('/contacts/:id/re-extract', { preHandler: [app.requireRole(['admin', 'operator'])] }, async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
     return contactsService.reExtract(params.id);
   });
@@ -80,7 +80,7 @@ export async function contactsRoutes(app: FastifyInstance) {
    * inline. The opener generation is async; the response returns the
    * conversation id so the UI can deep-link to /inbox/:id.
    */
-  app.post('/contacts/:id/start-conversation', async (req) => {
+  app.post('/contacts/:id/start-conversation', { preHandler: [app.requireRole(['admin', 'operator'])] }, async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
     const body = z
       .object({
@@ -88,7 +88,7 @@ export async function contactsRoutes(app: FastifyInstance) {
         campaignId: z.string().optional(),
         goalText: z.string().max(2000).optional(),
         valueProp: z.string().max(2000).optional(),
-        mode: z.enum(['auto', 'assisted', 'manual']).optional(),
+        mode: z.enum(['auto', 'semi_auto', 'assisted', 'manual']).optional(),
         scheduledAt: z.string().datetime().optional(),
       })
       .parse(req.body);

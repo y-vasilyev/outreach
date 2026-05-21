@@ -6,9 +6,9 @@ import { integrationsService } from '../services/integrations.js';
 export async function integrationsRoutes(app: FastifyInstance) {
   app.addHook('onRequest', app.authenticate);
 
-  app.get('/integrations', async () => integrationsService.list());
+  app.get('/integrations', { preHandler: [app.requireRole(['admin'])] }, async () => integrationsService.list());
 
-  app.get('/integrations/:kind', async (req) => {
+  app.get('/integrations/:kind', { preHandler: [app.requireRole(['admin'])] }, async (req) => {
     const params = z.object({ kind: z.string() }).parse(req.params);
     const i = await integrationsService.get(params.kind);
     if (!i) throw Errors.notFound('integration', params.kind);
@@ -21,7 +21,7 @@ export async function integrationsRoutes(app: FastifyInstance) {
     };
   });
 
-  app.put('/integrations/:kind', async (req) => {
+  app.put('/integrations/:kind', { preHandler: [app.requireRole(['admin'])] }, async (req) => {
     const params = z.object({ kind: z.string() }).parse(req.params);
     const body = UpsertIntegrationInputZ.parse({ kind: params.kind, ...(req.body as object) });
     const i = await integrationsService.upsert(params.kind, {
@@ -38,7 +38,7 @@ export async function integrationsRoutes(app: FastifyInstance) {
     };
   });
 
-  app.post('/integrations/:kind/test', async (req) => {
+  app.post('/integrations/:kind/test', { preHandler: [app.requireRole(['admin'])] }, async (req) => {
     const params = z.object({ kind: z.string() }).parse(req.params);
     const started = Date.now();
     if (params.kind === 'scrapecreators') {

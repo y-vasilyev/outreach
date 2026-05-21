@@ -7,12 +7,12 @@ import { syncOneWithBudget } from '../services/conversation-sync.js';
 export async function conversationsRoutes(app: FastifyInstance) {
   app.addHook('onRequest', app.authenticate);
 
-  app.get('/conversations', async (req) => {
+  app.get('/conversations', { preHandler: [app.requireRole(['admin', 'operator', 'viewer'])] }, async (req) => {
     const q = ConversationFiltersZ.parse(req.query);
     return conversationsService.list(q);
   });
 
-  app.get('/conversations/:id', async (req) => {
+  app.get('/conversations/:id', { preHandler: [app.requireRole(['admin', 'operator', 'viewer'])] }, async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
     // Pull any messages the workers missed while offline before
     // responding. Hard 1500ms budget — if sync is slow we return the
@@ -24,29 +24,33 @@ export async function conversationsRoutes(app: FastifyInstance) {
     return conversationsService.get(params.id);
   });
 
-  app.get('/conversations/:id/messages', async (req) => {
+  app.get('/conversations/:id/messages', { preHandler: [app.requireRole(['admin', 'operator', 'viewer'])] }, async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
     return conversationsService.getMessages(params.id);
   });
 
-  app.get('/conversations/:id/suggestions', async (req) => {
+  app.get('/conversations/:id/suggestions', { preHandler: [app.requireRole(['admin', 'operator', 'viewer'])] }, async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
     return conversationsService.getSuggestions(params.id);
   });
 
-  app.post('/conversations/:id/messages', async (req) => {
+  app.post('/conversations/:id/messages', { preHandler: [app.requireRole(['admin', 'operator'])] }, async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
     const body = SendMessageInputZ.parse({ conversationId: params.id, ...(req.body as object) });
+    if (body.bypassSafety && req.user.role !== 'admin') {
+      throw app.httpErrors.forbidden('Only admin can bypass SafetyFilter');
+    }
     return conversationsService.sendOperatorMessage({
       conversationId: params.id,
       text: body.text,
       fromSuggestionId: body.fromSuggestionId,
       scheduledAt: body.scheduledAt,
+      bypassSafety: body.bypassSafety,
       operatorId: req.user.id,
     });
   });
 
-  app.patch('/conversations/:id', async (req) => {
+  app.patch('/conversations/:id', { preHandler: [app.requireRole(['admin', 'operator'])] }, async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
     const body = z
       .object({
@@ -68,7 +72,7 @@ export async function conversationsRoutes(app: FastifyInstance) {
     return conversationsService.get(params.id);
   });
 
-  app.post('/conversations/:id/suggestions/:sid/approve', async (req) => {
+  app.post('/conversations/:id/suggestions/:sid/approve', { preHandler: [app.requireRole(['admin', 'operator'])] }, async (req) => {
     const params = z.object({ id: z.string(), sid: z.string() }).parse(req.params);
     const body = z
       .object({
@@ -79,7 +83,7 @@ export async function conversationsRoutes(app: FastifyInstance) {
     return conversationsService.approveSuggestion(params.sid, req.user.id, body.text, body.scheduledAt);
   });
 
-  app.post('/conversations/:id/suggestions/:sid/reject', async (req) => {
+  app.post('/conversations/:id/suggestions/:sid/reject', { preHandler: [app.requireRole(['admin', 'operator'])] }, async (req) => {
     const params = z.object({ id: z.string(), sid: z.string() }).parse(req.params);
     return conversationsService.rejectSuggestion(params.sid);
   });
@@ -90,7 +94,7 @@ export async function conversationsRoutes(app: FastifyInstance) {
    * to, otherwise `outreach_first_message` (OpeningComposer). Old pending
    * suggestions are expired so the inbox shows the fresh batch only.
    */
-  app.post('/conversations/:id/regenerate-suggestions', async (req) => {
+  app.post('/conversations/:id/regenerate-suggestions', { preHandler: [app.requireRole(['admin', 'operator'])] }, async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
     return conversationsService.regenerateSuggestions(params.id);
   });
