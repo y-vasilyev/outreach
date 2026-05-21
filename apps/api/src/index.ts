@@ -19,6 +19,7 @@ import { campaignTypesRoutes } from './routes/campaign-types.js';
 import { campaignTypeBuilderRoutes } from './routes/campaign-type-builder.js';
 import { bloggerProfilesRoutes } from './routes/blogger-profiles.js';
 import { mediaAssetsRoutes } from './routes/media-assets.js';
+import { matchingRoutes } from './routes/matching.js';
 import { conversationsRoutes } from './routes/conversations.js';
 import { usersRoutes } from './routes/users.js';
 import { auditRoutes } from './routes/audit.js';
@@ -60,6 +61,11 @@ async function main() {
   // (agency-sourcing-matching rollout step 3).
   if (flags.ENABLE_OBJECT_STORAGE) {
     await app.register(mediaAssetsRoutes);
+  }
+  // Ad-brief intake + blogger matching stay dark until matching is enabled
+  // (agency-sourcing-matching rollout step 4).
+  if (flags.ENABLE_BLOGGER_MATCHING) {
+    await app.register(matchingRoutes);
   }
   await app.register(conversationsRoutes);
   await app.register(usersRoutes);

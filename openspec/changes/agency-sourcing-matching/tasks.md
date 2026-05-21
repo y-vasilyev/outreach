@@ -60,12 +60,12 @@
 
 ## 7. Blogger matching
 
-- [ ] 7.1 `ad_brief` intake route + zod validation; persist brief
-- [ ] 7.2 Deterministic SQL prefilter over `blogger_profile` (topic overlap, geo, format, budget vs rate card) → shortlist
-- [ ] 7.3 Deterministic scoring + rationale; persist `match_result` rows linked to brief
-- [ ] 7.4 `BloggerMatcher` agent: optional LLM re-rank bounded to top N (configurable); writes `agent_run`; works with re-rank flag off
-- [ ] 7.5 API: brief→match endpoint returning ranked candidates with rationale
-- [ ] 7.6 Tests: prefilter exclusion, budget-aware ranking, re-rank bounded to top N, deterministic path with LLM off
+- [x] 7.1 `ad_brief` intake route + zod validation; persist brief — `POST /ad-briefs` (CreateAdBriefInputZ) + `GET /ad-briefs/:id` in `apps/api/src/routes/matching.ts`; `matchingService.createBrief/getBrief` in `services/matching.ts`; admin/operator, audited (`ad_brief.create`)
+- [x] 7.2 Deterministic SQL prefilter over `blogger_profile` (topic overlap, geo, format, budget vs rate card) → shortlist — pure `prefilter`/`isShortlisted` in `packages/shared/src/matching.ts`; the service loads the catalog and refines in memory (topic/geo/format overlap across array+JSON columns can't be cleanly expressed in Prisma); excludes profiles with no topic/geo/format overlap and those whose cheapest *relevant* rate exceeds the budget
+- [x] 7.3 Deterministic scoring + rationale; persist `match_result` rows linked to brief — pure `scoreProfile`/`rankProfiles` (weighted topic/geo/format/budget sub-scores in [0,1] + human-readable rationale); service persists `match_result` rows (replace-prior-for-brief) with `rerankedByLlm`
+- [x] 7.4 `BloggerMatcher` agent: optional LLM re-rank bounded to top N (configurable); writes `agent_run`; works with re-rank flag off — `packages/agents/src/agents/BloggerMatcher.ts` (`blogger_matcher`); `enable_llm_rerank` default false → NO LLM call (deterministic order kept); registered + seeded (medium tier, structured output, v11). Constrains output to the input id set; re-attaches deterministic score/rationale for omitted ids
+- [x] 7.5 API: brief→match endpoint returning ranked candidates with rationale — `POST /ad-briefs/:id/match` + inline `POST /match` returning MatchResponse (candidates: profile+score+rationale+rerankedByLlm); `?rerank`/body flag controls the bounded LLM re-rank (default off); all matching routes flag-gated behind `ENABLE_BLOGGER_MATCHING`
+- [x] 7.6 Tests: prefilter exclusion, budget-aware ranking, re-rank bounded to top N, deterministic path with LLM off — `packages/agents/.../Matching.test.ts` (6, pure engine) + `BloggerMatcher.test.ts` (3, mocked LLM) + `apps/api/.../matching.test.ts` (5: deterministic no-LLM-call, N=10/50-candidate bound, persisted rerank flags, re-rank fallback, brief CRUD)
 - [ ] 7.7 **CODEX REVIEW** — milestone 3 (profile + S3 + matching)
 
 ## 8. Web UI

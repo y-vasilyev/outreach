@@ -26,6 +26,8 @@ export interface AgentSeed {
    *      agency_opening_composer + data_collection_planner agents.
    * v10 — agency-sourcing-matching M5: adds rate_card_extractor +
    *      audience_stats_extractor profile extractor agents.
+   * v11 — agency-sourcing-matching M7: adds blogger_matcher (optional LLM
+   *      re-rank of the top-N matched candidates).
    */
   version: number;
 }
@@ -494,6 +496,24 @@ reasons[] — короткие конкретные причины оценки 
     userPromptTemplate:
       'Канал: {{channel_title}} (язык: {{language}})\n\nОтветы блогера (свежий — последний):\n{{replies_text}}\n\nСтруктурированный снимок (если есть):\n{{structured_snapshot}}\n\nВерни JSON со всеми охватами/просмотрами/демографией/гео как data_points с verbatim rawSnippet.',
     params: { temperature: 0.1, max_tokens: 1000 },
+    version: 1,
+  },
+  {
+    // Blogger matcher (agency-sourcing-matching M7, task 7.4). Medium tier,
+    // structured JSON output. OPTIONAL: re-ranks the top-N deterministically
+    // scored candidates for a brief. `enable_llm_rerank` defaults false — the
+    // deterministic scoring path issues no LLM call. Bounded to top N (the
+    // service slices the shortlist before invoking).
+    name: 'blogger_matcher',
+    role: 'blogger-matching',
+    description:
+      'Опциональный LLM-реранкинг топ-N кандидатов под бриф клиента; по умолчанию выключен (детерминированный путь без LLM).',
+    model: 'google/gemini-3-flash-preview',
+    systemPrompt:
+      'Ты — медиабайер агентства. Тебе дают бриф клиента и КОРОТКИЙ список блогеров-кандидатов, уже отобранных и предварительно оценённых детерминированным алгоритмом (score 0..1). Переранжируй ИМЕННО этих кандидатов по нюансному соответствию брифу (тематика, аудитория, форматы, бюджет vs прайс). Работай ТОЛЬКО с переданными profile_id — не добавляй и не выдумывай новых. Можешь скорректировать score (0..1) и rationale, но не завышай при превышении бюджета. Верни ВСЕ переданные profile_id. Возвращай JSON: {ranked: [{profile_id, score, rationale}]} по убыванию score.',
+    userPromptTemplate:
+      'Бриф клиента: {{brief}}\n\nКандидаты (предварительный score от алгоритма):\n{{candidates}}\n\nВерни JSON: переранжируй кандидатов. Только эти profile_id.',
+    params: { temperature: 0.2, max_tokens: 800, enable_llm_rerank: false },
     version: 1,
   },
 ];
