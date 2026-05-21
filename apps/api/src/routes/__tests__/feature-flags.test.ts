@@ -103,7 +103,7 @@ describe('GET /feature-flags', () => {
       readiness: { ready: boolean; hint?: string };
     }>;
     expect(body.map((f) => f.key).sort()).toEqual(
-      ['agency_sourcing', 'blogger_matching', 'campaign_types', 'object_storage'],
+      ['agency_sourcing', 'blogger_matching', 'campaign_types', 'channel_discovery', 'object_storage'],
     );
     const ct = body.find((f) => f.key === 'campaign_types')!;
     expect(ct.enabled).toBe(true);

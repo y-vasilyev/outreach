@@ -13,6 +13,17 @@ export { TelegramAdapter } from './adapters/telegram.js';
 export { InstagramAdapter } from './adapters/instagram.js';
 export { YoutubeAdapter } from './adapters/youtube.js';
 export {
+  YandexSearchClient,
+  parseSearchXml,
+  type YandexSearchResult,
+  type YandexSearchClientOptions,
+  type YandexSearchOptions,
+} from './discovery/YandexSearchClient.js';
+export {
+  extractCandidates,
+  type DiscoveredCandidate,
+} from './discovery/extractCandidates.js';
+export {
   ScrapeCreatorsClient,
   type ScrapeCreatorsClientOptions,
   type InstagramProfile,

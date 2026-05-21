@@ -10,6 +10,7 @@ export * from './campaign-type.js';
 export * from './blogger-profile.js';
 export * from './media-asset.js';
 export * from './matching.js';
+export * from './discovery.js';
 export * from './conversation.js';
 export * from './message.js';
 export * from './suggestion.js';

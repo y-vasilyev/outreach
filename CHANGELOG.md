@@ -6,6 +6,14 @@ All operator-visible changes worth noting between releases.
 
 ### Added
 
+- **Channel discovery via web search** — find candidate blogger channels by
+  niche through the Yandex Search API and queue them straight into the existing
+  scrape → contact-extract intake (`POST /discovery/search`, admin/operator).
+  Results are normalized to platform handles (telegram/instagram/youtube),
+  de-duplicated, and only genuinely new channels are created + scraped. Behind
+  the `channel_discovery` runtime flag (default off); the Search key is stored
+  encrypted as a `yandex_search` integration.
+
 - **Runtime feature flags** — operational rollout/kill-switch flags
   (`campaign_types`, `agency_sourcing`, `object_storage`, `blogger_matching`)
   moved from compile-time constants into the DB, toggleable from a new

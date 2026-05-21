@@ -606,3 +606,31 @@ feature_flag ( key PK, enabled BOOL, description, updated_by_id, updated_at )
   `audit_log` atomically (one transaction), then publishes invalidation. The
   UI shows non-blocking readiness hints (e.g. `object_storage` needs `S3_*`).
   `GET /config` serves the public, secret-free flag snapshot the web gates UI on.
+
+---
+
+## Channel discovery (web search)
+
+Front of the sourcing funnel: discover candidate blogger channels by niche via
+the **Yandex Search API** and feed them into the existing intake
+(channel-discovery-search change). Behind the runtime flag `channel_discovery`
+(default off).
+
+- **`packages/platforms/discovery`**: `YandexSearchClient` (async `searchAsync`
+  submit → poll the operation, bounded → decode base64 result XML →
+  `{url,title,snippet}[]`; never logs the key) + `extractCandidates` (results →
+  platform handles via the existing `parseHandle`, dropping system/invite paths,
+  with in-batch dedup and an optional platform filter).
+- **`apps/api` discovery service + `POST /discovery/search`**: load+decrypt the
+  `yandex_search` integration → search → extract candidates (≤ `limit`) → upsert
+  NEW `channel(status='new', source='search:<query>')` + enqueue the existing
+  `channel-scrape`; known channels are not duplicated or re-enqueued. Route is
+  registered unconditionally and gated by `requireFeature('channel_discovery')`
+  + admin/operator role; the action is audited.
+- **Key**: stored encrypted as `integration(kind='yandex_search')` (separate
+  Search-API-scoped key — distinct role from the LLM key). Configurable from
+  env-seed / UI; never committed.
+- **Downstream unchanged**: discovered channels flow through scrape →
+  `ChannelAnalyzer`/`ContactExtractor` → operator review like any other channel.
+- **e2e**: an env-gated test closes the scenario against the real Search API +
+  DB (skips offline).

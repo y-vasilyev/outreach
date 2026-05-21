@@ -20,6 +20,7 @@ import { campaignTypeBuilderRoutes } from './routes/campaign-type-builder.js';
 import { bloggerProfilesRoutes } from './routes/blogger-profiles.js';
 import { mediaAssetsRoutes } from './routes/media-assets.js';
 import { matchingRoutes } from './routes/matching.js';
+import { discoveryRoutes } from './routes/discovery.js';
 import { conversationsRoutes } from './routes/conversations.js';
 import { usersRoutes } from './routes/users.js';
 import { auditRoutes } from './routes/audit.js';
@@ -57,6 +58,7 @@ async function main() {
   await app.register(bloggerProfilesRoutes);
   await app.register(mediaAssetsRoutes);
   await app.register(matchingRoutes);
+  await app.register(discoveryRoutes);
   await app.register(conversationsRoutes);
   await app.register(usersRoutes);
   await app.register(auditRoutes);

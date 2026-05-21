@@ -36,6 +36,7 @@ pnpm db:reset                   # drop + migrate + seed (только dev!)
 | Новый LLM-провайдер | `packages/llm/src/providers/<name>.ts` имплементит `LLMProvider` + `factory.ts` |
 | Новая платформа (TikTok, X) | `packages/platforms/src/<name>/Adapter.ts` имплементит `PlatformAdapter` + регистрация |
 | Новый ScrapeCreators-метод | `packages/platforms/src/scrapecreators/Client.ts` |
+| Дискавери каналов поиском | `packages/platforms/src/discovery/` (Yandex Search) + `apps/api/src/services/discovery.ts` + роут `POST /discovery/search` (за флагом `channel_discovery`) |
 | Новый TG-метод | `packages/tg-client/src/methods/` — типизированный DTO, не сырые `Api.*` |
 | Поменять схему БД | `packages/db/prisma/schema.prisma` → `pnpm db:migrate` |
 | Новая фоновая задача | `apps/workers/src/queues/` |

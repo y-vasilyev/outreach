@@ -96,6 +96,25 @@ async function main() {
     console.log('✓ integration: scrapecreators');
   }
 
+  // Yandex Search integration from env (channel-discovery-search). Encrypted;
+  // the discovery service decrypts it at use time. Search API key is separate
+  // from the LLM key (different Search-API role).
+  const yandexSearchKey = process.env.YANDEX_SEARCH_API_KEY;
+  const yandexSearchFolder = process.env.YANDEX_SEARCH_FOLDER_ID ?? process.env.YANDEX_DEFAULT_FOLDER_ID;
+  if (yandexSearchKey && yandexSearchFolder) {
+    await prisma.integration.upsert({
+      where: { kind: 'yandex_search' },
+      update: {},
+      create: {
+        kind: 'yandex_search',
+        configEncrypted: await encryptJson({ apiKey: yandexSearchKey, folderId: yandexSearchFolder }),
+        enabled: true,
+        status: 'configured',
+      },
+    });
+    console.log('✓ integration: yandex_search');
+  }
+
   // Resolve default endpoint ids if any. Agent seeds now use OpenRouter model ids,
   // so prefer an enabled OpenRouter endpoint when it is configured.
   const openrouterEndpoint = await prisma.endpoint.findFirst({
@@ -348,6 +367,7 @@ async function main() {
     agency_sourcing: 'Агентский режим: сбор прайсов/охватов у блогеров',
     object_storage: 'Хранение медиа/сырья в S3 (нужен S3_*)',
     blogger_matching: 'Подбор блогеров под бриф',
+    channel_discovery: 'Дискавери каналов по нише через Yandex Search',
   };
   for (const key of FEATURE_FLAG_KEYS) {
     const description = FLAG_DESCRIPTIONS[key] ?? '';
