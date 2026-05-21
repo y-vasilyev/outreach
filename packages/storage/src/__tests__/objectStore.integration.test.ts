@@ -1,9 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ObjectStore } from '../ObjectStore.js';
 import { getObjectStore, resetObjectStore } from '../index.js';
-import { flags as readonlyFlags } from '@nosquare/shared';
-
-const flags = readonlyFlags as unknown as { ENABLE_OBJECT_STORAGE: boolean };
 
 const MINIO = {
   endpoint: 'http://localhost:9000',
@@ -77,25 +74,15 @@ describe('ObjectStore against MinIO (integration)', () => {
   });
 });
 
-describe('disabled-storage path degrades safely', () => {
+describe('storage degrades safely when unconfigured', () => {
+  // Storage is now flag-agnostic (runtime-feature-flags M2): the
+  // `object_storage` feature gate lives at the call sites, not in the storage
+  // package. getObjectStore() returns null only when S3_* config is absent.
   afterAll(() => {
     resetObjectStore();
   });
 
-  it('getObjectStore() returns null (no throw) when flag is off', () => {
-    const prev = flags.ENABLE_OBJECT_STORAGE;
-    flags.ENABLE_OBJECT_STORAGE = false;
-    resetObjectStore();
-    try {
-      expect(getObjectStore()).toBeNull();
-    } finally {
-      flags.ENABLE_OBJECT_STORAGE = prev;
-      resetObjectStore();
-    }
-  });
-
-  it('getObjectStore() returns null (no throw) when config is absent even with flag on', () => {
-    const prevFlag = flags.ENABLE_OBJECT_STORAGE;
+  it('getObjectStore() returns null (no throw) when config is absent', () => {
     const prev = {
       key: process.env.S3_ACCESS_KEY,
       secret: process.env.S3_SECRET_KEY,
@@ -104,7 +91,6 @@ describe('disabled-storage path degrades safely', () => {
     delete process.env.S3_ACCESS_KEY;
     delete process.env.S3_SECRET_KEY;
     delete process.env.S3_BUCKET;
-    flags.ENABLE_OBJECT_STORAGE = true;
     resetObjectStore();
     try {
       expect(getObjectStore()).toBeNull();
@@ -112,7 +98,6 @@ describe('disabled-storage path degrades safely', () => {
       if (prev.key !== undefined) process.env.S3_ACCESS_KEY = prev.key;
       if (prev.secret !== undefined) process.env.S3_SECRET_KEY = prev.secret;
       if (prev.bucket !== undefined) process.env.S3_BUCKET = prev.bucket;
-      flags.ENABLE_OBJECT_STORAGE = prevFlag;
       resetObjectStore();
     }
   });

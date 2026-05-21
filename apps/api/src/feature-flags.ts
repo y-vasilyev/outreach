@@ -25,14 +25,28 @@ export function getFeatureFlags(): FeatureFlags {
       },
       {
         subscribe: async (onChange) => {
-          _sub = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null });
+          // enableOfflineQueue:false → fail fast instead of queueing when
+          // Redis is down. We do NOT await a subscribe here: boot must never
+          // hang on Redis (fail-safe). Subscription + reload happen on every
+          // (re)connect via 'ready', which also closes the reconnect window.
+          _sub = new IORedis(env.REDIS_URL, {
+            maxRetriesPerRequest: null,
+            enableOfflineQueue: false,
+          });
+          _sub.on('error', (e) =>
+            logger.warn({ err: (e as Error).message }, 'feature flags: redis subscriber error'),
+          );
           _sub.on('message', (channel) => {
             if (channel === FEATURE_FLAGS_CHANNEL) void onChange();
           });
           _sub.on('ready', () => {
+            _sub
+              ?.subscribe(FEATURE_FLAGS_CHANNEL)
+              .catch((e) =>
+                logger.warn({ err: (e as Error).message }, 'feature flags: subscribe failed'),
+              );
             void onChange();
           });
-          await _sub.subscribe(FEATURE_FLAGS_CHANNEL);
         },
       },
       { warn: (meta, msg) => logger.warn(meta, msg) },
@@ -51,8 +65,15 @@ export async function initFeatureFlags(): Promise<void> {
  */
 export async function publishFeatureFlagsChanged(): Promise<void> {
   await getFeatureFlags().refresh();
-  if (!_pub) _pub = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null });
-  await _pub.publish(FEATURE_FLAGS_CHANNEL, '1');
+  // Local cache is already refreshed above, so a failed publish only delays
+  // OTHER processes' updates (until their next reconnect-reload) — never the
+  // toggle itself. Fail fast rather than queue if Redis is down.
+  if (!_pub) _pub = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null, enableOfflineQueue: false });
+  try {
+    await _pub.publish(FEATURE_FLAGS_CHANNEL, '1');
+  } catch (e) {
+    logger.warn({ err: (e as Error).message }, 'feature flags: publish failed (other processes refresh on reconnect)');
+  }
 }
 
 /** Convenience for route preHandlers. */

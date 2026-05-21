@@ -23,16 +23,32 @@ export function getFeatureFlags(): FeatureFlags {
       },
       {
         subscribe: async (onChange) => {
-          _sub = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null });
+          // enableOfflineQueue:false → commands fail fast instead of queueing
+          // when Redis is down. We do NOT await a subscribe here: boot must
+          // never hang on Redis (fail-safe). Subscription + reload happen on
+          // every (re)connect via the 'ready' handler, which also closes the
+          // reconnect missed-message window.
+          _sub = new IORedis(env.REDIS_URL, {
+            maxRetriesPerRequest: null,
+            enableOfflineQueue: false,
+          });
+          _sub.on('error', (e) =>
+            logger.warn({ err: (e as Error).message }, 'feature flags: redis subscriber error'),
+          );
           _sub.on('message', (channel) => {
             if (channel === FEATURE_FLAGS_CHANNEL) void onChange();
           });
-          // Reload on every (re)connect so a worker can't stay stale after a
-          // Redis blip (satisfies the subscribe/reconnect-reload contract).
           _sub.on('ready', () => {
+            _sub
+              ?.subscribe(FEATURE_FLAGS_CHANNEL)
+              .catch((e) =>
+                logger.warn(
+                  { err: (e as Error).message },
+                  'feature flags: subscribe failed',
+                ),
+              );
             void onChange();
           });
-          await _sub.subscribe(FEATURE_FLAGS_CHANNEL);
         },
       },
       { warn: (meta, msg) => logger.warn(meta, msg) },

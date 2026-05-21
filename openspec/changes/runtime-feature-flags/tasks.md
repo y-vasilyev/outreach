@@ -20,7 +20,7 @@
 - [x] 2.4 Replaced API flag reads: `campaigns` service (reject non-custdev typeId) → accessor
 - [x] 2.5 `/config` DB-backed (serves `getFeatureFlags().snapshot()`, resolved through env force-override)
 - [x] 2.6 Regression tests: `require-feature.test.ts` (404 off / passthrough after enable, no restart); worker hot-path tests (agencyRouting, mediaStore) re-driven via the mocked accessor; CustDev path unchanged with flags off
-- [ ] 2.7 **CODEX REVIEW** — milestone 2 (API/worker cutover + route gating)
+- [x] 2.7 **CODEX REVIEW** — milestone 2 (API/worker cutover + route gating). No blockers. Fixed: (SF1) Redis subscriber no longer `await`s subscribe at boot (could hang if Redis down → process never starts); now subscribes + reloads on the `'ready'` event with `enableOfflineQueue:false` + an error handler, so boot is fail-safe and reconnect re-subscribes; publish hardened to fail fast + caught. (SF2) storage integration test no longer asserts the removed flag-off path (storage is flag-agnostic; gate lives at call sites). Confirmed clean: route gating before auth, callNotFound short-circuit, call-site object_storage guards, no compile-time flag leakage.
 
 ## 3. Admin API + UI
 
