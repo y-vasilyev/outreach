@@ -70,10 +70,10 @@
 
 ## 8. Web UI
 
-- [ ] 8.1 Campaign-type builder UI: goal description input → draft preview with per-agent test results, edit, save
-- [ ] 8.2 Campaign settings: select campaign type; type-specific goal editor (AJTBD editor reused for `custdev`, agency goal editor for `agency_sourcing`)
-- [ ] 8.3 Blogger catalog list + profile view (standardized fields, data points with provenance, media kit downloads via presigned URLs)
-- [ ] 8.4 Brief → match screen: submit brief, show ranked candidates with rationale
+- [x] 8.1 Campaign-type builder UI: goal description input → draft preview with per-agent test results, edit, save — `apps/web/src/features/campaign-types/CampaignTypeBuilderPage.vue` (goal + examples → POST /campaign-type-builder/draft; renders goalSchema/safetyProfile JSON, per-role agent cards with editable system/user prompts + dry-run output/tokens/cost/latency, per-tier "нет endpoint" warnings; light-edits key/name/description; Save → POST /campaign-type-builder/save). Reached via "Конструктор типов" button on CampaignsPage + route `/campaign-types/new`.
+- [x] 8.2 Campaign settings: select campaign type; type-specific goal editor (AJTBD editor reused for `custdev`, agency goal editor for `agency_sourcing`) — `CampaignForm.vue` fetches GET /campaign-types, adds a type selector, renders the existing AJTBD editor for `custdev`, `AgencyGoalEditor.vue` (target_data_points + client_brief) for `agency_sourcing`, and a generic JSON goal editor for other types; sends `typeId` + `goal` on create/update. Flag-off (404) degrades to the legacy custdev-only form.
+- [x] 8.3 Blogger catalog list + profile view (standardized fields, data points with provenance, media kit downloads via presigned URLs) — `apps/web/src/features/agency/BloggerCatalogPage.vue` (GET /blogger-profiles list) + `BloggerProfilePage.vue` (GET /blogger-profiles/:id: standardized fields, rate cards, audience, data points with field/value/confidence/rawSnippet/capturedAt) + `MediaKitDownload.vue` (GET /media-assets/:id/download-url → opens presigned URL; handles 409 pending + 404 gracefully).
+- [x] 8.4 Brief → match screen: submit brief, show ranked candidates with rationale — `apps/web/src/features/agency/MatchPage.vue` (form: topic/audienceTarget/budget/formats/geo/deadline/notes + rerank toggle default off → POST /ad-briefs then POST /ad-briefs/:id/match; ranked candidates show profile + score + rationale + LLM re-rank badge).
 
 ## 9. Docs, telemetry & rollout
 

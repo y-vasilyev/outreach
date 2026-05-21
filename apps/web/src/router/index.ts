@@ -55,6 +55,30 @@ const routes: RouteRecordRaw[] = [
         meta: { crumbs: ['Кампании'] },
       },
       {
+        path: 'campaign-types/new',
+        name: 'campaign-type-builder',
+        component: () => import('../features/campaign-types/CampaignTypeBuilderPage.vue'),
+        meta: { crumbs: ['Кампании', 'Конструктор типов'] },
+      },
+      {
+        path: 'bloggers',
+        name: 'bloggers',
+        component: () => import('../features/agency/BloggerCatalogPage.vue'),
+        meta: { crumbs: ['Каталог блогеров'] },
+      },
+      {
+        path: 'bloggers/:id',
+        name: 'blogger-profile',
+        component: () => import('../features/agency/BloggerProfilePage.vue'),
+        meta: { crumbs: ['Каталог блогеров'] },
+      },
+      {
+        path: 'match',
+        name: 'match',
+        component: () => import('../features/agency/MatchPage.vue'),
+        meta: { crumbs: ['Подбор блогеров'] },
+      },
+      {
         path: 'agents',
         name: 'agents',
         component: () => import('../features/agents/AgentsPage.vue'),

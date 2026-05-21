@@ -19,6 +19,11 @@ export interface Campaign {
   goalText: string;
   valueProp: string;
   ajtbd?: CampaignAjtbd | null;
+  // Campaign-type registry (agency-sourcing-matching). Nullable during the
+  // backfill window; `goal` is validated server-side against the type's
+  // goalSchema.
+  typeId?: string | null;
+  goal?: Record<string, unknown> | null;
   status: 'draft' | 'running' | 'paused' | 'finished';
   defaultMode: 'auto' | 'semi_auto' | 'assisted' | 'manual';
   targetFilter?: Record<string, unknown>;

@@ -42,7 +42,9 @@ function openNew(): void { editing.value = null; formOpen.value = true; }
 <template>
   <PageHead title="Кампании" :sub="`${list.length} кампаний · ${list.filter((c) => c.status === 'running').length} активных`">
     <template #actions>
-      <button class="btn"><Icon name="copy" :size="12" /><span>Дублировать</span></button>
+      <button class="btn" @click="router.push('/campaign-types/new')">
+        <Icon name="sparkle" :size="12" /><span>Конструктор типов</span>
+      </button>
       <button class="btn primary" @click="openNew">
         <Icon name="plus" :size="12" /><span>Новая кампания</span>
       </button>

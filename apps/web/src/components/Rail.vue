@@ -29,6 +29,8 @@ const groups = computed<{ group: string; items: NavItem[] }[]>(() => [
       { to: '/campaigns', label: 'Кампании', icon: 'zap', badge: props.counts?.campaigns ?? null },
       { to: '/channels', label: 'Каналы', icon: 'layers', badge: props.counts?.channels ?? null },
       { to: '/contacts', label: 'Контакты', icon: 'users_round', badge: props.counts?.contacts ?? null },
+      { to: '/bloggers', label: 'Каталог', icon: 'globe', badge: null },
+      { to: '/match', label: 'Подбор', icon: 'search', badge: null },
       { to: '/manual', label: 'Manual', icon: 'mail', badge: props.counts?.manual ?? null },
     ],
   },

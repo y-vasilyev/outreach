@@ -9,9 +9,12 @@ import SelectInput from '../../components/SelectInput.vue';
 import MultiToggle from '../../components/MultiToggle.vue';
 import TagInput from '../../components/TagInput.vue';
 import Icon from '../../components/Icon.vue';
+import AgencyGoalEditor from './AgencyGoalEditor.vue';
 import { api } from '../../lib/api';
+import { isFeatureOff } from '../../lib/featureGate';
 import { toast } from '../../lib/toast';
 import type { Campaign, CampaignAjtbd } from './types';
+import type { CampaignType } from '../campaign-types/types';
 import type { TgAccount } from '../tg-accounts/types';
 
 const props = defineProps<{ open: boolean; campaign: Campaign | null }>();
@@ -22,6 +25,38 @@ const name = ref('');
 const goal = ref('');
 const valueProp = ref('');
 const mode = ref<'auto' | 'semi_auto' | 'assisted' | 'manual'>('assisted');
+
+// ─── Campaign type (agency-sourcing-matching) ───
+// Flag-gated server-side: GET /campaign-types is 404 when ENABLE_CAMPAIGN_TYPES
+// is off. In that case we degrade to the legacy custdev-only form (no selector,
+// AJTBD editor only) instead of crashing.
+const typeId = ref<string>('');
+
+const { data: campaignTypesRaw, error: typesError } = useQuery({
+  queryKey: ['campaign-types'],
+  queryFn: () => api.get<CampaignType[]>('/campaign-types'),
+  enabled: computed(() => props.open),
+  retry: false,
+  staleTime: 60_000,
+});
+
+const typesAvailable = computed(() => !isFeatureOff(typesError.value));
+const campaignTypes = computed<CampaignType[]>(() => campaignTypesRaw.value ?? []);
+const typeOptions = computed(() =>
+  campaignTypes.value.map((t) => ({ value: t.id, label: t.name })),
+);
+const selectedType = computed<CampaignType | null>(
+  () => campaignTypes.value.find((t) => t.id === typeId.value) ?? null,
+);
+const selectedTypeKey = computed(() => selectedType.value?.key ?? 'custdev');
+
+// ─── Agency goal fields (agency_sourcing type) ───
+const agencyTargetDataPoints = ref<string[]>([]);
+const agencyClientBrief = ref('');
+
+// ─── Generic goal fallback (unknown types) — raw JSON ───
+const goalJson = ref('{}');
+const goalJsonError = ref<string | null>(null);
 
 // AJTBD framing — propagated into ReplyComposer / HandoffDecider /
 // SafetyFilter / GoalFitEvaluator on every inbound. Operators see /
@@ -122,6 +157,17 @@ watch(
       goal.value = c.goalText;
       valueProp.value = c.valueProp;
       mode.value = c.defaultMode;
+      typeId.value = c.typeId ?? '';
+
+      const cg = (c.goal ?? {}) as {
+        target_data_points?: unknown;
+        client_brief?: unknown;
+      };
+      agencyTargetDataPoints.value = Array.isArray(cg.target_data_points)
+        ? (cg.target_data_points as string[])
+        : [];
+      agencyClientBrief.value = typeof cg.client_brief === 'string' ? cg.client_brief : '';
+      goalJson.value = JSON.stringify(c.goal ?? {}, null, 2);
 
       const a = c.ajtbd;
       ajtbdJob.value = a?.job ?? c.goalText;
@@ -163,6 +209,10 @@ watch(
       goal.value = '';
       valueProp.value = '';
       mode.value = 'assisted';
+      typeId.value = '';
+      agencyTargetDataPoints.value = [];
+      agencyClientBrief.value = '';
+      goalJson.value = '{}';
       ajtbdJob.value = '';
       ajtbdWhen.value = '';
       ajtbdDesiredOutcome.value = '';
@@ -191,7 +241,54 @@ watch(
   { immediate: true },
 );
 
+// Default the type selector to `custdev` for new campaigns once types load,
+// so the form keeps a sensible default when ENABLE_CAMPAIGN_TYPES is on.
+watch(
+  [campaignTypes, () => props.open, () => props.campaign],
+  ([types, open, c]) => {
+    if (!open || c || typeId.value) return;
+    const custdev = types.find((t) => t.key === 'custdev');
+    if (custdev) typeId.value = custdev.id;
+  },
+  { immediate: true },
+);
+
 const canSubmit = computed(() => !!name.value && !!goal.value && !!valueProp.value);
+
+// Build the type-specific `goal` object from the active editor.
+function buildGoal(): Record<string, unknown> | undefined {
+  if (!typesAvailable.value) return undefined; // legacy: server scaffolds custdev goal
+  const key = selectedTypeKey.value;
+  if (key === 'agency_sourcing') {
+    return {
+      target_data_points: agencyTargetDataPoints.value,
+      ...(agencyClientBrief.value ? { client_brief: agencyClientBrief.value } : {}),
+    };
+  }
+  if (key === 'custdev') {
+    // Custdev goal mirrors the AJTBD framing; server also scaffolds it.
+    return {
+      job: ajtbdJob.value || goal.value,
+      when: ajtbdWhen.value,
+      forces: {
+        push: ajtbdPush.value,
+        pull: ajtbdPull.value,
+        anxieties: ajtbdAnxieties.value,
+        habits: ajtbdHabits.value,
+      },
+      desired_outcome: ajtbdDesiredOutcome.value || valueProp.value,
+      non_goals: ajtbdNonGoals.value,
+    };
+  }
+  // Unknown type: operator-authored JSON.
+  try {
+    goalJsonError.value = null;
+    return JSON.parse(goalJson.value || '{}');
+  } catch (e) {
+    goalJsonError.value = (e as Error).message;
+    throw e;
+  }
+}
 
 const mut = useMutation({
   mutationFn: () => {
@@ -232,7 +329,9 @@ const mut = useMutation({
       non_goals: ajtbdNonGoals.value,
     };
 
-    const body = {
+    const goalObj = buildGoal();
+
+    const body: Record<string, unknown> = {
       name: name.value,
       goalText: goal.value,
       valueProp: valueProp.value,
@@ -243,6 +342,11 @@ const mut = useMutation({
       schedule,
       outreachAccountPool: outreachAccountPool.value,
     };
+    // Only send typeId/goal when the registry is enabled; otherwise the legacy
+    // server path scaffolds the custdev goal from ajtbd as before.
+    if (typesAvailable.value && typeId.value) body.typeId = typeId.value;
+    if (goalObj !== undefined) body.goal = goalObj;
+
     if (props.campaign) return api.patch<Campaign>(`/campaigns/${props.campaign.id}`, body);
     return api.post<Campaign>('/campaigns', body);
   },
@@ -275,6 +379,13 @@ function togglePoolAccount(id: string): void {
       <div class="card-body">
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
           <Field label="Название"><TextInput v-model="name" placeholder="CustDev — B2B SaaS Q2" /></Field>
+          <Field
+            v-if="typesAvailable && typeOptions.length"
+            label="Тип кампании"
+            help="Определяет агентов, профиль безопасности и набор полей цели."
+          >
+            <SelectInput v-model="typeId" :options="typeOptions" placeholder="— выберите тип —" />
+          </Field>
           <Field label="Режим по умолчанию">
             <SelectInput
               v-model="mode as string"
@@ -296,8 +407,8 @@ function togglePoolAccount(id: string): void {
       </div>
     </div>
 
-    <!-- ─── AJTBD framing ─── -->
-    <div class="card" style="margin-top: 12px;">
+    <!-- ─── AJTBD framing (custdev / legacy) ─── -->
+    <div v-if="!typesAvailable || selectedTypeKey === 'custdev'" class="card" style="margin-top: 12px;">
       <div class="card-head">
         <Icon name="sparkle" :size="12" />
         <span>AJTBD — что делает кампанию своей</span>
@@ -330,6 +441,39 @@ function togglePoolAccount(id: string): void {
             <TagInput v-model="ajtbdNonGoals" placeholder="Anti-цель и Enter" />
           </Field>
         </div>
+      </div>
+    </div>
+
+    <!-- ─── Agency goal (agency_sourcing) ─── -->
+    <div v-if="typesAvailable && selectedTypeKey === 'agency_sourcing'" class="card" style="margin-top: 12px;">
+      <div class="card-head">
+        <Icon name="flag" :size="12" />
+        <span>Цель агентского сбора</span>
+        <span class="muted-2" style="margin-left: 6px;">какие данные собрать у блогеров</span>
+      </div>
+      <div class="card-body">
+        <AgencyGoalEditor
+          v-model:target-data-points="agencyTargetDataPoints"
+          v-model:client-brief="agencyClientBrief"
+        />
+      </div>
+    </div>
+
+    <!-- ─── Generic goal editor (other types) ─── -->
+    <div
+      v-else-if="typesAvailable && selectedTypeKey !== 'custdev'"
+      class="card"
+      style="margin-top: 12px;"
+    >
+      <div class="card-head"><Icon name="list" :size="12" /><span>Цель (JSON по goal-схеме типа)</span></div>
+      <div class="card-body">
+        <Field
+          label="goal"
+          :error="goalJsonError"
+          help="Поля валидируются на сервере против goalSchema выбранного типа."
+        >
+          <TextareaInput v-model="goalJson" :rows="6" mono :error="!!goalJsonError" />
+        </Field>
       </div>
     </div>
 
