@@ -169,6 +169,7 @@ function resolveCampaignAjtbd(campaign: {
 interface SafetyExtras {
   forbidden_topics: string[];
   allowed_topics: string[];
+  hard_block_patterns: Array<{ id: string; pattern: string; reason: string; flags?: string }>;
   overrides: { params: { max_length: number; allow_links: boolean } };
 }
 
@@ -177,9 +178,19 @@ function safetyExtrasForCampaign(
 ): SafetyExtras | null {
   if (!getFeatureFlags().get('campaign_types')) return null;
   const ctx: ResolvedSafetyContext = resolveSafetyContext(campaign?.type?.safetyProfile ?? null);
+  // Re-serialize compiled regexes back to source+flags for SafetyFilter's
+  // input schema. The resolver already validated/dropped malformed
+  // sources, so this round-trip is safe.
+  const hardBlocks = ctx.hard_block_patterns.map((p) => ({
+    id: p.id,
+    pattern: p.regex.source,
+    reason: p.reason,
+    ...(p.regex.flags ? { flags: p.regex.flags } : {}),
+  }));
   return {
     forbidden_topics: ctx.forbidden_topics,
     allowed_topics: ctx.allowed_topics,
+    hard_block_patterns: hardBlocks,
     overrides: { params: ctx.params },
   };
 }
@@ -558,6 +569,7 @@ export async function handleOnInbound(data: { conversationId?: string }): Promis
                 ...(safetyExtras
                   ? {
                       forbidden_topics: safetyExtras.forbidden_topics,
+                      hard_block_patterns: safetyExtras.hard_block_patterns,
                       allowed_topics: safetyExtras.allowed_topics,
                     }
                   : {}),
@@ -821,6 +833,7 @@ export async function handleOutreachFirstMessage(data: { conversationId?: string
                 ...(safetyExtras
                   ? {
                       forbidden_topics: safetyExtras.forbidden_topics,
+                      hard_block_patterns: safetyExtras.hard_block_patterns,
                       allowed_topics: safetyExtras.allowed_topics,
                     }
                   : {}),
@@ -1025,6 +1038,7 @@ export async function handleFollowupCheck(data: { conversationId?: string }): Pr
         ...(safetyExtras
           ? {
               forbidden_topics: safetyExtras.forbidden_topics,
+              hard_block_patterns: safetyExtras.hard_block_patterns,
               allowed_topics: safetyExtras.allowed_topics,
             }
           : {}),

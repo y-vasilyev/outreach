@@ -1,7 +1,9 @@
 import {
-  SafetyProfileZ,
+  BaseSafetyProfileZ,
   AutonomyPolicyZ,
   AgentSetZ,
+  HardBlockPatternZ,
+  type HardBlockPattern,
 } from './schemas/campaign-type.js';
 
 /**
@@ -12,38 +14,106 @@ import {
  * fall back to the legacy default.
  */
 
+/**
+ * A single hard-block pattern with its source already compiled to a
+ * RegExp. Resolver does the compile + validation; downstream consumers
+ * (SafetyFilter, worker queue serialization) read this shape.
+ */
+export interface ResolvedHardBlockPattern {
+  id: string;
+  reason: string;
+  regex: RegExp;
+}
+
 export interface ResolvedSafetyContext {
   /** Hard-guard params forwarded to SafetyFilter via agent overrides. */
   params: { max_length: number; allow_links: boolean };
   /** Advisory tone lists fed into SafetyFilter's input. */
   forbidden_topics: string[];
   allowed_topics: string[];
+  /** Deterministic hard-block patterns evaluated before the LLM scoring. */
+  hard_block_patterns: ResolvedHardBlockPattern[];
 }
 
 /**
  * The behavior before campaign types existed: 600-char cap, no links, no
- * topic lists. Used for ad-hoc conversations, for any campaign without a
- * type, and whenever the flag is off — so enabling the registry is a no-op
- * until a type actually carries a profile.
+ * topic lists, no hard-block patterns. Used for ad-hoc conversations, for
+ * any campaign without a type, and whenever the flag is off — so enabling
+ * the registry is a no-op until a type actually carries a profile.
  */
 export const LEGACY_SAFETY_CONTEXT: ResolvedSafetyContext = {
   params: { max_length: 600, allow_links: false },
   forbidden_topics: [],
   allowed_topics: [],
+  hard_block_patterns: [],
 };
 
-/** Map a campaign type's stored `safetyProfile` JSON into a safety context. */
+/**
+ * Compile a single stored `HardBlockPattern` into a RegExp + metadata.
+ * Returns `null` (and only `null`) when the regex source/flags don't
+ * compile — caller treats that as "skip this entry" without throwing.
+ */
+function compileHardBlockPattern(
+  p: HardBlockPattern,
+): ResolvedHardBlockPattern | null {
+  try {
+    return { id: p.id, reason: p.reason, regex: new RegExp(p.pattern, p.flags) };
+  } catch {
+    return null;
+  }
+}
+
+// `BaseSafetyProfileZ` from the campaign-type schemas is the base shape
+// (no `hard_block_patterns`). Parsing it independently is the trick that
+// lets a single malformed pattern be dropped item-by-item without
+// blowing away the rest of the safety profile.
+
+/**
+ * Map a campaign type's stored `safetyProfile` JSON into a safety context.
+ *
+ * Robust to partially-malformed input: the base profile fields and each
+ * `hard_block_patterns` entry are validated independently, so a single
+ * bad pattern (wrong `id` length, missing field, illegal flags, etc.)
+ * is skipped without losing the rest of the profile.
+ */
 export function resolveSafetyContext(
   rawSafetyProfile: unknown,
 ): ResolvedSafetyContext {
   if (rawSafetyProfile == null) return LEGACY_SAFETY_CONTEXT;
-  const parsed = SafetyProfileZ.safeParse(rawSafetyProfile);
-  if (!parsed.success) return LEGACY_SAFETY_CONTEXT;
-  const sp = parsed.data;
+
+  // Parse the base shape (everything except `hard_block_patterns`). If
+  // even that fails — the JSON is structurally wrong — fall back to
+  // legacy.
+  const base = BaseSafetyProfileZ.safeParse(rawSafetyProfile);
+  if (!base.success) return LEGACY_SAFETY_CONTEXT;
+
+  // Iterate the raw `hard_block_patterns` list (if present) item-by-item.
+  // Each item is independently safeParsed against `HardBlockPatternZ`,
+  // then independently compiled to a RegExp — a single bad apple does
+  // not invalidate the whole basket.
+  const hardBlocks: ResolvedHardBlockPattern[] = [];
+  const rawList =
+    typeof rawSafetyProfile === 'object' && rawSafetyProfile !== null
+      ? (rawSafetyProfile as { hard_block_patterns?: unknown }).hard_block_patterns
+      : undefined;
+  if (Array.isArray(rawList)) {
+    for (const raw of rawList) {
+      const parsed = HardBlockPatternZ.safeParse(raw);
+      if (!parsed.success) continue;
+      const compiled = compileHardBlockPattern(parsed.data);
+      if (compiled) hardBlocks.push(compiled);
+    }
+  }
+  // Malformed entries are silently dropped at the resolver layer. The
+  // SafetyFilter agent does its own per-pattern try/catch as a second
+  // line of defense for callers that pass the raw wire shape directly
+  // (e.g. tests, ad-hoc invocations).
+
   return {
-    params: { max_length: sp.max_length, allow_links: sp.allow_links },
-    forbidden_topics: sp.forbidden_topics,
-    allowed_topics: sp.allowed_topics,
+    params: { max_length: base.data.max_length, allow_links: base.data.allow_links },
+    forbidden_topics: base.data.forbidden_topics,
+    allowed_topics: base.data.allowed_topics,
+    hard_block_patterns: hardBlocks,
   };
 }
 

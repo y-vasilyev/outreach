@@ -4,6 +4,20 @@ All operator-visible changes worth noting between releases.
 
 ## Unreleased
 
+### Added
+
+- **SafetyFilter deterministic hard-block** — campaign-type
+  `safetyProfile` gains a `hard_block_patterns` list of regex rules with
+  ids and human-readable reasons. SafetyFilter evaluates them BEFORE the
+  LLM scoring step; any match forces `allow=false`, `risk_score=1`, and
+  a structured `reason` line. The LLM stays advisory. The
+  `agency_sourcing` seed ships with six patterns covering result
+  guarantees (verbal/adjective/numeric/English forms), time-pressure
+  tactics, and pre-operator payment mentions;
+  CustDev gets an explicit empty list (legacy advisory-only behavior).
+  Malformed patterns are skipped without crashing the pipeline. See
+  openspec change `safety-filter-hard-block`.
+
 ### Removed
 
 - **`packages/shared/src/flags.ts`** — the "compile-time" flags module

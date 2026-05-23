@@ -4,6 +4,7 @@ import {
   type CampaignSchedule,
   isWithinSchedule,
   resolveAgentName,
+  resolveSafetyContext,
 } from '@nosquare/shared';
 import { getRunner } from '../services/runner.js';
 import { logger } from '../logger.js';
@@ -71,7 +72,7 @@ export function startCampaignDispatcher() {
         // B4: load the campaign type so opener/safety roles resolve via the
         // type's agentSet for agency_sourcing campaigns (behind the flag).
         // The `include` is additive; CustDev campaigns simply have type=null.
-        include: { type: { select: { key: true, agentSet: true } } },
+        include: { type: { select: { key: true, agentSet: true, safetyProfile: true } } },
       });
 
       for (const c of campaigns) {
@@ -276,6 +277,20 @@ export function startCampaignDispatcher() {
           // agency_opening_composer (agency-shaped input below).
           const openingAgent = resolveRoleAgent(c, 'opening_composer', 'opening_composer');
           const safetyAgent = resolveRoleAgent(c, 'safety_filter', 'safety_filter');
+          // safety-filter-hard-block: serialize the type's deterministic
+          // hard-block regexes for the SafetyFilter input. Only attached
+          // when `campaign_types` is on AND the type has a profile; the
+          // legacy/CustDev path passes an empty array (no-op).
+          const safetyHardBlocks = getFeatureFlags().get('campaign_types')
+            ? resolveSafetyContext(c.type?.safetyProfile ?? null).hard_block_patterns.map(
+                (p) => ({
+                  id: p.id,
+                  pattern: p.regex.source,
+                  reason: p.reason,
+                  ...(p.regex.flags ? { flags: p.regex.flags } : {}),
+                }),
+              )
+            : [];
           const openerInput =
             openingAgent === 'agency_opening_composer'
               ? {
@@ -319,6 +334,7 @@ export function startCampaignDispatcher() {
                 channel_analysis: contactForPrompt.channel?.analysis ?? {},
                 contact: { id: contact.id },
                 campaign: { name: c.name },
+                hard_block_patterns: safetyHardBlocks,
               }, { conversationId: conv.id });
               if (!safety.allow) continue;
               const score = 1 - safety.risk_score;

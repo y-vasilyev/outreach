@@ -101,3 +101,101 @@ describe('safety_filter — hard policy guards', () => {
     expect(out.rewrite_hint).toBeUndefined();
   });
 });
+
+/**
+ * safety-filter-hard-block: profile-driven deterministic regex blocks
+ * that fire BEFORE the LLM scoring step. Empty list keeps legacy
+ * advisory-only behavior; matching patterns force `allow=false`; a
+ * malformed pattern in the list is skipped (not fatal).
+ */
+describe('safety_filter — hard_block_patterns', () => {
+  const guaranteePattern = {
+    id: 'agency_guarantee_promise',
+    pattern: 'гарантиру[а-я]*',
+    reason: 'обещание гарантированного результата',
+    flags: 'iu',
+  };
+
+  it('empty hard_block_patterns is a no-op — LLM advisory path runs', async () => {
+    const llm = makeLLM({
+      completeJsonImpl: () => ({ allow: true, reasons: [], risk_score: 0.2 }),
+    });
+    const ctx = makeCtx({ llm, config: makeConfig({}) });
+    const out = await safetyFilter.run(
+      { draft: 'Здравствуйте, рад знакомству', hard_block_patterns: [] },
+      ctx,
+    );
+    expect(out.allow).toBe(true);
+    expect(llm._calls.completeJson).toBe(1);
+  });
+
+  it('matched pattern blocks before LLM and surfaces id:reason', async () => {
+    const llm = makeLLM();
+    const ctx = makeCtx({ llm, config: makeConfig({}) });
+    const out = await safetyFilter.run(
+      {
+        draft: 'Гарантируем +500 подписчиков за неделю',
+        hard_block_patterns: [guaranteePattern],
+      },
+      ctx,
+    );
+    expect(out.allow).toBe(false);
+    expect(out.risk_score).toBe(1);
+    expect(out.reasons).toHaveLength(1);
+    expect(out.reasons[0]).toBe(
+      'agency_guarantee_promise:обещание гарантированного результата',
+    );
+    expect(out.rewrite_hint).toBe('обещание гарантированного результата');
+    expect(llm._calls.completeJson).toBe(0);
+  });
+
+  it('non-matching pattern lets the LLM advisory path run', async () => {
+    const llm = makeLLM({
+      completeJsonImpl: () => ({ allow: true, reasons: [], risk_score: 0.3 }),
+    });
+    const ctx = makeCtx({ llm, config: makeConfig({}) });
+    const out = await safetyFilter.run(
+      {
+        draft: 'Здравствуйте, обсудим формат сотрудничества?',
+        hard_block_patterns: [guaranteePattern],
+      },
+      ctx,
+    );
+    expect(out.allow).toBe(true);
+    expect(llm._calls.completeJson).toBe(1);
+  });
+
+  it('malformed regex is skipped, valid patterns still apply', async () => {
+    const llm = makeLLM();
+    const ctx = makeCtx({ llm, config: makeConfig({}) });
+    const out = await safetyFilter.run(
+      {
+        draft: 'Гарантируем продажи',
+        hard_block_patterns: [
+          // unclosed group — RegExp constructor throws on this source.
+          { id: 'broken', pattern: '(unclosed', reason: 'broken', flags: 'i' },
+          guaranteePattern,
+        ],
+      },
+      ctx,
+    );
+    expect(out.allow).toBe(false);
+    // The malformed entry didn't crash the call, and the valid one matched.
+    expect(out.reasons.some((r) => r.startsWith('agency_guarantee_promise:'))).toBe(true);
+    expect(out.reasons.some((r) => r.startsWith('broken:'))).toBe(false);
+  });
+
+  it('hard_block fires even when length / link / declined checks pass', async () => {
+    const llm = makeLLM();
+    const ctx = makeCtx({ llm, config: makeConfig({}) });
+    const out = await safetyFilter.run(
+      {
+        draft: 'Гарантирую результат за месяц',
+        hard_block_patterns: [guaranteePattern],
+      },
+      ctx,
+    );
+    expect(out.allow).toBe(false);
+    expect(llm._calls.completeJson).toBe(0);
+  });
+});
