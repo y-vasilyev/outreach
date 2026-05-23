@@ -2,20 +2,32 @@
 --
 -- Additive schema for the chat-autonomous-modes change.
 -- Adds:
---   * ConversationMode.semi_auto  (rename of legacy `auto`; legacy rows
---     get migrated below; the legacy `auto` value is kept in the enum
---     for one release so the API can normalize older payloads. A
---     follow-up migration redefines `auto` semantics — see openspec
---     change `chat-autonomous-modes` design.md Decision 1 and
---     tasks 8.x.).
+--   * ConversationMode.semi_auto  (rename of legacy `auto`; the backfill
+--     UPDATE that migrates legacy `auto` rows lives in a SEPARATE later
+--     migration — see migration 9a_chat_modes_backfill_semi_auto.
+--     The legacy `auto` value is kept in the enum for one release so the
+--     API can normalize older payloads. A follow-up migration redefines
+--     `auto` semantics — see openspec change `chat-autonomous-modes`
+--     design.md Decision 1 and tasks 8.x.).
 --   * Campaign.ajtbd                (JSONB, nullable, scaffolded from
 --     goalText / valueProp).
 --   * Conversation.qualityDecision  (JSONB, nullable).
 --   * Conversation.lastSyncedAt     (TIMESTAMPTZ, nullable).
 --
--- ALTER TYPE ... ADD VALUE cannot run inside a transaction in Postgres,
--- so it lives in its own statement. Prisma's migration runner handles
--- that case automatically.
+-- `ALTER TYPE ... ADD VALUE` itself runs fine inside the migration
+-- transaction; the real Postgres constraint is that the newly-added
+-- enum value cannot be USED (in casts, UPDATE, comparisons) until
+-- after that transaction commits. The block comment below explains why
+-- the backfill UPDATE is split out into a separate migration.
+--
+-- DO NOT use 'semi_auto' (or any newly-added enum value) anywhere else in
+-- this file. Postgres forbids referring to a value added via
+-- `ALTER TYPE ... ADD VALUE` in the same transaction in which it is
+-- added, so a backfill UPDATE in this file would fail on a fresh cluster
+-- with `unsafe use of new value 'semi_auto' of enum type
+-- ConversationMode`. The backfill therefore lives in migration
+-- `9a_chat_modes_backfill_semi_auto`, which runs in its own transaction
+-- after this one commits. See openspec change `fix-migration-4-enum-tx`.
 
 -- 1. Enum: add `semi_auto` (legacy `auto` stays for now, see Decision 1).
 ALTER TYPE "ConversationMode" ADD VALUE IF NOT EXISTS 'semi_auto';
@@ -46,9 +58,7 @@ WHERE "ajtbd" IS NULL;
 ALTER TABLE "Conversation" ADD COLUMN IF NOT EXISTS "qualityDecision" JSONB;
 ALTER TABLE "Conversation" ADD COLUMN IF NOT EXISTS "lastSyncedAt" TIMESTAMP(3);
 
--- 5. Migrate any legacy `auto` rows over to `semi_auto`. Today's `auto`
--- behaviour matches semi_auto semantics (auto-send when safe, fall
--- through to suggestion otherwise); the new strict `auto` is introduced
--- in the application layer at the same time as this migration.
-UPDATE "Conversation" SET "mode" = 'semi_auto' WHERE "mode" = 'auto';
-UPDATE "Campaign"     SET "defaultMode" = 'semi_auto' WHERE "defaultMode" = 'auto';
+-- 5. Legacy `auto` → `semi_auto` backfill lives in migration
+-- `9a_chat_modes_backfill_semi_auto` (separate transaction). See the
+-- block comment at the top of this file and openspec change
+-- `fix-migration-4-enum-tx` for the reasoning.

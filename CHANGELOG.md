@@ -4,6 +4,22 @@ All operator-visible changes worth noting between releases.
 
 ## Unreleased
 
+### Fixed
+
+- **`prisma migrate deploy` on a fresh Postgres cluster** — the
+  `4_chat_autonomous_modes` migration previously combined
+  `ALTER TYPE "ConversationMode" ADD VALUE 'semi_auto'` with `UPDATE`
+  statements that referenced the freshly-added enum value in the same
+  transaction; Postgres rejects that with `unsafe use of new value
+  'semi_auto' of enum type ConversationMode`, so any clean prod
+  deploy failed. The backfill is now split into a separate
+  `9a_chat_modes_backfill_semi_auto` migration, which runs after
+  migration 4 commits and is idempotent on a clean cluster. No
+  user-facing behaviour change; legacy `mode='auto'` /
+  `defaultMode='auto'` rows are still backfilled to `semi_auto`,
+  just in a separate transaction. See openspec change
+  `fix-migration-4-enum-tx`.
+
 ### Added
 
 - **Channel discovery via web search** — find candidate blogger channels by
@@ -67,8 +83,11 @@ All operator-visible changes worth noting between releases.
 
 - **BREAKING**: `ConversationMode.auto` renamed to `semi_auto` (matches
   pre-existing behaviour). New `auto` mode introduces strict semantics with
-  silent operator fallback. Existing rows are migrated automatically by
-  migration `4_chat_autonomous_modes`.
+  silent operator fallback. The enum value `semi_auto` is added by
+  migration `4_chat_autonomous_modes`; existing legacy rows are
+  backfilled to `semi_auto` by migration
+  `9a_chat_modes_backfill_semi_auto` (split for the enum-in-tx fix —
+  see `fix-migration-4-enum-tx`).
 - `Campaign.defaultMode` is now applied to new conversations created under
   the campaign (previously it was set but never read).
 
