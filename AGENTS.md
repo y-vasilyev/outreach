@@ -1,6 +1,16 @@
 # AGENTS.md
 
-Спецификация мультиагентной системы под задачу: «канал → контакты для рекламы → CustDev-приглашение → диалог».
+Спецификация мультиагентной системы под рекламную платформу: «публичный канал → явно опубликованный рекламный/business contact → прозрачный запрос условий размещения или исследовательское приглашение → диалог с операторским контролем».
+
+## Scope и compliance
+
+Система работает только с публичными страницами и контактами, которые сам автор/канал указал для рекламных, business или partnership-запросов: "по рекламе", "media kit", "manager", email/форма заявки для брендов. Личные контакты без business-контекста, закрытые данные, скрытие отправителя/цели обращения, обход ограничений платформ и массовая рассылка вне rate limits запрещены.
+
+Ключевой product framing:
+- `agency_sourcing` — основной рекламный сценарий: честно запросить условия размещения/интеграции у опубликованного advertising contact, собрать прайс/охваты/media kit и передать коммерческие решения оператору.
+- `custdev` — исследовательский сценарий: честно пригласить на продуктовый разговор, не маскируя продажу или рекламную закупку под интервью.
+
+Любой исходящий текст проходит safety/goal gates, честно обозначает отправителя и цель обращения, уважает opt-out/stop requests, сохраняется как `pending` перед отправкой, а агентский sourcing по умолчанию работает в `assisted` и требует подтверждения человеком для коммерческих условий.
 
 ## Контракт
 
@@ -73,14 +83,14 @@ interface AgentContext {
 **Системный промпт** (RU, базовый — финальный текст в админке):
 > Ты анализируешь публичный канал автора в соцсети. По названию, описанию, ссылкам и нескольким последним постам кратко описываешь его в структурированном виде. Не выдумывай факты. Если данных мало — честно отмечай низкие уровни уверенности и оставляй поля пустыми. Возвращай только JSON по схеме.
 
-**Когда**: после успешного скрейпа канала, в пайплайне `extract_contacts`.
+**Когда**: после успешной индексации публичной страницы канала, в пайплайне `extract_contacts`.
 
 **Модель**: средняя (Yandex / Sonnet-уровень).
 
 ---
 
 ### 2. ContactExtractor — `contact_extractor`
-Главный агент задачи. Достаёт из описания канала контакты для рекламы, классифицирует.
+Главный агент задачи. Выделяет из публичного описания канала только явно опубликованные advertising/business contacts и классифицирует их назначение.
 
 **Input**
 ```ts
@@ -106,7 +116,7 @@ interface AgentContext {
     value: string,              // нормализованное (например, без @, без https://)
     raw_value: string,
     role_guess: 'owner'|'ad_manager'|'generic'|'bot'|'unknown',
-    label?: string,             // фрагмент текста рядом ("по рекламе", "manager")
+    label?: string,             // фрагмент текста рядом ("по рекламе", "business", "manager")
     confidence: number,         // 0..1
     rationale: string           // короткое объяснение
   }>,
@@ -117,15 +127,15 @@ interface AgentContext {
 **Логика работы (внутри `run`)**:
 1. Регулярки уже отработали в предобработчике — приходят в `regex_candidates`.
 2. LLM получает на вход: канал + полный список кандидатов + куски контекста.
-3. Возвращает классификацию по каждому кандидату + при необходимости добивает то, что регулярки не поймали (например, контакт упомянут в посте словами «писать в директ к @vasya»).
+3. Возвращает классификацию по каждому кандидату + при необходимости добивает то, что регулярки не поймали, но только если рядом есть business/ad-контекст (например, "по рекламе писать @manager").
 4. После LLM — детерминированный пост-процесс: дедуп по `(type, value)`, нормализация (`@user` → `user`, `https://` обрезается), отбрасывание confidence < `params.min_confidence` (по умолчанию 0.4).
 
 **Системный промпт** (фрагмент):
-> Ты ищешь в описании и постах канала контакты, по которым можно написать «по рекламе» или «по сотрудничеству». Тебе уже дали список найденных кандидатов регулярками — твоя задача классифицировать каждого: это владелец канала, рекламный менеджер, бот для заявок, общий контакт или нерелевантно. Если в тексте есть контакты, которые регулярки пропустили (например, упомянуты словами) — добавь их. Не выдумывай контакты, которых нет в тексте. Возвращай JSON по схеме. Конкретные типы:
-> - `owner` — личный аккаунт автора канала
-> - `ad_manager` — отдельный аккаунт «по рекламе», менеджер
+> Ты ищешь в публичном описании и постах канала контакты, которые сам автор/канал явно указал для рекламных, business или partnership-запросов. Тебе уже дали список найденных кандидатов регулярками — твоя задача классифицировать каждого: это рекламный менеджер, владелец, бот/форма для заявок, общий business contact или нерелевантно. Не добавляй личные контакты без business/ad-контекста. Не выдумывай контакты, которых нет в тексте. Возвращай JSON по схеме. Конкретные типы:
+> - `owner` — аккаунт автора канала, только если он явно указан как канал для business/ad связи
+> - `ad_manager` — отдельный аккаунт/почта/форма "по рекламе", media kit, менеджер
 > - `bot` — бот для заявок (`@xxxbot`, ссылка на форму)
-> - `generic` — контакт без явной роли
+> - `generic` — общий business contact без явной роли
 > - `unknown` — не удалось определить
 
 **Params** (специфичные):
@@ -139,7 +149,7 @@ interface AgentContext {
 ---
 
 ### 3. ContactPrioritizer — `contact_prioritizer`
-Если у канала несколько контактов — какой брать на outreach. Простой, но удобно вынести.
+Если у канала несколько публичных business/ad contacts — какой брать для рекламного запроса или operator review. Простой, но удобно вынести.
 
 **Input**: `{ contacts: Contact[], channel_analysis }`
 
@@ -151,14 +161,14 @@ interface AgentContext {
 - Высший confidence
 - Если `channel_analysis.is_personal_brand=true` → `owner` поднимается на уровень `ad_manager`
 
-**Когда**: при подготовке к отправке (либо при подготовке кампании-превью).
+**Когда**: при подготовке к operator review / отправке (либо при подготовке кампании-превью).
 
 **Модель**: можно без LLM. Если включить — дешёвая.
 
 ---
 
 ### 4. ApproachStrategist — `approach_strategist`
-Выбирает угол захода для CustDev-приглашения.
+Выбирает угол захода под тип кампании: рекламный запрос условий (`agency_sourcing`) или исследовательское приглашение (`custdev`).
 
 **Input**: `{ channel_analysis, contact, campaign: { goal_text, value_prop, examples? } }`
 
@@ -178,7 +188,7 @@ interface AgentContext {
 ---
 
 ### 5. OpeningComposer — `opening_composer`
-Пишет 2–3 варианта первого сообщения с CustDev-приглашением.
+Пишет 2–3 варианта первого сообщения для `custdev`. Рекламные запросы условий размещения пишет отдельный `AgencyOpeningComposer`.
 
 **Input**: `{ channel_analysis, contact, strategy, campaign: { goal_text, value_prop }, examples?: string[] }`
 
@@ -189,21 +199,21 @@ interface AgentContext {
     text: string,               // не длиннее 600 символов
     rationale: string,
     length: 'short'|'medium'|'long',
-    risk_score: number          // 0..1, самооценка спам-риска
+    risk_score: number          // 0..1, самооценка compliance/spam-риска
   }>
 }
 ```
 
 **Системный промпт** (ключевые правила, в админке шлифуется):
-> Ты пишешь первое сообщение в личку незнакомому автору канала с приглашением на 20-минутное **исследовательское интервью по продукту**. Цель — НЕ продать, НЕ предложить рекламу, НЕ запитчить. Только узнать, готов ли он на короткое интервью.
+> Ты пишешь первое сообщение на публично указанный business/ad contact канала с приглашением на 20-минутное **исследовательское интервью по продукту**. Это `custdev`, а не рекламная закупка: не имитируй коммерческий запрос и не обещай размещение. Цель — честно узнать, готов ли собеседник на короткое интервью.
 >
 > Жёсткие правила:
-> - Не используй слова «реклама», «рекламная интеграция», «сотрудничество», «созвониться обсудить».
+> - Не маскируй продажу или рекламную закупку под интервью; если цель кампании — запросить прайс/условия рекламы, используй `agency_sourcing`.
 > - Покажи, что прочитал канал. 1 конкретная деталь из тематики/постов.
 > - Назови продукт и роль интервью одним предложением.
 > - Чётко обозначь длительность (15–20 минут) и компенсацию из value-prop.
 > - Не давай ссылок без причины. Не используй эмодзи в начале.
-> - 2–4 предложения. Звучи как живой человек, не как бот.
+> - 2–4 предложения. Звучи как живой человек и уважай отказ/stop request.
 > - Если уверенность низкая — лучше короче и проще.
 
 **Когда**: пайплайн `outreach_first_message`.
@@ -245,7 +255,7 @@ interface AgentContext {
 ---
 
 ### 7. IntentClassifier — `intent_classifier`
-Классифицирует входящее под CustDev-сценарий (расширенный набор).
+Классифицирует входящее под `custdev` и `agency_sourcing` сценарии.
 
 **Input**: `{ last_inbound: string, history_tail: string[] }`
 
@@ -254,7 +264,7 @@ interface AgentContext {
 {
   intent:
     'interested'|'needs_more_info'|'asks_about_product'|'objection_busy'|
-    'objection_irrelevant'|'objection_compensation'|'wants_payment_for_ads'|  // важный сигнал — он принял за продажу рекламы
+    'objection_irrelevant'|'objection_compensation'|'wants_payment_for_ads'|  // CustDev: собеседник трактует сообщение как рекламный запрос
     'wants_to_schedule'|'declined'|'hostile'|'spam_complaint'|
     'request_human'|'silence_likely',
   confidence: number,
@@ -262,14 +272,14 @@ interface AgentContext {
 }
 ```
 
-`wants_payment_for_ads` — особо важный интент: значит наша CustDev-формулировка не сработала, человек считает, что мы хотим купить рекламу. Эскалация на оператора + флаг для аналитики промптов.
+`wants_payment_for_ads` — важный интент для `custdev`: собеседник трактует исследовательское приглашение как рекламный запрос. Это не ошибка собеседника; система эскалирует на оператора и помечает диалог для анализа framing. В `agency_sourcing` коммерческие ответы классифицируются как `discusses_price` / `sends_quote` и тоже передаются оператору для подтверждения условий.
 
 **Модель**: дешёвая, structured output.
 
 ---
 
 ### 8. SafetyFilter — `safety_filter`
-Финальная проверка любого исходящего. Особо строг под CustDev.
+Финальная проверка любого исходящего. Проверяет прозрачность цели, opt-out, отсутствие давления и соответствие `campaign_type`.
 
 **Input**: `{ draft, channel_analysis, contact, campaign }`
 
@@ -284,13 +294,14 @@ interface AgentContext {
 ```
 
 **Что блокирует**:
-- Слова из `params.forbidden_topics` (по умолчанию: `["реклама", "рекламная", "интеграц", "купить рекламу", "разместить", "промо", "приобрести", "оффер", "выгодное предложение"]`).
+- Слова из `params.forbidden_topics`. Для `custdev` по умолчанию рекламная лексика повышает риск, чтобы исследовательское интервью не выглядело как скрытая закупка. Для `agency_sourcing` рекламная лексика разрешена профилем типа, потому что цель — честно запросить условия размещения.
 - Обещания результата («увеличим», «гарантируем»).
 - Конкретные цифры/сроки, не подтверждённые в кампании.
 - Эмодзи в начале сообщения, восклицательные знаки в первой строке.
 - Нарушение «не пиши, если попросили не писать» (детектится по истории — если входящее = `declined`, исходящее не уходит без оператора).
 - Ссылки без причины (если в кампании не разрешены).
 - Длина > `params.max_length` (по умолчанию 600).
+- Любая попытка писать не на явно опубликованный business/ad contact без ручного подтверждения.
 
 **Когда**: перед каждой отправкой.
 
@@ -367,7 +378,7 @@ interface AgentContext {
 **Input**: `{ draft, conversation_history, channel_analysis, contact }`
 **Output**: `{ scores: { relevance, tone, grammar, personalization, on_brief }, notes }` — каждое 1..5.
 
-`on_brief` — соответствие CustDev-цели (не свалились в продажу).
+`on_brief` — соответствие цели кампании: для `custdev` не свалились в продажу, для `agency_sourcing` честно запросили рекламные условия без давления и выдуманных обещаний.
 
 **Когда**: cron на 5–10% исходящих.
 **Модель**: сильная.
@@ -423,8 +434,8 @@ Quality-gate авто-режима: оценивает goal-fit черновик
 |---|---|---|---|
 | `manual` | только оператор | skip | нет |
 | `assisted` | оператор подтверждает draft | skip | нет |
-| `semi_auto` | ИИ автоматом, иначе draft | runs | iff safety + gate (`continue`/`soften`) ≥ `T_semi_auto_goalfit` |
-| `auto` | ИИ полностью; молчаливый фоллбек | runs | iff safety + gate == `continue` ≥ `T_auto_goalfit` |
+| `semi_auto` | система может отправить только после safety/goal gates, иначе draft оператору | runs | iff safety + gate (`continue`/`soften`) ≥ `T_semi_auto_goalfit` |
+| `auto` | строгий авто-режим только для разрешённых кампаний и опубликованных business/ad contacts; молчаливый фоллбек | runs | iff safety + gate == `continue` ≥ `T_auto_goalfit` |
 
 **Пороги по умолчанию** (env-tunable, см. `auto-approve.ts`):
 - `T_safety = 0.8` — `(1 - risk_score)` от `safety_filter`.
@@ -440,19 +451,19 @@ Per-campaign override через `Campaign.agentOverrides.goal_fit_evaluator.par
 Пайплайны — данные (`Pipeline = { steps: Step[] }`), исполняются `Orchestrator`.
 
 ### `extract_contacts`
-Триггер: `channel.status=scraped`.
+Триггер: `channel.status=scraped` после индексации публичной страницы.
 ```
 1. ChannelAnalyzer            → channel.analysis
 2. (если red_flags из ChannelAnalyzer) → channel.status=disqualified, выход
-3. regex_extract              → пред-кандидаты (детерминированный шаг, не агент)
-4. ContactExtractor           → массив контактов (с типом, ролью, confidence)
+3. regex_extract              → пред-кандидаты из публичного текста (детерминированный шаг, не агент)
+4. ContactExtractor           → массив явно опубликованных business/ad contacts (с типом, ролью, confidence)
 5. dedupe_normalize           → пишем contact-ы в БД с reachability
 6. (для tg_username) tg_resolve → tg_user_id (или status=invalid)
 7. channel.status=extracted
 ```
 
 ### `outreach_first_message`
-Триггер: диспетчер кампании выбрал контакт.
+Триггер: диспетчер кампании выбрал публично указанный business/ad contact или оператор подтвердил контакт вручную.
 ```
 1. (если contact.priority неизвестен) ContactPrioritizer
 2. (если channel.analysis устарел) ChannelAnalyzer
@@ -461,7 +472,7 @@ Per-campaign override через `Campaign.agentOverrides.goal_fit_evaluator.par
 5. for each variant: SafetyFilter
    if !allow и есть rewrite_hint → 1 ретрай OpeningComposer с hint
 6. Пишем suggestion-ы (score = (1 - risk_score) * model_self_score)
-7. if campaign.mode == 'auto' и top.risk_score < threshold:
+7. if campaign.mode == 'auto' и top.risk_score < threshold и contact разрешён policy:
       message(pending) + tg-send (с задержкой)
    else:
       оператор увидит в Inbox
@@ -491,7 +502,7 @@ Per-campaign override через `Campaign.agentOverrides.goal_fit_evaluator.par
         НЕ enqueue tg-send, НЕ создавать исходящее. Return.
 9. tryAutoApprove(conversationId, suggestionId, text, score, gate?):
      Композиция safety + gate + mode (см. таблицу выше).
-     Если разрешено — message(pending) + tg-send.
+     Если разрешено policy/safety/rate limits — message(pending) + tg-send.
 ```
 
 **Conversation sync на открытии**: при `GET /conversations/:id` API вызывает `ConversationSync.syncOne(id)` с hard-budget 1500мс. Sync дёргает `messages.getHistory` через `tg-client.fetchHistorySince`, дедуплицирует по `Message.tgMsgId`, сохраняет пропущенные inbound через тот же путь, что `tg-listen`, и enqueue-ит `agent-run on_inbound` ТОЛЬКО для самого свежего нового inbound. Лимит 50 сообщений descending; FloodWait → лог + counter `tg.flood_wait`, без retry inline.
@@ -590,6 +601,12 @@ SELECT conversations WHERE status=active
 `allowed_topics` из `safety_profile` типа (custdev — запрет рекламной лексики
 через risk; agency — она разрешена, запрещены гарантии/давление/деньги).
 
+`agency_sourcing` разрешён только для каналов/авторов с публично указанным
+advertising/business contact. Сообщение должно прямо обозначать рекламный
+контекст: запросить прайс, формат, охваты, media kit или условия интеграции.
+Если контакт не маркирован как рекламный/business или автор попросил не писать,
+авто-отправка запрещена, диалог остаётся оператору.
+
 ### Новые агенты
 
 - **CampaignTypeBuilder — `campaign_type_builder`.** Мета-агент: из описания
@@ -598,13 +615,16 @@ SELECT conversations WHERE status=active
   capability-map, params, output-schema). Драфт прогоняется через `dryRun`
   (токены/стоимость/латентность прикладываются) и НЕ публикуется до явного
   Save (тогда создаются `agent_config` v1 + `agent_config_history`, аудит).
-- **AgencyOpeningComposer — `agency_opening_composer`.** Опенер от лица
-  агентства со ссылкой на реальную интеграцию в постах канала; детерминированный
-  no-fabrication guard (нет наблюдаемой интеграции → не auto-send; цитируемый
-  бренд обязан встречаться и в тексте).
+- **AgencyOpeningComposer — `agency_opening_composer`.** Первое сообщение от
+  лица агентства на публично указанный advertising/business contact: честно
+  запрашивает условия размещения/интеграции и может ссылаться только на реально
+  наблюдаемую интеграцию в постах канала. Детерминированный no-fabrication guard:
+  нет наблюдаемой интеграции или явно рекламного/business contact → нет авто-отправки;
+  цитируемый бренд обязан встречаться и в тексте.
 - **DataCollectionPlanner — `data_collection_planner`.** Логика сбора данных:
   missing = target − collected, задаёт один недостающий вопрос за ход, не
-  переспрашивает собранное, авторитетный сигнал goal-satisfied. ПОДКЛЮЧЁН в
+  переспрашивает собранное, не давит на собеседника и уважает отказ/stop request,
+  авторитетный сигнал goal-satisfied. ПОДКЛЮЧЁН в
   агентский inbound-пайплайн (за `ENABLE_AGENCY_SOURCING`): для
   `agency_sourcing`-конверсаций он ведёт диалог вместо `reply_composer` —
   `target_data_points` берутся из `campaign.goal` (или дефолтный набор),
@@ -620,8 +640,9 @@ SELECT conversations WHERE status=active
 
 `IntentClassifier` получил `discusses_price` / `sends_quote` — для
 `agency_sourcing` они в `autonomy_policy.forceHandoffIntents` и форсят
-`operator_now` (человек подтверждает коммерческие условия). Дефолтный режим
-`agency_sourcing` — `assisted`. `agent-run` и `campaign-dispatcher` резолвят
+`operator_now` (человек подтверждает коммерческие условия, бюджет, сроки и
+следующий шаг). Дефолтный режим `agency_sourcing` — `assisted`.
+`agent-run` и `campaign-dispatcher` резолвят
 агента роли через `resolveAgentName(type.agentSet, role, fallback)` за
 `ENABLE_AGENCY_SOURCING`.
 
