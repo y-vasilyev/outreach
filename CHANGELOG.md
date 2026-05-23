@@ -4,6 +4,21 @@ All operator-visible changes worth noting between releases.
 
 ## Unreleased
 
+### Changed
+
+- **`downloadInboundMedia` is now unit-tested** — the tg-client method
+  that backs the inbound media-asset pipeline was previously covered only
+  indirectly via the `mediaStore` tests in workers. Extracted the core
+  logic into the exported helper `downloadInboundMediaWithClient` (pure,
+  takes a minimal `DownloadMediaClient` shape) and added 13 unit tests
+  covering every branch of the contract (invalid msgId, no message, no
+  media, missing `downloadMedia`, throws, null/string/Uint8Array/Buffer/
+  unsupported returns, correct `getMessages` argument shape, never
+  throws). Behavior is unchanged. A `RUNBOOK.md` in the archived
+  openspec change documents the live-smoke procedure operators run
+  before flipping `object_storage` on in prod. See openspec change
+  `verify-download-inbound-media`.
+
 ### Added
 
 - **SafetyFilter deterministic hard-block** — campaign-type
