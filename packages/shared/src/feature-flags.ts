@@ -19,11 +19,11 @@ export const FEATURE_FLAGS_CHANNEL = 'feature_flags:changed';
  * Closed set of runtime-toggleable flags + their default value (used when the
  * store has no row, the key is unknown, or the store is unreachable).
  *
- * Scope: the agency-sourcing-matching rollout/kill switches — all default
+ * Scope: rollout/kill switches that gate real product behavior. All default
  * OFF, exactly today's effective state, so the cutover is behavior-preserving.
- * Pure product constants and other operational flags (e.g.
- * `ENABLE_FOLLOWUP_CRON`, `ENABLE_QUALITY_REVIEW`) stay in `flags.ts` and are
- * intentionally NOT runtime-managed here; the table can absorb them later.
+ * When a future feature needs an operational toggle, add its key here and seed
+ * the corresponding `feature_flag` row — there is no parallel compile-time
+ * flag module to keep in sync.
  */
 export const FEATURE_FLAG_DEFAULTS = {
   campaign_types: false,

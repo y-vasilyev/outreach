@@ -4,6 +4,20 @@ All operator-visible changes worth noting between releases.
 
 ## Unreleased
 
+### Removed
+
+- **`packages/shared/src/flags.ts`** — the "compile-time" flags module
+  (`ENABLE_LLM_CONTACT_EXTRACTION`, `ENABLE_AUTO_MODE`,
+  `ENABLE_FOLLOWUP_CRON`, `ENABLE_QUALITY_REVIEW`,
+  `MAX_DRY_RUN_TOKENS`, `DEFAULT_DAILY_MSG_LIMIT`,
+  `DEFAULT_DAILY_NEW_CONTACT_LIMIT`, `WARMUP_STAGES`, and the
+  derived `FeatureFlag` type) had no consumers anywhere in
+  `packages/` or `apps/` — neither static imports nor dynamic
+  `flags['…']` access. Deleted along with its `index.ts` re-export.
+  All operational toggles in the system are now runtime flags
+  (`feature_flag` table + admin UI). No behavior change. See
+  openspec change `remove-dead-flags-ts`.
+
 ### Fixed
 
 - **`prisma migrate deploy` on a fresh Postgres cluster** — the

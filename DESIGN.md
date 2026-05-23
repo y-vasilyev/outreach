@@ -585,8 +585,10 @@ feature_flag ( key PK, enabled BOOL, description, updated_by_id, updated_at )
 
 - **Registry**: closed set of keys + defaults in `packages/shared/src/feature-flags.ts`
   (`FEATURE_FLAG_DEFAULTS`, all OFF). Currently managed: `campaign_types`,
-  `agency_sourcing`, `object_storage`, `blogger_matching`. Unknown key → off.
-  Compile-time product constants stay in `flags.ts`.
+  `agency_sourcing`, `object_storage`, `blogger_matching`, `channel_discovery`.
+  Unknown key → off. There is no parallel compile-time flag module: future
+  operational toggles get a `FEATURE_FLAG_DEFAULTS` entry + a seeded
+  `feature_flag` row.
 - **Accessor** (`FeatureFlags`, shared, IO injected per app): synchronous
   `get(key)` from an in-memory cache (hot-path safe), `init()`/`refresh()`,
   `snapshot()`. Resolution order: **env force > cached DB value > default-off**.

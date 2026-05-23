@@ -11,8 +11,7 @@
     "./errors": "./src/errors/index.ts",
     "./types": "./src/types/index.ts",
     "./redact": "./src/redact.ts",
-    "./realtime": "./src/realtime.ts",
-    "./flags": "./src/flags.ts"
+    "./realtime": "./src/realtime.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
