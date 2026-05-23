@@ -1,7 +1,7 @@
 ## 0. Process
 
-- [ ] 0.1 At each milestone gate (**CODEX REVIEW**), run a Codex review of the milestone diff, address findings, then proceed
-- [ ] 0.2 Keep behavior-preserving: all flags seeded off ⇒ no runtime change until toggled; verify after each milestone (`pnpm typecheck && pnpm test`)
+- [x] 0.1 At each milestone gate (**CODEX REVIEW**), run a Codex review of the milestone diff, address findings, then proceed
+- [x] 0.2 Keep behavior-preserving: all flags seeded off ⇒ no runtime change until toggled; verify after each milestone (`pnpm typecheck && pnpm test`)
 
 ## 1. Store + accessor (foundation)
 
