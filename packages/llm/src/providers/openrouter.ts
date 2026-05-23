@@ -4,11 +4,14 @@ import type {
   CompletionRequest,
   CompletionResponse,
   LLMProvider,
+  ModelInfo,
   ProviderConfig,
 } from '../types.js';
+import { fetchProxyOpts } from './_proxy.js';
 
 const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
 const COMPLETION_PATH = '/chat/completions';
+const MODELS_PATH = '/models';
 
 interface OpenAIChoice {
   message?: { role?: string; content?: string };
@@ -74,6 +77,10 @@ export class OpenRouterProvider implements LLMProvider {
       ...(this.cfg.defaultHeaders ?? {}),
     };
   }
+
+  async listModels(): Promise<ModelInfo[]> {
+    return openAiCompatListModels(this.cfg, MODELS_PATH, 'openrouter');
+  }
 }
 
 interface OpenAICallOpts {
@@ -123,16 +130,19 @@ export async function doOpenAICompatCall(
       headers,
       body: JSON.stringify(body),
       signal: req.abortSignal,
+      // Route through ProxyAgent when `cfg.proxyUrl` is set. fetch() in
+      // Node 18+ honours undici's `dispatcher` option.
+      ...(fetchProxyOpts(cfg.proxyUrl) as RequestInit),
     });
   } catch (e) {
-    throw Errors.upstream(`${opts.model}: network error`, {
+    throw Errors.llmTransient(`${opts.model}: network error`, {
       message: (e as Error).message,
     });
   }
 
   if (!res.ok) {
     const errText = await safeReadText(res);
-    throw Errors.upstream(`${opts.model}: HTTP ${res.status}`, {
+    throw Errors.llmTransient(`${opts.model}: HTTP ${res.status}`, {
       status: res.status,
       body: errText.slice(0, 500),
     });
@@ -142,14 +152,14 @@ export async function doOpenAICompatCall(
   try {
     json = (await res.json()) as OpenAIResponse;
   } catch (e) {
-    throw Errors.upstream(`${opts.model}: invalid JSON response`, {
+    throw Errors.llmTransient(`${opts.model}: invalid JSON response`, {
       message: (e as Error).message,
     });
   }
 
   const text = json.choices?.[0]?.message?.content;
   if (typeof text !== 'string') {
-    throw Errors.upstream(`${opts.model}: missing choices[0].message.content`);
+    throw Errors.llmTransient(`${opts.model}: missing choices[0].message.content`);
   }
 
   const usage = json.usage ?? {};
@@ -190,4 +200,81 @@ async function safeReadText(res: Response): Promise<string> {
   } catch {
     return '';
   }
+}
+
+interface OpenAIModelsResponse {
+  data?: Array<{
+    id?: string;
+    name?: string;
+    description?: string;
+    context_length?: number;
+    /** OpenRouter-specific. Strings, USD per token. */
+    pricing?: { prompt?: string; completion?: string };
+  }>;
+}
+
+/**
+ * Fetch the model catalogue from any OpenAI-compatible endpoint
+ * (`GET <baseUrl>/models`). Used by both OpenRouter and OpenAI-compat
+ * providers.
+ */
+export async function openAiCompatListModels(
+  cfg: ProviderConfig,
+  modelsPath: string,
+  providerLabel: string,
+): Promise<ModelInfo[]> {
+  const url = `${cfg.baseUrl || DEFAULT_BASE_URL}${modelsPath}`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${cfg.apiKey}`,
+        ...(cfg.defaultHeaders ?? {}),
+      },
+      ...(fetchProxyOpts(cfg.proxyUrl) as RequestInit),
+    });
+  } catch (e) {
+    throw Errors.upstream(`${providerLabel}: models network error`, {
+      message: (e as Error).message,
+    });
+  }
+  if (!res.ok) {
+    const body = await safeReadText(res);
+    throw Errors.upstream(`${providerLabel}: GET /models HTTP ${res.status}`, {
+      status: res.status,
+      body: body.slice(0, 500),
+    });
+  }
+  let json: OpenAIModelsResponse;
+  try {
+    json = (await res.json()) as OpenAIModelsResponse;
+  } catch (e) {
+    throw Errors.upstream(`${providerLabel}: /models invalid JSON`, {
+      message: (e as Error).message,
+    });
+  }
+  return (json.data ?? [])
+    .filter((m): m is { id: string } & typeof m => typeof m.id === 'string' && m.id.length > 0)
+    .map((m) => {
+      const out: ModelInfo = { id: m.id };
+      if (m.name) out.name = m.name;
+      if (m.description) out.description = m.description;
+      if (typeof m.context_length === 'number') out.contextLength = m.context_length;
+      const pp = parsePricing(m.pricing?.prompt);
+      const cp = parsePricing(m.pricing?.completion);
+      if (pp != null || cp != null) {
+        out.pricing = {};
+        if (pp != null) out.pricing.promptPer1M = pp * 1_000_000;
+        if (cp != null) out.pricing.completionPer1M = cp * 1_000_000;
+      }
+      return out;
+    })
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function parsePricing(s: string | undefined): number | null {
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
 }

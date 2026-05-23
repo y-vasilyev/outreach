@@ -20,6 +20,24 @@ export const usersService = {
     });
   },
 
+  async update(id: string, input: { email?: string; role?: 'admin' | 'operator' | 'viewer'; password?: string }) {
+    const prisma = getPrisma();
+    const data: { email?: string; role?: 'admin' | 'operator' | 'viewer'; passwordHash?: string } = {};
+    if (input.email) data.email = input.email;
+    if (input.role) data.role = input.role;
+    if (input.password) data.passwordHash = await bcrypt.hash(input.password, 10);
+    return prisma.user.update({
+      where: { id },
+      data,
+      select: { id: true, email: true, role: true, createdAt: true, updatedAt: true },
+    });
+  },
+
+  async remove(id: string) {
+    const prisma = getPrisma();
+    await prisma.user.delete({ where: { id } });
+  },
+
   async authenticate(email: string, password: string) {
     const prisma = getPrisma();
     const u = await prisma.user.findUnique({ where: { email } });

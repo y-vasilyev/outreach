@@ -2,8 +2,10 @@ import { z } from 'zod';
 
 import type { Agent } from '../types.js';
 import { invokeJson } from './_runtime.js';
+import { IntScoreCoerced } from './_coerce.js';
 
-const score1to5 = z.number().int().min(1).max(5);
+// Coerce strings ("high"/"low") and out-of-range numbers; clamp + round.
+const score1to5 = IntScoreCoerced(1, 5);
 
 export const qualityReviewerInputSchema = z.object({
   draft: z.string(),

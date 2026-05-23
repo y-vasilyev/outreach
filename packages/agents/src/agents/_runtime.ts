@@ -18,6 +18,7 @@ import type { ZodTypeAny, z } from 'zod';
 
 import type { AgentRunCtx } from '../types.js';
 import { renderTemplate } from '../promptRender.js';
+import { renderSchemaHints } from '../schemaHints.js';
 
 export interface PromptVars {
   [k: string]: unknown;
@@ -49,8 +50,21 @@ export async function invokeJson<S extends ZodTypeAny>(
     );
   }
 
-  const systemPrompt = renderTemplate(systemTpl, vars, ctx.logger);
-  const userPrompt = renderTemplate(userTpl, vars, ctx.logger);
+  // Auto-derive enum hints from the output schema and inject them. If the
+  // prompt has a `{{__schema_hints}}` placeholder, render there; otherwise
+  // append to the system prompt with a separator. Empty for schemas that
+  // contain no ZodEnum / ZodNativeEnum / discriminated string-literal union.
+  const schemaHints = renderSchemaHints(outputSchema);
+  const varsWithHints = { ...vars, __schema_hints: schemaHints };
+
+  let systemPrompt = renderTemplate(systemTpl, varsWithHints, ctx.logger);
+  const userPrompt = renderTemplate(userTpl, varsWithHints, ctx.logger);
+
+  if (schemaHints && !systemTpl.includes('{{__schema_hints}}') && !userTpl.includes('{{__schema_hints}}')) {
+    systemPrompt = systemPrompt
+      ? `${systemPrompt}\n\n${schemaHints}`
+      : schemaHints;
+  }
 
   const params = readParams(ctx.config.params);
   const req = {
@@ -65,9 +79,39 @@ export async function invokeJson<S extends ZodTypeAny>(
   };
 
   const { value } = await ctx.llm.completeJson<z.infer<S>>(req, (raw: string) =>
-    parseJsonStrict(raw, (v) => outputSchema.parse(v) as z.infer<S>),
+    parseJsonStrict(raw, (v) => outputSchema.parse(stripNulls(v)) as z.infer<S>),
   );
   return value;
+}
+
+/**
+ * Recursively replace `null` values with `undefined`. Why:
+ *
+ * LLMs (especially when JSON-mode is on) emit `null` as the "no value"
+ * sentinel — `"rewrite_hint": null`, `"summary": null`. Our schemas use
+ * `z.X.optional()` which only accepts `string | undefined`, not `null`.
+ * Rejecting these responses wastes a turn (or a whole repair pass for
+ * something the model would just emit again the same way). Stripping
+ * `null` once at the boundary is the cheap, robust fix.
+ *
+ * For object fields: delete the key (turning into `undefined` on read).
+ * For array elements: leave as-is (some agents expect arrays of nullable
+ *   items; we don't want to silently shorten arrays).
+ */
+function stripNulls(v: unknown): unknown {
+  if (v === null) return undefined;
+  if (Array.isArray(v)) {
+    return v.map((item) => stripNulls(item));
+  }
+  if (v && typeof v === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      if (val === null) continue; // drop `null` keys
+      out[k] = stripNulls(val);
+    }
+    return out;
+  }
+  return v;
 }
 
 /** Same as invokeJson but for free-text completions (no agent in this list uses it). */

@@ -1,4 +1,5 @@
 import type {
+  HistoryMessage,
   RecentPost,
   ResolvedChannel,
   ResolvedUser,
@@ -81,6 +82,23 @@ export function mockTelegramClientHandle(
         tgMsgId: String(Math.floor(Math.random() * 1_000_000)),
         sentAt: new Date().toISOString(),
       };
+    },
+
+    async fetchHistorySince(_opts: {
+      peerKey: string;
+      sinceTgMsgId?: string;
+      limit?: number;
+    }): Promise<HistoryMessage[]> {
+      // Empty by default — overrides supply concrete fixtures.
+      return [];
+    },
+
+    async downloadInboundMedia(_opts: {
+      peerKey: string;
+      tgMsgId: string;
+    }): Promise<Uint8Array | null> {
+      // No bytes by default — overrides supply concrete fixtures.
+      return null;
     },
 
     async startLogin(_phone: string) {

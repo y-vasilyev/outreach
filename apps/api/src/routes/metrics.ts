@@ -4,11 +4,5 @@ import { dashboardService } from '../services/dashboard.js';
 export async function metricsRoutes(app: FastifyInstance) {
   app.addHook('onRequest', app.authenticate);
 
-  app.get('/metrics/dashboard', async () => {
-    const [stats, byPlatform] = await Promise.all([
-      dashboardService.stats(),
-      dashboardService.byPlatform(),
-    ]);
-    return { stats, byPlatform };
-  });
+  app.get('/metrics/dashboard', { preHandler: [app.requireRole(['admin', 'operator', 'viewer'])] }, async () => dashboardService.stats());
 }

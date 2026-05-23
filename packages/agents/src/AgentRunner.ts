@@ -6,6 +6,7 @@ import { Errors, isAppError, AppError } from '@nosquare/shared/errors';
 import {
   createProvider,
   withFallback,
+  withRetry,
   withTokenAccounting,
   type LLMProvider,
   type ProviderConfig,
@@ -31,6 +32,13 @@ export interface ResolvedEndpoint {
   defaultHeaders?: Record<string, string>;
   /** Optional per-endpoint timeout override forwarded to ProviderConfig. */
   timeoutMs?: number;
+  /**
+   * Optional outbound HTTP/SOCKS proxy URL. Forwarded as-is to the
+   * provider's ProviderConfig so undici routes fetch() through it. The
+   * resolver is expected to have decrypted this from the endpoint auth
+   * envelope; the runner itself never touches the encrypted blob.
+   */
+  proxyUrl?: string;
 }
 
 /**
@@ -133,13 +141,38 @@ export class AgentRunner {
       throw new AppError('FORBIDDEN', `agent ${agentName} disabled`, 403);
     }
 
-    // 2. Apply overrides (shallow merge over DB record).
+    // 2. Apply overrides (shallow merge over DB record). `params` is
+    // deep-merged one level so a caller overriding e.g. `max_length` keeps
+    // the DB record's `temperature` / `max_tokens` — used by campaign-type
+    // safety profiles and per-campaign agentOverrides alike.
     const config: DbAgentConfig = ctx?.overrides
-      ? ({ ...dbConfig, ...ctx.overrides } as DbAgentConfig)
+      ? ({
+          ...dbConfig,
+          ...ctx.overrides,
+          ...(ctx.overrides.params !== undefined
+            ? {
+                params: {
+                  ...((dbConfig.params as Record<string, unknown> | null) ?? {}),
+                  ...(ctx.overrides.params as Record<string, unknown>),
+                },
+              }
+            : {}),
+        } as DbAgentConfig)
       : dbConfig;
 
-    // 3. Look up the agent from the registry & validate input.
-    const agent = agentRegistry.get(agentName);
+    // 3. Resolve the implementation & validate input.
+    //
+    // The common case: `agentName` is itself a registered implementation name
+    // (e.g. `opening_composer`) — use it directly. Custom configs saved by the
+    // campaign-type builder use a unique per-type `name` (e.g.
+    // `podcast_guesting_opening_composer`) that is NOT a registered
+    // implementation; for those we fall back to the registered agent named by
+    // `config.role` (the canonical implementation key the row should run as).
+    const implKey = agentRegistry.has(agentName) ? agentName : config.role;
+    if (!agentRegistry.has(implKey)) {
+      throw Errors.notFound('agent_impl', agentName);
+    }
+    const agent = agentRegistry.get(implKey);
     let parsedInput: unknown;
     try {
       parsedInput = agent.inputSchema.parse(input);
@@ -220,7 +253,14 @@ export class AgentRunner {
         startedAt: started,
         error: e instanceof Error ? e.message : String(e),
       });
-      log.error({ event: 'agent.runFailed', err: (e as Error).message }, 'agent run failed');
+      log.error(
+        {
+          event: 'agent.runFailed',
+          err: (e as Error).message,
+          ...(isAppError(e) ? { code: e.code, details: e.details } : {}),
+        },
+        'agent run failed',
+      );
       if (isAppError(e)) throw e;
       throw Errors.internal(`agent ${agentName} failed`, {
         message: (e as Error).message,
@@ -297,14 +337,77 @@ export class AgentRunner {
     };
 
     let output: T;
+    let acc: TokenAccumulator;
     try {
       output = (await agent.run(parsedInput, ctx)) as T;
       output = agent.outputSchema.parse(output) as T;
     } finally {
       // Always pull the accumulator so we don't leak entries on error.
-      // (Re-throw happens via finally + catch chain.)
+      acc = takeAcc(runId);
     }
-    const acc = takeAcc(runId);
+    return {
+      output,
+      tokensIn: acc.tokensIn,
+      tokensOut: acc.tokensOut,
+      costUsd: acc.costUsd,
+      latencyMs: Date.now() - started,
+    };
+  }
+
+  /**
+   * Like `dryRun`, but runs an agent against an INLINE config that does NOT
+   * exist in the DB yet. Used by the campaign-type builder to test drafted
+   * agents against fixtures before the operator saves them — so no live
+   * `agent_config` row is created before save (Decision D3). Never persists
+   * `agent_run`.
+   *
+   * `agentName` selects the agent implementation (run logic + schemas) from
+   * the registry; `config` supplies the prompts/model/params/endpoint to use.
+   */
+  async dryRunConfig<T>(
+    agentName: string,
+    config: DbAgentConfig,
+    input: unknown,
+  ): Promise<{
+    output: T;
+    tokensIn: number;
+    tokensOut: number;
+    costUsd: number;
+    latencyMs: number;
+  }> {
+    const started = Date.now();
+    const runId = randomUUID();
+    const log = this.logger.child({ runId, agent: agentName, dryRun: true });
+
+    const agent = agentRegistry.get(agentName);
+    const parsedInput = agent.inputSchema.parse(input);
+
+    const provider = await this.buildProvider(config, runId);
+
+    const agentLogger: AgentLogger = {
+      info: (...args) => log.info(args.length === 1 ? args[0] : args),
+      warn: (...args) => log.warn(args.length === 1 ? args[0] : args),
+      error: (...args) => log.error(args.length === 1 ? args[0] : args),
+      debug: (...args) => log.debug(args.length === 1 ? args[0] : args),
+    };
+
+    const ctx: AgentRunCtx = {
+      llm: provider,
+      config,
+      logger: agentLogger,
+      runId,
+    };
+
+    let output: T;
+    let acc: TokenAccumulator;
+    try {
+      output = (await agent.run(parsedInput, ctx)) as T;
+      output = agent.outputSchema.parse(output) as T;
+    } finally {
+      // Always pull the accumulator so a thrown run()/parse never leaks the
+      // runId-scoped token entry into the module-level Map.
+      acc = takeAcc(runId);
+    }
     return {
       output,
       tokensIn: acc.tokensIn,
@@ -323,19 +426,27 @@ export class AgentRunner {
     runId: string,
   ): Promise<LLMProvider> {
     const primaryRes = await this.endpointResolver(config.endpointId ?? null);
-    const primary = createProvider(primaryRes.provider, toProviderConfig(primaryRes));
+    const primaryRaw = createProvider(primaryRes.provider, toProviderConfig(primaryRes));
+    // One backoff retry on the primary endpoint before falling over. Without
+    // this, a single 5xx from Yandex flips us straight to OpenRouter (the
+    // typical fallback) — way more expensive than waiting 100ms and trying
+    // again. Schema/JSON failures aren't retried here (isTransient says no);
+    // those are handled by the repair-loop in `wrap.completeJson` instead.
+    const primary = withRetry(primaryRaw, { maxAttempts: 2, baseMs: 200 });
 
     let provider: LLMProvider;
     if (config.fallbackEndpointId) {
       const fbRes = await this.endpointResolver(config.fallbackEndpointId);
-      const fallback = createProvider(fbRes.provider, toProviderConfig(fbRes));
+      const fallbackRaw = createProvider(fbRes.provider, toProviderConfig(fbRes));
+      const fallback = withRetry(fallbackRaw, { maxAttempts: 2, baseMs: 200 });
       provider = withFallback(primary, fallback);
     } else {
       provider = primary;
     }
 
-    // Token accounting wraps last so every call (primary or fallback) is
-    // counted into the same runId-scoped accumulator.
+    // Token accounting wraps last so every call (primary, retry, fallback,
+    // and repair-loop pass) is counted into the same runId-scoped
+    // accumulator.
     return withTokenAccounting(provider, makeAccountingHook(runId));
   }
 
@@ -390,5 +501,6 @@ function toProviderConfig(r: ResolvedEndpoint): ProviderConfig {
   if (r.iamToken !== undefined) cfg.iamToken = r.iamToken;
   if (r.defaultHeaders !== undefined) cfg.defaultHeaders = r.defaultHeaders;
   if (r.timeoutMs !== undefined) cfg.timeoutMs = r.timeoutMs;
+  if (r.proxyUrl !== undefined) cfg.proxyUrl = r.proxyUrl;
   return cfg;
 }

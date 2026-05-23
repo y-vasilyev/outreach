@@ -4,6 +4,7 @@ import type {
   CompletionRequest,
   CompletionResponse,
   LLMProvider,
+  ModelInfo,
   ProviderConfig,
 } from '../types.js';
 
@@ -97,14 +98,14 @@ export class YandexProvider implements LLMProvider {
         signal: req.abortSignal,
       });
     } catch (e) {
-      throw Errors.upstream('yandex: network error', {
+      throw Errors.llmTransient('yandex: network error', {
         message: (e as Error).message,
       });
     }
 
     if (!res.ok) {
       const errText = await safeReadText(res);
-      throw Errors.upstream(`yandex: HTTP ${res.status}`, {
+      throw Errors.llmTransient(`yandex: HTTP ${res.status}`, {
         status: res.status,
         body: errText.slice(0, 500),
       });
@@ -114,7 +115,7 @@ export class YandexProvider implements LLMProvider {
     try {
       json = (await res.json()) as YandexResponse;
     } catch (e) {
-      throw Errors.upstream('yandex: invalid JSON response', {
+      throw Errors.llmTransient('yandex: invalid JSON response', {
         message: (e as Error).message,
       });
     }
@@ -122,7 +123,7 @@ export class YandexProvider implements LLMProvider {
     const alt = json.result?.alternatives?.[0];
     const text = alt?.message?.text;
     if (typeof text !== 'string') {
-      throw Errors.upstream('yandex: missing alternatives[0].message.text', {
+      throw Errors.llmTransient('yandex: missing alternatives[0].message.text', {
         modelVersion: json.result?.modelVersion,
       });
     }
@@ -168,6 +169,49 @@ export class YandexProvider implements LLMProvider {
     return hasVersion
       ? `gpt://${folder}/${model}`
       : `gpt://${folder}/${model}/latest`;
+  }
+
+  /**
+   * Try the OpenAI-compatible models endpoint Yandex AI Studio exposes
+   * (https://aistudio.yandex.ru/docs/ru/ai-studio/concepts/api.html); fall
+   * back to a hand-curated list of legacy gpt:// URIs when the catalogue
+   * call is unavailable for the configured baseUrl.
+   */
+  async listModels(): Promise<ModelInfo[]> {
+    try {
+      const url = `${this.cfg.baseUrl || DEFAULT_BASE_URL}/v1/models`;
+      const headers: Record<string, string> = { ...(this.cfg.defaultHeaders ?? {}) };
+      if (this.cfg.iamToken) headers.Authorization = `Bearer ${this.cfg.iamToken}`;
+      else if (this.cfg.apiKey) headers.Authorization = `Api-Key ${this.cfg.apiKey}`;
+      if (this.cfg.folderId) headers['x-folder-id'] = this.cfg.folderId;
+      const res = await fetch(url, { method: 'GET', headers });
+      if (res.ok) {
+        const json = (await res.json()) as { data?: Array<{ id?: string; name?: string }> };
+        const items = (json.data ?? [])
+          .filter((m): m is { id: string } & typeof m => typeof m.id === 'string' && m.id.length > 0)
+          .map((m) => ({ id: m.id, ...(m.name ? { name: m.name } : {}) }))
+          .sort((a, b) => a.id.localeCompare(b.id));
+        if (items.length > 0) return items;
+      }
+    } catch {
+      /* fall through to fallback */
+    }
+    const ids = [
+      'yandexgpt',
+      'yandexgpt/latest',
+      'yandexgpt/rc',
+      'yandexgpt-lite',
+      'yandexgpt-lite/latest',
+      'yandexgpt-lite/rc',
+      'yandexgpt-32k',
+      'yandexgpt-32k/latest',
+      'yandexgpt-32k/rc',
+      'llama',
+      'llama/latest',
+      'llama-lite',
+      'llama-lite/latest',
+    ];
+    return ids.map((id) => ({ id }));
   }
 }
 

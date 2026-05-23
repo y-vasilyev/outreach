@@ -2,12 +2,32 @@ import { z } from 'zod';
 
 import type { Agent } from '../types.js';
 import { invokeJson, readParams } from './_runtime.js';
+import { RiskScoreCoerced } from './_coerce.js';
 
 export const safetyFilterInputSchema = z.object({
   draft: z.string(),
   channel_analysis: z.record(z.unknown()).optional(),
   contact: z.record(z.unknown()).optional(),
   campaign: z.record(z.unknown()).optional(),
+  /**
+   * Campaign AJTBD non_goals — fed into the LLM tone check as
+   * additional risk context. Kept generic: non-goals do NOT become
+   * hard filters here (that's the gate's job in
+   * GoalFitEvaluator). SafetyFilter just biases the risk_score
+   * upward when the draft references a non-goal.
+   */
+  ajtbd_non_goals: z.array(z.string()).optional(),
+  /**
+   * Campaign-type safety profile vocabulary (agency-sourcing-matching
+   * change). `forbidden_topics` bias the risk_score UP when the draft
+   * touches them; `allowed_topics` are explicitly NOT penalised. This is
+   * how the same agent serves both CustDev (forbids ad-sales lexicon) and
+   * agency-sourcing (permits commercial lexicon) — the lists come from the
+   * campaign type's `safetyProfile`, not a global default. They remain
+   * advisory tone signals, never hard blocks (hard guards stay below).
+   */
+  forbidden_topics: z.array(z.string()).optional(),
+  allowed_topics: z.array(z.string()).optional(),
   /** Optional history to detect "do not message" cases. */
   history: z
     .array(
@@ -24,30 +44,34 @@ export const safetyFilterOutputSchema = z.object({
   allow: z.boolean(),
   reasons: z.array(z.string()).default([]),
   rewrite_hint: z.string().optional(),
-  risk_score: z.number().min(0).max(1),
+  // LLMs return scores in any of: 0..1 (correct), 0..100 (percent),
+  // sometimes 0..10 ("на сколько рискованно: 7"). Coerce all of those.
+  risk_score: RiskScoreCoerced,
 });
 
 export type SafetyFilterInput = z.infer<typeof safetyFilterInputSchema>;
 export type SafetyFilterOutput = z.infer<typeof safetyFilterOutputSchema>;
 
-const DEFAULT_FORBIDDEN = [
-  'реклама',
-  'рекламная',
-  'интеграц',
-  'купить рекламу',
-  'разместить',
-  'промо',
-  'приобрести',
-  'оффер',
-  'выгодное предложение',
-];
-
 const DEFAULT_MAX_LENGTH = 600;
 
-// Leading emoji check — Unicode property class.
-const LEADING_EMOJI_RE = /^\p{Extended_Pictographic}/u;
+const FALLBACK_SYSTEM = `Ты оцениваешь тон исходящего сообщения относительно цели кампании.
 
-const FALLBACK_SYSTEM = `Ты — последний фильтр безопасности перед отправкой CustDev-сообщения. Цель — НЕ продажа. Блокируй любые формулировки, звучащие как покупка рекламы, обещания результата, неуместные эмодзи в начале, восклицания в первой строке, ссылки без причины, нарушение «не пиши, если попросили». Возвращай JSON: { allow, reasons[], rewrite_hint?, risk_score }.`;
+Твоя задача — присвоить risk_score (0..1), отражающий, насколько сообщение звучит неуместно для этой кампании:
+- 0.0–0.2 — уместный тон, всё в порядке.
+- 0.3–0.5 — слегка натянуто, но допустимо.
+- 0.6–0.8 — заметно выбивается из цели кампании.
+- 0.9–1.0 — явный спам или агрессия.
+
+Правила оценки тем:
+- Если черновик затрагивает темы из «запрещённых тем» (forbidden_topics) — повышай risk_score.
+- Темы из «разрешённых тем» (allowed_topics) сами по себе риск НЕ повышают: для этой кампании они уместны (например, обсуждение рекламы/прайса в агентской кампании).
+- Если черновик затрагивает anti-цели (non_goals) — повышай risk_score.
+
+В reasons[] кратко перечисли поводы для оценки (если есть). В rewrite_hint можешь предложить, как переписать.
+
+ВАЖНО: ты только оцениваешь. Финальное решение об отправке принимает оператор и hard-guards уровнем выше. Поэтому всегда возвращай allow=true — твой risk_score важен сам по себе. Не блокируй из-за стиля, восклицаний или эмодзи.
+
+Формат: { allow: true, reasons: [...], rewrite_hint?: "...", risk_score: 0..1 }.`;
 
 const FALLBACK_USER = `Черновик:
 {{draft}}
@@ -55,6 +79,9 @@ const FALLBACK_USER = `Черновик:
 Канал: {{channel_analysis}}
 Контакт: {{contact}}
 Кампания: {{campaign}}
+Запрещённые темы (forbidden_topics — повышают risk_score): {{forbidden_topics}}
+Разрешённые темы (allowed_topics — уместны, риск не повышают): {{allowed_topics}}
+Anti-цели кампании (non_goals — если черновик их затрагивает, повышай risk_score; не блокируй): {{ajtbd_non_goals}}
 История: {{history}}
 
 Верни JSON.`;
@@ -64,110 +91,103 @@ export const safetyFilter: Agent<SafetyFilterInput, SafetyFilterOutput> = {
   description: 'Финальная проверка исходящего сообщения.',
   inputSchema: safetyFilterInputSchema,
   outputSchema: safetyFilterOutputSchema,
-  variables: ['draft', 'channel_analysis', 'contact', 'campaign', 'history'],
+  variables: [
+    'draft',
+    'channel_analysis',
+    'contact',
+    'campaign',
+    'forbidden_topics',
+    'allowed_topics',
+    'ajtbd_non_goals',
+    'history',
+  ],
   defaultModel: 'yandexgpt-lite',
   defaultParams: {
     temperature: 0,
     max_tokens: 250,
-    forbidden_topics: DEFAULT_FORBIDDEN,
-    escalation_keywords: [],
     max_length: DEFAULT_MAX_LENGTH,
     allow_links: false,
   },
   async run(input, ctx) {
     const params = readParams(ctx.config.params);
-    const forbidden = readStringArray(params.forbidden_topics, DEFAULT_FORBIDDEN);
     const maxLength =
       typeof params.max_length === 'number' ? params.max_length : DEFAULT_MAX_LENGTH;
     const allowLinks = params.allow_links === true;
 
-    const reasons: string[] = [];
+    /**
+     * Hard policy guards only. Substring/phrase matching for "salesy"
+     * keywords was both noisy (every "интеграция AI" got blocked) and
+     * brittle (LLM-written drafts in Russian rarely hit the literal
+     * phrases anyway). We trust the LLM nuance check below for tone —
+     * keep the deterministic checks for things the LLM physically cannot
+     * override:
+     *   - over the platform char limit
+     *   - naked URL in a CustDev opener (we never want a link in turn one)
+     *   - the recipient already declined (must escalate, not auto-reply)
+     */
+    const hardReasons: string[] = [];
     const draft = input.draft ?? '';
-    const draftLower = draft.toLowerCase();
 
-    // 1. forbidden_topics — substring (case-insensitive).
-    for (const word of forbidden) {
-      if (!word) continue;
-      if (draftLower.includes(word.toLowerCase())) {
-        reasons.push(`forbidden_topic:${word}`);
-      }
-    }
-
-    // 2. max_length.
     if (draft.length > maxLength) {
-      reasons.push(`max_length_exceeded:${draft.length}>${maxLength}`);
+      hardReasons.push(`max_length_exceeded:${draft.length}>${maxLength}`);
     }
-
-    // 3. leading emoji.
-    if (LEADING_EMOJI_RE.test(draft)) {
-      reasons.push('leading_emoji');
-    }
-
-    // 4. exclamation in first line.
-    const firstLine = draft.split(/\r?\n/, 1)[0] ?? '';
-    if (firstLine.includes('!')) {
-      reasons.push('exclamation_in_first_line');
-    }
-
-    // 5. links not allowed.
     if (!allowLinks && /https?:\/\/\S+/i.test(draft)) {
-      reasons.push('link_not_allowed');
+      hardReasons.push('link_not_allowed');
     }
-
-    // 6. recipient declined earlier — don't message without operator.
     if (Array.isArray(input.history)) {
       for (const h of input.history) {
         if (h.direction === 'in' && h.intent === 'declined') {
-          reasons.push('recipient_declined_earlier');
+          hardReasons.push('recipient_declined_earlier');
           break;
         }
       }
     }
 
-    if (reasons.length > 0) {
+    if (hardReasons.length > 0) {
       return {
         allow: false,
-        reasons,
+        reasons: hardReasons,
         risk_score: 1,
-        rewrite_hint: buildRewriteHint(reasons),
+        rewrite_hint: buildRewriteHint(hardReasons),
       };
     }
 
-    // No deterministic violations — ask the LLM for nuanced check.
-    return invokeJson({
+    // No hard violations — ask the LLM for a tone risk_score, but DO NOT
+    // let it set `allow: false`. Hard guards above are the only authoritative
+    // block; the LLM's verdict is advisory.
+    //
+    // Why: when the LLM had block authority it killed every variant on
+    // stylistic grounds (exclamations, emoji, "salesy"-by-vibes). The
+    // operator should see all variants with a risk badge and decide.
+    const llm = await invokeJson({
       ctx,
       vars: {
         draft,
         channel_analysis: input.channel_analysis ?? {},
         contact: input.contact ?? {},
         campaign: input.campaign ?? {},
+        forbidden_topics: input.forbidden_topics ?? [],
+        allowed_topics: input.allowed_topics ?? [],
+        ajtbd_non_goals: input.ajtbd_non_goals ?? [],
         history: input.history ?? [],
       },
       outputSchema: safetyFilterOutputSchema,
       fallbackSystemPrompt: FALLBACK_SYSTEM,
       fallbackUserPromptTemplate: FALLBACK_USER,
     });
+    return {
+      allow: true,
+      reasons: llm.reasons,
+      risk_score: llm.risk_score,
+      ...(llm.rewrite_hint ? { rewrite_hint: llm.rewrite_hint } : {}),
+    };
   },
 };
 
-function readStringArray(v: unknown, fallback: string[]): string[] {
-  if (Array.isArray(v) && v.every((x) => typeof x === 'string')) return v as string[];
-  return fallback;
-}
-
 function buildRewriteHint(reasons: string[]): string {
   const hints: string[] = [];
-  if (reasons.some((r) => r.startsWith('forbidden_topic'))) {
-    hints.push('Убери слова, звучащие как продажа рекламы.');
-  }
   if (reasons.some((r) => r.startsWith('max_length_exceeded'))) {
     hints.push('Сократи до 2–4 предложений.');
-  }
-  if (reasons.includes('leading_emoji')) {
-    hints.push('Не начинай сообщение с эмодзи.');
-  }
-  if (reasons.includes('exclamation_in_first_line')) {
-    hints.push('Убери восклицательный знак из первой строки.');
   }
   if (reasons.includes('link_not_allowed')) {
     hints.push('Не вставляй ссылки.');

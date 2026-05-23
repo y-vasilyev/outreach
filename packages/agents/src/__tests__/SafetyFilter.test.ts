@@ -3,29 +3,21 @@ import { describe, expect, it } from 'vitest';
 import { safetyFilter } from '../agents/SafetyFilter.js';
 import { makeCtx, makeConfig, makeLLM } from './_mocks.js';
 
-describe('safety_filter — deterministic rules', () => {
-  it('blocks drafts containing forbidden topics without calling LLM', async () => {
-    const llm = makeLLM();
-    const ctx = makeCtx({
-      llm,
-      config: makeConfig({
-        params: { forbidden_topics: ['реклама', 'оффер'], max_length: 600 },
-      }),
-    });
-    const out = await safetyFilter.run(
-      { draft: 'Привет, хочу предложить оффер по вашему каналу.' },
-      ctx,
-    );
-    expect(out.allow).toBe(false);
-    expect(out.reasons.some((r) => r.startsWith('forbidden_topic:'))).toBe(true);
-    expect(llm._calls.completeJson).toBe(0);
-  });
-
+/**
+ * SafetyFilter is now LLM-first: substring/phrase keyword search was removed
+ * (it falsely blocked normal Russian openers and was easily evaded anyway).
+ * Hard deterministic guards remain only for what the LLM cannot override:
+ *   - draft over the TG char limit
+ *   - naked URL in turn one
+ *   - recipient already declined
+ * Everything else flows to the LLM nuance check.
+ */
+describe('safety_filter — hard policy guards', () => {
   it('blocks overly long drafts without calling LLM', async () => {
     const llm = makeLLM();
     const ctx = makeCtx({
       llm,
-      config: makeConfig({ params: { max_length: 50, forbidden_topics: [] } }),
+      config: makeConfig({ params: { max_length: 50 } }),
     });
     const draft = 'a'.repeat(100);
     const out = await safetyFilter.run({ draft }, ctx);
@@ -34,39 +26,11 @@ describe('safety_filter — deterministic rules', () => {
     expect(llm._calls.completeJson).toBe(0);
   });
 
-  it('blocks leading emoji without calling LLM', async () => {
-    const llm = makeLLM();
-    const ctx = makeCtx({
-      llm,
-      config: makeConfig({ params: { forbidden_topics: [] } }),
-    });
-    const out = await safetyFilter.run(
-      { draft: '👋 Привет, давайте познакомимся.' },
-      ctx,
-    );
-    expect(out.allow).toBe(false);
-    expect(out.reasons).toContain('leading_emoji');
-    expect(llm._calls.completeJson).toBe(0);
-  });
-
-  it('blocks exclamation in first line', async () => {
-    const llm = makeLLM();
-    const ctx = makeCtx({
-      llm,
-      config: makeConfig({ params: { forbidden_topics: [] } }),
-    });
-    const out = await safetyFilter.run({ draft: 'Привет! Как дела?' }, ctx);
-    expect(out.allow).toBe(false);
-    expect(out.reasons).toContain('exclamation_in_first_line');
-  });
-
   it('blocks links when allow_links=false', async () => {
     const llm = makeLLM();
     const ctx = makeCtx({
       llm,
-      config: makeConfig({
-        params: { forbidden_topics: [], allow_links: false },
-      }),
+      config: makeConfig({ params: { allow_links: false } }),
     });
     const out = await safetyFilter.run(
       { draft: 'Привет, посмотри https://nosquare.io' },
@@ -79,10 +43,7 @@ describe('safety_filter — deterministic rules', () => {
 
   it('blocks if recipient previously declined', async () => {
     const llm = makeLLM();
-    const ctx = makeCtx({
-      llm,
-      config: makeConfig({ params: { forbidden_topics: [] } }),
-    });
+    const ctx = makeCtx({ llm, config: makeConfig({}) });
     const out = await safetyFilter.run(
       {
         draft: 'Привет, может всё-таки обсудим?',
@@ -94,25 +55,49 @@ describe('safety_filter — deterministic rules', () => {
     expect(out.reasons).toContain('recipient_declined_earlier');
   });
 
-  it('falls through to LLM only when all hard rules pass', async () => {
+  // Anything that isn't a hard block is delegated to the LLM. We verify
+  // the hand-off; the LLM mock just rubber-stamps.
+  it('delegates tone judgment to LLM when no hard blocks fire', async () => {
     const llm = makeLLM({
-      completeJsonImpl: () => ({
-        allow: true,
-        reasons: [],
-        risk_score: 0.1,
-      }),
+      completeJsonImpl: () => ({ allow: true, reasons: [], risk_score: 0.1 }),
     });
-    const ctx = makeCtx({
-      llm,
-      config: makeConfig({
-        params: { forbidden_topics: [], allow_links: false },
-      }),
-    });
+    const ctx = makeCtx({ llm, config: makeConfig({}) });
     const out = await safetyFilter.run(
-      { draft: 'Здравствуйте. Хочу позвать вас на короткое 20-минутное интервью по нашему продукту.' },
+      { draft: 'Здравствуйте, Иван! Зову на 20-минутное интервью по нашему продукту.' },
       ctx,
     );
     expect(out.allow).toBe(true);
     expect(llm._calls.completeJson).toBe(1);
+  });
+
+  // Defensive coercion: LLM returns risk_score on a 0..10 scale ("7") or
+  // 0..100 ("85") — the schema must accept and clamp.
+  it('coerces risk_score from 0..10 / 0..100 scales', async () => {
+    const llm = makeLLM({
+      completeJsonImpl: () => ({ allow: false, reasons: ['salesy'], risk_score: 7 }),
+    });
+    const ctx = makeCtx({ llm, config: makeConfig({}) });
+    const out = await safetyFilter.run({ draft: 'окей' }, ctx);
+    // 7 on a 0..100 percent scale → 0.07; on a 0..10 scale → 0.7. Either
+    // way it must be in [0, 1].
+    expect(out.risk_score).toBeGreaterThanOrEqual(0);
+    expect(out.risk_score).toBeLessThanOrEqual(1);
+  });
+
+  // Regression: LLM emits `null` for optional fields. The runtime strips
+  // null → undefined before zod validation so optional() works.
+  it('accepts rewrite_hint: null on the LLM side', async () => {
+    const llm = makeLLM({
+      completeJsonImpl: () => ({
+        allow: true,
+        reasons: [],
+        rewrite_hint: null,
+        risk_score: 0,
+      }),
+    });
+    const ctx = makeCtx({ llm, config: makeConfig({}) });
+    const out = await safetyFilter.run({ draft: 'обычный текст' }, ctx);
+    expect(out.allow).toBe(true);
+    expect(out.rewrite_hint).toBeUndefined();
   });
 });

@@ -1,15 +1,45 @@
-import { getPrisma, encryptString, decryptString } from '@nosquare/db';
+import { getPrisma, encryptString, decryptString, Prisma } from '@nosquare/db';
 import { Errors } from '@nosquare/shared';
 import { TgClient } from '@nosquare/tg-client';
 import { env } from '../env.js';
+import { logger } from '../logger.js';
+import { tgBootstrapFromEnv, tgProxyFromEnv } from './tg-config.js';
+
+function isRecordNotFound(err: unknown): boolean {
+  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025';
+}
 
 let _tgClient: TgClient | undefined;
+
+function sameUtcDay(a: Date, b: Date): boolean {
+  return (
+    a.getUTCFullYear() === b.getUTCFullYear() &&
+    a.getUTCMonth() === b.getUTCMonth() &&
+    a.getUTCDate() === b.getUTCDate()
+  );
+}
+
+async function rolloverDailyCountersForList(): Promise<void> {
+  const prisma = getPrisma();
+  const now = new Date();
+  const rows = await prisma.tgAccount.findMany({ select: { id: true, dayRolledAt: true } });
+  const stale = rows
+    .filter((r) => !r.dayRolledAt || !sameUtcDay(r.dayRolledAt, now))
+    .map((r) => r.id);
+  if (stale.length === 0) return;
+  await prisma.tgAccount.updateMany({
+    where: { id: { in: stale } },
+    data: { sentTodayMsg: 0, sentTodayNew: 0, dayRolledAt: now },
+  });
+}
 
 export function getTgClient(): TgClient {
   if (!_tgClient) {
     if (!env.TG_API_ID || !env.TG_API_HASH) {
       throw Errors.badRequest('TG_API_ID/TG_API_HASH not configured');
     }
+    const proxy = tgProxyFromEnv();
+    const bootstrap = tgBootstrapFromEnv();
     _tgClient = new TgClient({
       creds: { apiId: Number(env.TG_API_ID), apiHash: env.TG_API_HASH },
       defaultRateLimits: {
@@ -17,6 +47,9 @@ export function getTgClient(): TgClient {
         msgPerDay: 30,
         newContactsPerDay: 15,
       },
+      ...(proxy ? { proxy } : {}),
+      ...(bootstrap ? { bootstrap } : {}),
+      ...(env.TG_PROXY_FORCE_PORT_443 ? { forcePort443: true } : {}),
       sessionLoader: {
         load: async (id) => {
           const prisma = getPrisma();
@@ -27,18 +60,36 @@ export function getTgClient(): TgClient {
         save: async (id, sessionString) => {
           const enc = await encryptString(sessionString);
           const prisma = getPrisma();
-          await prisma.tgAccount.update({
-            where: { id },
-            data: { sessionEncrypted: enc, status: 'active' },
-          });
+          try {
+            await prisma.tgAccount.update({
+              where: { id },
+              data: { sessionEncrypted: enc, status: 'active' },
+            });
+          } catch (err) {
+            if (!isRecordNotFound(err)) throw err;
+            logger.warn(
+              { tgAccountId: id },
+              'tg session save skipped: tg_account row not found (bootstrap-only session?)',
+            );
+          }
         },
         markStatus: async (id, status) => {
           const prisma = getPrisma();
-          await prisma.tgAccount.update({ where: { id }, data: { status } });
+          try {
+            await prisma.tgAccount.update({ where: { id }, data: { status } });
+          } catch (err) {
+            if (!isRecordNotFound(err)) throw err;
+            logger.warn({ tgAccountId: id, status }, 'tg markStatus skipped: row not found');
+          }
         },
         setCooldownUntil: async (id, until) => {
           const prisma = getPrisma();
-          await prisma.tgAccount.update({ where: { id }, data: { cooldownUntil: until } });
+          try {
+            await prisma.tgAccount.update({ where: { id }, data: { cooldownUntil: until } });
+          } catch (err) {
+            if (!isRecordNotFound(err)) throw err;
+            logger.warn({ tgAccountId: id }, 'tg setCooldownUntil skipped: row not found');
+          }
         },
       },
     });
@@ -49,6 +100,7 @@ export function getTgClient(): TgClient {
 export const tgAccountsService = {
   async list() {
     const prisma = getPrisma();
+    await rolloverDailyCountersForList();
     return prisma.tgAccount.findMany({ orderBy: { createdAt: 'desc' } });
   },
 

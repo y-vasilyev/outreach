@@ -1,5 +1,5 @@
 /**
- * Side-effect import: registers all 12 agents into `agentRegistry`.
+ * Side-effect import: registers all agents into `agentRegistry`.
  *
  * Importing this module from `packages/agents/src/index.ts` is enough; callers
  * that only need a specific agent's schemas can also import the file directly.
@@ -16,9 +16,16 @@ import { replyComposer } from './ReplyComposer.js';
 import { intentClassifier } from './IntentClassifier.js';
 import { safetyFilter } from './SafetyFilter.js';
 import { handoffDecider } from './HandoffDecider.js';
+import { goalFitEvaluator } from './GoalFitEvaluator.js';
 import { conversationSummarizer } from './ConversationSummarizer.js';
 import { nextActionPlanner } from './NextActionPlanner.js';
 import { qualityReviewer } from './QualityReviewer.js';
+import { campaignTypeBuilder } from './CampaignTypeBuilder.js';
+import { agencyOpeningComposer } from './AgencyOpeningComposer.js';
+import { dataCollectionPlanner } from './DataCollectionPlanner.js';
+import { rateCardExtractor } from './RateCardExtractor.js';
+import { audienceStatsExtractor } from './AudienceStatsExtractor.js';
+import { bloggerMatcher } from './BloggerMatcher.js';
 
 agentRegistry.register(channelAnalyzer);
 agentRegistry.register(contactExtractor);
@@ -29,9 +36,16 @@ agentRegistry.register(replyComposer);
 agentRegistry.register(intentClassifier);
 agentRegistry.register(safetyFilter);
 agentRegistry.register(handoffDecider);
+agentRegistry.register(goalFitEvaluator);
 agentRegistry.register(conversationSummarizer);
 agentRegistry.register(nextActionPlanner);
 agentRegistry.register(qualityReviewer);
+agentRegistry.register(campaignTypeBuilder);
+agentRegistry.register(agencyOpeningComposer);
+agentRegistry.register(dataCollectionPlanner);
+agentRegistry.register(rateCardExtractor);
+agentRegistry.register(audienceStatsExtractor);
+agentRegistry.register(bloggerMatcher);
 
 export {
   channelAnalyzer,
@@ -43,9 +57,16 @@ export {
   intentClassifier,
   safetyFilter,
   handoffDecider,
+  goalFitEvaluator,
   conversationSummarizer,
   nextActionPlanner,
   qualityReviewer,
+  campaignTypeBuilder,
+  agencyOpeningComposer,
+  dataCollectionPlanner,
+  rateCardExtractor,
+  audienceStatsExtractor,
+  bloggerMatcher,
 };
 
 export * from './ChannelAnalyzer.js';
@@ -57,6 +78,13 @@ export * from './ReplyComposer.js';
 export * from './IntentClassifier.js';
 export * from './SafetyFilter.js';
 export * from './HandoffDecider.js';
+export * from './GoalFitEvaluator.js';
 export * from './ConversationSummarizer.js';
 export * from './NextActionPlanner.js';
 export * from './QualityReviewer.js';
+export * from './CampaignTypeBuilder.js';
+export * from './AgencyOpeningComposer.js';
+export * from './DataCollectionPlanner.js';
+export * from './RateCardExtractor.js';
+export * from './AudienceStatsExtractor.js';
+export * from './BloggerMatcher.js';

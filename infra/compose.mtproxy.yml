@@ -1,0 +1,38 @@
+# Standalone MTProxy server for local testing of the GramJS MTProxy code path.
+#
+# IMPORTANT: this is NOT a chained relay. It does not forward through any
+# upstream MTProxy you may have configured — it speaks MTProto directly to
+# Telegram DCs. Use it only to verify that our tg-client / SessionManager
+# correctly handles an MTProxy connection end-to-end.
+#
+# Run:
+#   docker compose -f infra/compose.mtproxy.yml up -d
+#   docker compose -f infra/compose.mtproxy.yml logs -f mtg
+#
+# Then in the root .env:
+#   TG_PROXY_TYPE=mtproxy
+#   TG_PROXY_IP=127.0.0.1
+#   TG_PROXY_PORT=8443
+#   TG_PROXY_SECRET=deadbeefdeadbeefdeadbeefdeadbeef
+#
+# The secret below is a fixed 32-hex (16-byte) "simple" mode secret. GramJS
+# accepts both raw 32-hex and dd-prefixed 34-hex formats; mtg v1 accepts the
+# same. Generate a fresh one with:
+#   docker run --rm nineseconds/mtg:1.0.7 generate-secret simple
+#
+# Why mtg v1 and not v2: v2 is fake-TLS-only and GramJS does not implement
+# fake-TLS obfuscation, so v2 would never accept our handshake. v1 still ships
+# the legacy "simple" mode that GramJS speaks.
+
+services:
+  mtg:
+    image: nineseconds/mtg:1.0.7
+    container_name: outreach-mtg
+    ports:
+      - "8443:3128"
+    command:
+      - "run"
+      - "-b"
+      - "0.0.0.0:3128"
+      - "deadbeefdeadbeefdeadbeefdeadbeef"
+    restart: unless-stopped

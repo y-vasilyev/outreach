@@ -11,6 +11,8 @@ import { Errors } from '@nosquare/shared/errors';
  */
 export function extractJson(text: string): string {
   if (typeof text !== 'string') {
+    // Programmer error — caller passed a non-string. Distinct from the
+    // content-level failures below.
     throw Errors.badRequest('extractJson: input must be a string');
   }
 
@@ -26,7 +28,10 @@ export function extractJson(text: string): string {
   // that respects string literals and escapes.
   const openIdx = findFirstStructural(body);
   if (openIdx < 0) {
-    throw Errors.badRequest('extractJson: no JSON object or array found', {
+    // Model returned prose instead of JSON ("Sorry, I can't do that.").
+    // This is a content failure, not a programmer/transport bug — surface it
+    // as LLM_INVALID_JSON so the repair-loop in wrap.completeJson kicks in.
+    throw Errors.llmInvalidJson('extractJson: no JSON object or array found', {
       preview: body.slice(0, 200),
     });
   }
@@ -63,7 +68,9 @@ export function extractJson(text: string): string {
     }
   }
 
-  throw Errors.badRequest('extractJson: unbalanced JSON', {
+  // Model started a JSON block but didn't close it (truncation, max_tokens
+  // hit, …). Same category as "no JSON" — repairable.
+  throw Errors.llmInvalidJson('extractJson: unbalanced JSON', {
     preview: body.slice(0, 200),
   });
 }
@@ -78,7 +85,12 @@ function findFirstStructural(s: string): number {
 
 /**
  * Extracts JSON from `text`, parses it, then validates with the supplied
- * parser callback (typically a zod `.parse`). Throws AppError on any failure.
+ * parser callback (typically a zod `.parse`). Throws:
+ *   - `LLM_INVALID_JSON` when the model didn't return parseable JSON at all.
+ *   - `LLM_SCHEMA_FAILED` when JSON parsed but failed validation. The error's
+ *     `details.message` is the zod message and `details.preview` is the raw
+ *     JSON — the repair-loop in `wrap.completeJson` feeds both back to the
+ *     model on the retry attempt.
  */
 export function parseJsonStrict<T>(text: string, parser: (v: unknown) => T): T {
   const json = extractJson(text);
@@ -86,7 +98,7 @@ export function parseJsonStrict<T>(text: string, parser: (v: unknown) => T): T {
   try {
     parsed = JSON.parse(json);
   } catch (e) {
-    throw Errors.upstream('LLM returned invalid JSON', {
+    throw Errors.llmInvalidJson('LLM returned invalid JSON', {
       message: (e as Error).message,
       preview: json.slice(0, 200),
     });
@@ -94,8 +106,11 @@ export function parseJsonStrict<T>(text: string, parser: (v: unknown) => T): T {
   try {
     return parser(parsed);
   } catch (e) {
-    throw Errors.upstream('LLM JSON failed validation', {
+    throw Errors.llmSchemaFailed('LLM JSON failed validation', {
       message: (e as Error).message,
+      // First 600 chars of the response is enough to tell whether the model
+      // returned the wrong schema, hallucinated fields, etc.
+      preview: json.slice(0, 600),
     });
   }
 }

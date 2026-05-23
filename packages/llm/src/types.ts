@@ -47,6 +47,19 @@ export interface CompletionResponse {
   providerUsed?: string;
 }
 
+export interface ModelInfo {
+  /** Provider-specific model id passed back as `CompletionRequest.model`. */
+  id: string;
+  /** Human-friendly name (defaults to id when the provider doesn't ship one). */
+  name?: string;
+  /** Free-form provider description. */
+  description?: string;
+  /** Max input context window (tokens) when reported. */
+  contextLength?: number;
+  /** Pricing in USD per 1M tokens, when reported. */
+  pricing?: { promptPer1M?: number; completionPer1M?: number };
+}
+
 export interface LLMProvider {
   readonly kind: ProviderKind;
   complete(req: CompletionRequest): Promise<CompletionResponse>;
@@ -56,6 +69,8 @@ export interface LLMProvider {
   ): Promise<{ value: T; meta: CompletionResponse }>;
   /** Cheap synchronous estimate. Used for budgeting before a real call. */
   estimateTokens(text: string): number;
+  /** List models this endpoint can serve. May be cached / hardcoded. */
+  listModels(): Promise<ModelInfo[]>;
 }
 
 export interface ProviderConfig {
@@ -67,6 +82,19 @@ export interface ProviderConfig {
   iamToken?: string;
   defaultHeaders?: Record<string, string>;
   timeoutMs?: number;
+  /**
+   * Optional outbound HTTP/HTTPS/SOCKS proxy for the provider's API calls.
+   * Examples:
+   *   - "http://user:pass@proxy.example.com:8080"
+   *   - "https://proxy.example.com:443"
+   *   - "socks5://user:pass@10.0.0.1:1080"
+   *
+   * Uses an undici ProxyAgent under the hood, applied to fetch() calls in
+   * each provider. Currently honoured by OpenRouter and OpenAI-compat
+   * providers (Yandex's API is geo-unrestricted from RU and we keep its
+   * client unchanged).
+   */
+  proxyUrl?: string;
 }
 
 export interface TokenAccountingRun {

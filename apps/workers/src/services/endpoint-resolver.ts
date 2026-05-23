@@ -5,6 +5,13 @@ interface AuthEnvelope {
   apiKey?: string;
   folderId?: string;
   iamToken?: string;
+  /**
+   * Outbound proxy URL. Stored encrypted alongside the API key because
+   * many proxies embed credentials. Forwarded into ProviderConfig.proxyUrl
+   * so undici routes the LLM fetch() through it. Without this the
+   * worker's agent calls bypassed the configured proxy entirely.
+   */
+  proxyUrl?: string;
 }
 
 export async function resolveEndpoint(endpointId: string | null) {
@@ -20,6 +27,7 @@ export async function resolveEndpoint(endpointId: string | null) {
     apiKey: auth.apiKey ?? '',
     folderId: auth.folderId,
     iamToken: auth.iamToken,
+    proxyUrl: auth.proxyUrl,
     defaultHeaders: ep.defaultHeaders as Record<string, string>,
   };
 }

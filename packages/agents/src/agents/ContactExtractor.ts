@@ -2,16 +2,27 @@ import { z } from 'zod';
 
 import type { Agent } from '../types.js';
 import { invokeJson, readParams } from './_runtime.js';
+import { ConfidenceCoerced } from './_coerce.js';
 
 export const contactCandidateSchema = z.object({
   type: z.enum(['tg_username', 'tg_link', 'email', 'phone', 'website', 'other']),
   raw_value: z.string(),
   context_snippet: z.string(),
+  /** Deterministic role hint from regex.ts. LLM may override but should explain why. */
+  role_hint: z
+    .enum(['owner', 'ad_manager', 'bot', 'generic', 'unknown'])
+    .default('unknown'),
 });
 
 export const contactExtractorInputSchema = z.object({
   platform: z.string(),
   channel_title: z.string(),
+  /**
+   * Channel's own handle (no `@`, lowercased). Required so the agent can
+   * reject self-references — without it the LLM happily lists the channel
+   * itself as a contact.
+   */
+  channel_handle: z.string().optional(),
   description: z.string(),
   links: z.array(z.string()).default([]),
   recent_posts_text: z.string().default(''),
@@ -32,7 +43,8 @@ export const extractedContactSchema = z.object({
   raw_value: z.string(),
   role_guess: z.enum(['owner', 'ad_manager', 'generic', 'bot', 'unknown']),
   label: z.string().optional(),
-  confidence: z.number().min(0).max(1),
+  // Coerce qualitative LLM outputs ("medium"/"high"/"низкая") → 0..1.
+  confidence: ConfidenceCoerced,
   rationale: z.string(),
 });
 
@@ -45,22 +57,50 @@ export type ContactExtractorInput = z.infer<typeof contactExtractorInputSchema>;
 export type ContactExtractorOutput = z.infer<typeof contactExtractorOutputSchema>;
 export type ExtractedContact = z.infer<typeof extractedContactSchema>;
 
-const FALLBACK_SYSTEM = `Ты ищешь в описании и постах канала контакты, по которым можно написать «по рекламе» или «по сотрудничеству». Тебе уже дали список найденных кандидатов регулярками — твоя задача классифицировать каждого: это владелец канала, рекламный менеджер, бот для заявок, общий контакт или нерелевантно. Если в тексте есть контакты, которые регулярки пропустили (например, упомянуты словами) — добавь их. Не выдумывай контактов, которых нет в тексте. Возвращай JSON по схеме.
+const FALLBACK_SYSTEM = `Ты ищешь в описании и постах канала контакты, по которым можно написать «по рекламе» или «по сотрудничеству». Тебе уже дали список кандидатов регулярками вместе с предварительной ролью (role_hint) — она вычислена по словам рядом с контактом. Твоя задача:
+1. Подтвердить или скорректировать роль каждого кандидата.
+2. ОТФИЛЬТРОВАТЬ нерелевантные.
+3. Добавить только те контакты, которые регулярки пропустили (упомянуты словами), но которые точно есть в тексте.
 
-Типы ролей:
-- owner — личный аккаунт автора канала
-- ad_manager — отдельный аккаунт «по рекламе», менеджер
-- bot — бот для заявок (@xxxbot, ссылка на форму)
-- generic — контакт без явной роли
-- unknown — не удалось определить`;
+НИКОГДА НЕ ИЗВЛЕКАЙ:
+- Свой канал ({{channel_handle}}) — это не контакт для аутрича.
+- Сайты/handle регуляторов: rkn.gov.ru, gosuslugi.ru, knd.gov.ru, *.gov.* и подобные «реестр», «регистрация в РКН» — это не контакт.
+- Платёжные/донат-ссылки (qiwi, yoomoney, donationalerts, boosty, patreon, paypal) — это не контакт.
+- Чужие каналы для кросс-промо («наш второй канал», «подпишитесь на», «читайте также») — это не контакт.
+- Курсы, тренинги, лендинги продуктов — даже если рядом есть @handle, это не outreach-контакт.
+- Дисклеймеры «не размещаю рекламу», «без рекламы» — handle рядом с такой фразой → не контакт.
+- @username из чужих email-адресов (foo@example.com — это email, а не tg).
+
+Как определять роль:
+- ad_manager — рядом слова: реклама, коллаб, сотрудничество, интеграция, размещение, partnership, ads, promo, business. ПРИОРИТЕТ для аутрича.
+- owner — рядом слова: автор, основатель, создатель, founder, owner, «пишу я», «веду канал».
+- bot — handle оканчивается на _bot/bot и контекст НЕ говорит о приёме рекламы.
+- generic — общий контакт (поддержка, связь по любым вопросам).
+- unknown — нет сигнала; ставь confidence ≤ 0.4.
+
+Confidence calibration:
+- 0.9+ — явная фраза «по рекламе пишите @x» / «автор @y».
+- 0.6–0.8 — есть тематический сигнал, но не однозначный.
+- 0.3–0.5 — handle есть, контекст невнятный.
+- < 0.3 — почти угадывание, лучше дропнуть.
+
+В rationale ОБЯЗАТЕЛЬНО процитируй фрагмент текста (5–10 слов), на котором ты основывал решение по роли. Это нужно для верификации. Если процитировать нечего — ставь role=unknown и confidence ≤ 0.3.
+
+Поле label — это НЕ просто слово «реклама». Сохраняй туда короткий полезный фрагмент рядом с контактом целиком: кто на связи, роль, условия и часы. Пример: «На связи Кристина, автор @writeforfriends. Связь в будни 10-19:00. Без ссылок не отвечаю». Этот label потом пойдёт в первое сообщение.
+
+Возвращай только JSON по схеме.`;
 
 const FALLBACK_USER = `Платформа: {{platform}}
-Канал: {{channel_title}}
-Описание: {{description}}
-Ссылки: {{links}}
-Последние посты: {{recent_posts_text}}
+Канал: {{channel_title}} (свой handle: @{{channel_handle}})
+Описание:
+{{description}}
 
-Кандидаты от регулярок:
+Ссылки: {{links}}
+
+Последние посты:
+{{recent_posts_text}}
+
+Кандидаты от регулярок (role_hint — предварительная роль по контексту):
 {{regex_candidates}}
 
 Верни JSON: { contacts: [...], no_contacts_reason?: string }.`;
@@ -73,6 +113,7 @@ export const contactExtractor: Agent<ContactExtractorInput, ContactExtractorOutp
   variables: [
     'platform',
     'channel_title',
+    'channel_handle',
     'description',
     'links',
     'recent_posts_text',
@@ -90,11 +131,12 @@ export const contactExtractor: Agent<ContactExtractorInput, ContactExtractorOutp
       ctx,
       vars: {
         ...input,
+        channel_handle: input.channel_handle ?? '',
         links: input.links.join(', '),
         regex_candidates: input.regex_candidates
           .map(
             (c, i) =>
-              `${i + 1}. [${c.type}] ${c.raw_value} — context: "${c.context_snippet}"`,
+              `${i + 1}. [${c.type}] ${c.raw_value} (role_hint=${c.role_hint}) — context: "${c.context_snippet}"`,
           )
           .join('\n'),
       },

@@ -466,7 +466,10 @@ audit_log (
 
 ## Метрики
 
-Prometheus + страница `/metrics`:
+API отдаёт агрегированную дашборд-статистику JSON-ом на `GET /metrics/dashboard`
+(см. секцию M9 ниже). Прометеевский экспортер `/metrics` в текстовом формате —
+отложен; перечисленные ниже серии описывают целевую модель метрик, а не текущий
+endpoint:
 
 - `tg_send_total{account, status}`, `tg_floodwait_seconds_total{account}`
 - `agent_run_duration_seconds{agent}`, `agent_tokens_total{agent, direction}`, `agent_cost_usd_total{agent, endpoint}`
@@ -488,3 +491,146 @@ Prometheus + страница `/metrics`:
 - Multi-tenant (org_id + RLS).
 - Email/IG-DM/YT отправка — каналы для следующих итераций.
 - A/B-тесты опенеров (сейчас — через ручные оверрайды кампаний).
+
+---
+
+## Agency sourcing & matching (campaign types)
+
+Расширение под вторую модель работы — агентство по размещению рекламы — поверх
+CustDev. Реализовано как **реестр типов кампаний** (`campaign_type`), а не
+второй хардкод-режим. Всё новое — за фичефлагами (`ENABLE_CAMPAIGN_TYPES`,
+`ENABLE_AGENCY_SOURCING`, `ENABLE_OBJECT_STORAGE`, `ENABLE_BLOGGER_MATCHING`,
+по умолчанию off) — при выключенных флагах поведение CustDev байт-в-байт.
+
+### Новые сущности БД (миграции 6–7)
+
+```sql
+campaign_type (                       -- справочник типов кампаний
+  id, key UNIQUE, name, description,
+  goal_schema JSONB,                  -- JSON-schema для campaign.goal
+  agent_set JSONB,                    -- map: pipeline-role -> { agentName, overrides }
+  safety_profile JSONB,               -- forbidden_topics, allowed_topics, allow_links, max_length
+  autonomy_policy JSONB,              -- defaultMode, пороги, forceHandoffIntents
+  built_in BOOL, enabled BOOL, ...
+)
+campaign.type_id  FK campaign_type   -- NOT NULL с миграции 7 (backfill → custdev)
+campaign.goal     JSONB              -- валидируется против type.goal_schema (для custdev = AJTBD)
+
+blogger_profile (                    -- стандартизованный каталог блогеров
+  id, channel_id UNIQUE,
+  topics[], languages[], formats[],
+  audience JSONB, rate_cards JSONB, reach, avg_views, captured_at, ...
+)
+profile_data_point (                 -- провенанс: один факт + сырой фрагмент
+  id, profile_id FK, field, value JSONB, unit, confidence,
+  extracted_by, source_message_id, raw_snippet, captured_at
+)
+media_asset (                        -- файлы в S3 + снапшоты сырья
+  id, conversation_id, profile_id FK, kind, s3_key, mime, bytes, sha256, source_tg_msg_id
+)
+ad_brief (                           -- входящая заявка на рекламу
+  id, topic, audience_target, budget, formats[], geo[], deadline, notes
+)
+match_result (                       -- ранжированные кандидаты под бриф (аудит)
+  id, brief_id FK, profile_id FK, score, rationale, reranked_by_llm
+)
+```
+
+`custdev` AJTBD больше не обязателен на каждой кампании концептуально — это
+`goal_schema` типа `custdev`. Но на практике колонка `campaign.ajtbd` ещё
+сохранена (зеркалит `campaign.goal` для типа `custdev`) и именно её читает
+воркер на `on_inbound`/`followup`: `GoalFitEvaluator` получает разобранный
+`campaign.ajtbd`, а не `campaign.goal` напрямую. Прямое чтение `campaign.goal`
+отложено до релиза, в котором `campaign.ajtbd` дропается (она оставлена на один
+релиз для безопасного отката).
+
+### Object storage (`packages/storage`)
+
+`ObjectStore` — обёртка над S3-совместимым SDK (MinIO в dev, `S3_*` env),
+ленивая и за `ENABLE_OBJECT_STORAGE`. Ключи `bloggers/{profileId}/{assetId}`.
+Доступ из UI — только через presigned URL (API выдаёт короткоживущие GET/PUT),
+креды не логируются (`redact()`). Входящие файлы из TG: `tg-listen` качает
+байты через `tg-client.downloadInboundMedia` → `putObject` → `media_asset`
+(s3_key проставляется только при успешной загрузке, иначе honest-pending +
+API отдаёт 409 вместо мёртвой ссылки). Сырые ответы (текст + распарсенный
+JSON) снапшотятся в S3 детерминированным ключом. При выключенном/недоступном
+сторадже — лог-варнинг, диалог не падает.
+
+### Подбор (matching)
+
+`ad_brief` → детерминированный prefilter по `blogger_profile` (overlap по
+теме/гео/форматам + отсечение over-budget по релевантному прайсу) → взвешенный
+скоринг с rationale → `match_result`. Опциональный LLM-реранк (`BloggerMatcher`)
+ограничен топ-N (по умолчанию off, детерминированный путь без LLM). Всё за
+`ENABLE_BLOGGER_MATCHING`. API: `POST /ad-briefs`, `POST /ad-briefs/:id/match`.
+
+### Метрики
+
+`dashboardService.stats()` отдаёт блок `agency`: `bloggersProfiled`,
+`profileDataPoints` (+ разбивка по `field`), `matchRequests`, `agentCost7dUsd`
+(builder/extractor/matcher). Нули, пока фичи не используются.
+
+---
+
+## Runtime feature flags
+
+Operational rollout/kill-switch flags live in the DB (`feature_flag`), not in
+code — consistent with how endpoints/agents/types are configured (the
+`runtime-feature-flags` change). Toggled from the admin UI (Settings →
+Features) without a redeploy; instant kill-switch for risky outreach.
+
+```sql
+feature_flag ( key PK, enabled BOOL, description, updated_by_id, updated_at )
+```
+
+- **Registry**: closed set of keys + defaults in `packages/shared/src/feature-flags.ts`
+  (`FEATURE_FLAG_DEFAULTS`, all OFF). Currently managed: `campaign_types`,
+  `agency_sourcing`, `object_storage`, `blogger_matching`. Unknown key → off.
+  Compile-time product constants stay in `flags.ts`.
+- **Accessor** (`FeatureFlags`, shared, IO injected per app): synchronous
+  `get(key)` from an in-memory cache (hot-path safe), `init()`/`refresh()`,
+  `snapshot()`. Resolution order: **env force > cached DB value > default-off**.
+  Fail-safe: store unreachable ⇒ defaults (never auto-enables).
+- **Cross-process invalidation**: api + workers each hold a cache; a write
+  publishes to Redis channel `feature_flags:changed`; every subscriber
+  reloads (also on (re)connect, closing the reconnect window). Reuses the
+  existing Redis (BullMQ / Socket.IO) — no new dependency.
+- **Route gating**: flag-gated route plugins are registered unconditionally
+  and gated by a `requireFeature(key)` preHandler that returns a plain 404
+  when off — so toggling changes availability without a restart, and the web
+  distinguishes "feature off" from a real not-found.
+- **Env emergency override**: `FEATURE_<KEY>_FORCE=on|off` overrides the DB
+  value (incident kill-floor); pinned overrides are logged at startup.
+- **Admin control plane**: `GET/PATCH /feature-flags` (admin only, registered
+  unconditionally — never self-gated). A toggle updates the row + writes
+  `audit_log` atomically (one transaction), then publishes invalidation. The
+  UI shows non-blocking readiness hints (e.g. `object_storage` needs `S3_*`).
+  `GET /config` serves the public, secret-free flag snapshot the web gates UI on.
+
+---
+
+## Channel discovery (web search)
+
+Front of the sourcing funnel: discover candidate blogger channels by niche via
+the **Yandex Search API** and feed them into the existing intake
+(channel-discovery-search change). Behind the runtime flag `channel_discovery`
+(default off).
+
+- **`packages/platforms/discovery`**: `YandexSearchClient` (async `searchAsync`
+  submit → poll the operation, bounded → decode base64 result XML →
+  `{url,title,snippet}[]`; never logs the key) + `extractCandidates` (results →
+  platform handles via the existing `parseHandle`, dropping system/invite paths,
+  with in-batch dedup and an optional platform filter).
+- **`apps/api` discovery service + `POST /discovery/search`**: load+decrypt the
+  `yandex_search` integration → search → extract candidates (≤ `limit`) → upsert
+  NEW `channel(status='new', source='search:<query>')` + enqueue the existing
+  `channel-scrape`; known channels are not duplicated or re-enqueued. Route is
+  registered unconditionally and gated by `requireFeature('channel_discovery')`
+  + admin/operator role; the action is audited.
+- **Key**: stored encrypted as `integration(kind='yandex_search')` (separate
+  Search-API-scoped key — distinct role from the LLM key). Configurable from
+  env-seed / UI; never committed.
+- **Downstream unchanged**: discovered channels flow through scrape →
+  `ChannelAnalyzer`/`ContactExtractor` → operator review like any other channel.
+- **e2e**: an env-gated test closes the scenario against the real Search API +
+  DB (skips offline).

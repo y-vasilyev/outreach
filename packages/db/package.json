@@ -14,12 +14,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "echo 'lint: noop'",
     "test": "vitest run --passWithNoTests",
-    "prisma:generate": "prisma generate --schema=./prisma/schema.prisma",
-    "prisma:migrate:dev": "prisma migrate dev --schema=./prisma/schema.prisma",
-    "prisma:migrate:deploy": "prisma migrate deploy --schema=./prisma/schema.prisma",
-    "prisma:studio": "prisma studio --schema=./prisma/schema.prisma",
-    "prisma:reset": "prisma migrate reset --force --schema=./prisma/schema.prisma",
-    "seed": "tsx prisma/seed.ts"
+    "prisma:generate": "dotenv -e ../../.env -- prisma generate --schema=./prisma/schema.prisma",
+    "prisma:migrate:dev": "dotenv -e ../../.env -- prisma migrate dev --schema=./prisma/schema.prisma",
+    "prisma:migrate:deploy": "dotenv -e ../../.env -- prisma migrate deploy --schema=./prisma/schema.prisma",
+    "prisma:studio": "dotenv -e ../../.env -- prisma studio --schema=./prisma/schema.prisma",
+    "prisma:reset": "dotenv -e ../../.env -- prisma migrate reset --force --schema=./prisma/schema.prisma",
+    "seed": "dotenv -e ../../.env -- tsx prisma/seed.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -27,12 +27,11 @@
   "dependencies": {
     "@nosquare/shared": "workspace:*",
     "@prisma/client": "^5.14.0",
-    "bcryptjs": "^2.4.3",
-    "libsodium-wrappers": "^0.7.13"
+    "bcryptjs": "^2.4.3"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
-    "@types/libsodium-wrappers": "^0.7.14",
+    "dotenv-cli": "^7.4.2",
     "prisma": "^5.14.0",
     "tsx": "^4.7.2",
     "typescript": "^5.4.5",

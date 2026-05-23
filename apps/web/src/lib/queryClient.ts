@@ -1,4 +1,4 @@
-import { QueryClient } from '@tanstack/react-query';
+import { QueryClient } from '@tanstack/vue-query';
 
 export const queryClient = new QueryClient({
   defaultOptions: {

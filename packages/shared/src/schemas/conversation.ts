@@ -1,7 +1,8 @@
 import { z } from 'zod';
+import { QualityDecisionZ } from './ajtbd.js';
 
 export const ConversationStatusZ = z.enum(['active', 'paused', 'done', 'failed']);
-export const ConversationModeZ = z.enum(['auto', 'assisted', 'manual']);
+export const ConversationModeZ = z.enum(['auto', 'semi_auto', 'assisted', 'manual']);
 
 export const ConversationZ = z.object({
   id: z.string(),
@@ -13,6 +14,8 @@ export const ConversationZ = z.object({
   assignedOperatorId: z.string().nullable(),
   lastInboundAt: z.string().nullable(),
   lastOutboundAt: z.string().nullable(),
+  qualityDecision: QualityDecisionZ.nullable(),
+  lastSyncedAt: z.string().nullable(),
   summary: z.string().nullable(),
   createdAt: z.string(),
 });

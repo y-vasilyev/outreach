@@ -44,7 +44,28 @@ export function startChannelScrapeWorker() {
         const sc = await getScrapeCreators();
         const handle = adapter.parseHandle(ch.handle)?.handle ?? ch.handle;
 
-        const tgHandle = tgClient ? await tgClient.for('parser-default').catch(() => null) : null;
+        // Pick the first authorized parser/both account from the DB. Falls
+        // back to the env-supplied bootstrap account id only when no DB rows
+        // exist (useful for first-time integration tests with TG_SESSION_STRING).
+        let tgAccountId: string | null = null;
+        const parser = await prisma.tgAccount.findFirst({
+          where: { status: 'active', role: { in: ['parser', 'both'] } },
+          orderBy: { updatedAt: 'desc' },
+          select: { id: true },
+        });
+        if (parser) tgAccountId = parser.id;
+        else if (process.env.TG_BOOTSTRAP_ACCOUNT_ID) tgAccountId = process.env.TG_BOOTSTRAP_ACCOUNT_ID;
+
+        const tgHandle =
+          tgClient && tgAccountId
+            ? await tgClient.for(tgAccountId).catch((e) => {
+                logger.warn(
+                  { tgAccountId, err: e instanceof Error ? e.message : String(e) },
+                  'tg session unavailable for scrape',
+                );
+                return null;
+              })
+            : null;
 
         const snap: ChannelSnapshot = await adapter.scrapeChannel(handle, {
           tgClient: tgHandle ?? undefined,
@@ -95,7 +116,16 @@ export function startChannelScrapeWorker() {
   );
 
   worker.on('failed', (job, err) =>
-    logger.error({ jobId: job?.id, err: err?.message }, 'channel-scrape failed'),
+    logger.error(
+      {
+        jobId: job?.id,
+        channelId: (job?.data as { channelId?: string } | undefined)?.channelId,
+        errName: err?.name,
+        err: err?.message,
+        stack: err?.stack,
+      },
+      'channel-scrape failed',
+    ),
   );
   return worker;
 }

@@ -36,6 +36,7 @@ pnpm db:reset                   # drop + migrate + seed (только dev!)
 | Новый LLM-провайдер | `packages/llm/src/providers/<name>.ts` имплементит `LLMProvider` + `factory.ts` |
 | Новая платформа (TikTok, X) | `packages/platforms/src/<name>/Adapter.ts` имплементит `PlatformAdapter` + регистрация |
 | Новый ScrapeCreators-метод | `packages/platforms/src/scrapecreators/Client.ts` |
+| Дискавери каналов поиском | `packages/platforms/src/discovery/` (Yandex Search) + `apps/api/src/services/discovery.ts` + роут `POST /discovery/search` (за флагом `channel_discovery`) |
 | Новый TG-метод | `packages/tg-client/src/methods/` — типизированный DTO, не сырые `Api.*` |
 | Поменять схему БД | `packages/db/prisma/schema.prisma` → `pnpm db:migrate` |
 | Новая фоновая задача | `apps/workers/src/queues/` |
@@ -59,7 +60,7 @@ pnpm db:reset                   # drop + migrate + seed (только dev!)
 4. **Не хранить TG-сессии в файлах в проде.** Только зашифрованной строкой в `tg_account.session_encrypted`.
 5. **Не вызывать LLM напрямую в обработчиках.** Только через `AgentRunner` — он подгружает конфиг из БД, выбирает endpoint, считает токены, пишет `agent_run`.
 6. **Не править промпты хардкодом.** Промпты — в `agent_config`. Хардкод — только как fallback, если в БД пусто.
-7. **Не превращать CustDev в продажу.** В `OpeningComposer`/`ReplyComposer`/`SafetyFilter` явно прописано — никаких «давайте созвонимся обсудить ваш канал», «у нас есть для вас оффер», обещаний результата, упоминания «реклама». Цель — интервью.
+7. **Не уводить диалог за рамки заявленного типа кампании.** Поведение, framing и safety теперь задаёт `campaign_type` (реестр, см. `DESIGN.md`/`AGENTS.md`). Для типа `custdev` — никаких «давайте созвонимся обсудить ваш канал», «у нас есть для вас оффер», обещаний результата, упоминания «реклама» (цель — интервью). Для `agency_sourcing` коммерческая лексика (реклама/прайс/охваты) — наоборот, on-goal; запрещены гарантии результата, выдуманные детали клиента, перевод денег/ссылки до подтверждения оператором, давление. Запреты/разрешения берутся из `campaign_type.safetyProfile`, а не хардкодом; `SafetyFilter` получает `forbidden_topics`/`allowed_topics` из профиля типа. Не хардкодь framing — он в реестре.
 8. **Не ронять оператору диалог.** Любая ошибка в пайплайне → диалог в `assisted` с пометкой и причиной. Тишина в чате — худший исход.
 9. **Не логировать `api_key`, `session_encrypted`, тексты исходящих** в DEBUG/INFO даже в dev. Используй `redact()`.
 
@@ -74,9 +75,10 @@ pnpm db:reset                   # drop + migrate + seed (только dev!)
 
 ## Фичефлаги и env
 
-- Флаги в `packages/shared/src/flags.ts` с дефолтами.
+- **Рантайм-флаги (rollout/kill-switch)** — в БД (`feature_flag`), переключаются из админки (Settings → Features, только admin), кэшируются в процессе и инвалидируются по Redis pub/sub (`runtime-feature-flags`). Читать через `getFeatureFlags().get('<key>')` (синхронно, hot-path-safe) в api/workers — НЕ `flags.ENABLE_*`. Реестр ключей + дефолты — `packages/shared/src/feature-flags.ts` (`FEATURE_FLAG_DEFAULTS`, все off). Сейчас управляются: `campaign_types`, `agency_sourcing`, `object_storage`, `blogger_matching`. Гейт роутов — `requireFeature(key)` preHandler (404 когда off). Аварийный override: env `FEATURE_<KEY>_FORCE=on|off` (побеждает БД; floor для инцидентов). Дефолт при недоступном сторе — off (fail-safe).
+- **Compile-time флаги** — остаются в `packages/shared/src/flags.ts` (продуктовые константы: `ENABLE_LLM_CONTACT_EXTRACTION`, `ENABLE_AUTO_MODE`, `ENABLE_FOLLOWUP_CRON`, `ENABLE_QUALITY_REVIEW`, лимиты).
 - Обязательные env: `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `ENCRYPTION_KEY`, `TG_API_ID`, `TG_API_HASH`.
-- Опциональные: `SCRAPECREATORS_API_KEY`, `YANDEX_*`, `OPENROUTER_API_KEY`, `SENTRY_DSN`, `LOG_LEVEL`.
+- Опциональные: `SCRAPECREATORS_API_KEY`, `YANDEX_*`, `OPENROUTER_API_KEY`, `SENTRY_DSN`, `LOG_LEVEL`, `S3_*`, `FEATURE_<KEY>_FORCE`.
 
 ## PR-чеклист
 

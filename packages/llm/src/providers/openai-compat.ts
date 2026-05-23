@@ -4,9 +4,10 @@ import type {
   CompletionRequest,
   CompletionResponse,
   LLMProvider,
+  ModelInfo,
   ProviderConfig,
 } from '../types.js';
-import { doOpenAICompatCall } from './openrouter.js';
+import { doOpenAICompatCall, openAiCompatListModels } from './openrouter.js';
 
 /**
  * Generic OpenAI-compatible provider — for self-hosted gateways like vLLM,
@@ -44,5 +45,9 @@ export class OpenAICompatProvider implements LLMProvider {
     });
     const value = parser(meta.text);
     return { value, meta };
+  }
+
+  async listModels(): Promise<ModelInfo[]> {
+    return openAiCompatListModels(this.cfg, '/models', 'openai_compat');
   }
 }

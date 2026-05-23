@@ -28,6 +28,7 @@ export const SendMessageInputZ = z.object({
   conversationId: z.string(),
   text: z.string().min(1).max(2000),
   fromSuggestionId: z.string().optional(),
+  scheduledAt: z.string().datetime().optional(),
   bypassSafety: z.boolean().default(false),
 });
 

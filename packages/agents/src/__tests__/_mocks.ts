@@ -27,6 +27,7 @@ export function makeLLM(opts: {
   const provider: LLMProvider = {
     kind: 'openrouter',
     estimateTokens: () => 1,
+    listModels: async () => [],
     async complete(req) {
       calls.complete += 1;
       const text = opts.completeImpl ? opts.completeImpl(req) : '';

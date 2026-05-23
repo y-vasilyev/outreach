@@ -13,8 +13,6 @@ export async function authRoutes(app: FastifyInstance) {
   app.get(
     '/auth/me',
     { onRequest: [app.authenticate] },
-    async (req) => {
-      return { user: req.user };
-    },
+    async (req) => req.user,
   );
 }
