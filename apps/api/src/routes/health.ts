@@ -19,6 +19,7 @@ export async function healthRoutes(app: FastifyInstance) {
         agencySourcing: snap.agency_sourcing,
         objectStorage: snap.object_storage,
         bloggerMatching: snap.blogger_matching,
+        channelDiscovery: snap.channel_discovery,
       },
     };
   });

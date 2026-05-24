@@ -39,6 +39,12 @@ const groups = computed<{ group: string; items: NavItem[] }[]>(() => [
       ...(flags.value.bloggerMatching
         ? [{ to: '/match', label: 'Подбор', icon: 'search' as const, badge: null }]
         : []),
+      // Discovery is admin/operator-only on the API; hide it from viewers so
+      // the nav doesn't lie about what's clickable. Hidden entirely when the
+      // flag is off (matching the agency surfaces above).
+      ...(flags.value.channelDiscovery && user.value?.role !== 'viewer'
+        ? [{ to: '/discovery', label: 'Discovery', icon: 'spark' as const, badge: null }]
+        : []),
       { to: '/manual', label: 'Manual', icon: 'mail', badge: props.counts?.manual ?? null },
     ],
   },

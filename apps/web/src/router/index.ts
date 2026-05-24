@@ -115,6 +115,21 @@ const routes: RouteRecordRaw[] = [
         meta: { crumbs: ['Manual outreach'] },
       },
       {
+        path: 'discovery',
+        name: 'discovery',
+        component: () => import('../features/discovery/DiscoveryPage.vue'),
+        // Flag-gated server-side (channel_discovery → 404 when off). The page
+        // surfaces a FeatureOff fallback if the flag flips between fetch and
+        // navigation; the nav entry is also hidden when the flag is off.
+        meta: { crumbs: ['Discovery'] },
+      },
+      {
+        path: 'discovery/batches/:id',
+        name: 'discovery-batch',
+        component: () => import('../features/discovery/DiscoveryBatchStatusPage.vue'),
+        meta: { crumbs: ['Discovery', 'Batch'] },
+      },
+      {
         path: 'users',
         name: 'users',
         component: () => import('../features/users/UsersPage.vue'),
