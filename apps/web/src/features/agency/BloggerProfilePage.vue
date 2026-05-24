@@ -11,6 +11,7 @@ import ConfBar from '../../components/ConfBar.vue';
 import FeatureOff from '../../components/FeatureOff.vue';
 import EmptyState from '../../components/EmptyState.vue';
 import MediaKitDownload from './MediaKitDownload.vue';
+import FreshnessPanel from './FreshnessPanel.vue';
 import { api, ApiError } from '../../lib/api';
 import { isFeatureOff } from '../../lib/featureGate';
 import { formatCompact, formatDateTime } from '../../lib/format';
@@ -89,6 +90,12 @@ function renderValue(v: unknown): string {
   <EmptyState v-else-if="!profile" title="Профиль недоступен" icon="users_round" />
 
   <template v-else>
+    <!-- Per-section observation freshness (newest usable contributing
+         data point per section, gated by category-specific TTL). Read-only
+         signal — see profile-staleness.ts for semantics. Detail-only payload
+         field, so it may be absent on legacy responses. -->
+    <FreshnessPanel v-if="profile.freshness" :freshness="profile.freshness" style="margin-bottom: 12px;" />
+
     <!-- Standardized fields -->
     <div class="card">
       <div class="card-head"><Icon name="users_round" :size="12" /><span>Стандартизированные поля</span></div>
