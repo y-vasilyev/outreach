@@ -93,6 +93,14 @@ const stats = computed(() => {
   <PageHead :title="campaign?.name ?? 'Кампания'" :sub="campaign?.goalText">
     <template #actions>
       <button class="btn" @click="router.push('/campaigns')"><Icon name="arrow_left" :size="12" /><span>Все кампании</span></button>
+      <router-link
+        v-if="campaign?.id"
+        class="btn"
+        :to="{ name: 'inbox', query: { campaignId: campaign.id } }"
+      >
+        <Icon name="chat" :size="12" />
+        <span>Инбокс кампании</span>
+      </router-link>
       <button class="btn" :disabled="previewMut.isPending.value" @click="previewMut.mutate()">
         <span v-if="previewMut.isPending.value" class="spinner" />
         <Icon v-else name="eye" :size="12" /><span>Превью первых сообщений</span>

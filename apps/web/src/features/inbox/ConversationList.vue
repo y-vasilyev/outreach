@@ -28,7 +28,11 @@ const tabs = computed<Tab[]>(() => [
   { id: 'meets', icon: 'flag', count: 0 },
 ]);
 
-const activeFilter = computed(() => 'all'); // local-only client filter; placeholder for future tabs
+// Local quick-filter pill (all/ai/op/meets) — counts reflect whatever
+// `props.items` was passed in, i.e. already narrowed by the inbox-level
+// filters (`InboxFilters`). Clicking these tabs is still decorative;
+// wiring them into a real client-side post-filter is a follow-up.
+const activeFilter = computed(() => 'all');
 </script>
 
 <template>

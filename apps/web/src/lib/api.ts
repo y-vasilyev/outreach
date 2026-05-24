@@ -39,6 +39,26 @@ export function setToken(token: string | null): void {
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
+export type QueryParams = Record<string, string | number | boolean | undefined | null>;
+
+/**
+ * Append `params` as a query string to `path`, preserving any existing
+ * query already in `path`. Keys whose value is `undefined`, `null`, or
+ * `""` are dropped — convenient for forwarding filter objects where
+ * "absent" is the natural empty state.
+ */
+export function appendQuery(path: string, params?: QueryParams): string {
+  if (!params) return path;
+  const usp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === '') continue;
+    usp.append(k, String(v));
+  }
+  const qs = usp.toString();
+  if (qs.length === 0) return path;
+  return path.includes('?') ? `${path}&${qs}` : `${path}?${qs}`;
+}
+
 async function request<T>(method: Method, path: string, body?: unknown): Promise<T> {
   const url = `${getBaseUrl()}${path.startsWith('/') ? path : `/${path}`}`;
   const headers: Record<string, string> = {
@@ -95,7 +115,8 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>('GET', path),
+  get: <T>(path: string, options?: { params?: QueryParams }) =>
+    request<T>('GET', appendQuery(path, options?.params)),
   post: <T>(path: string, body?: unknown) => request<T>('POST', path, body),
   put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),
   patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body),
