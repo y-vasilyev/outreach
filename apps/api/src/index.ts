@@ -31,8 +31,22 @@ import { attachIo } from './realtime/io.js';
 async function main() {
   const app = Fastify({ logger: false });
 
+  // WEB_ORIGIN may be a single URL ("http://localhost:5173") OR a
+  // comma-separated allowlist ("https://app.example.com,http://10.0.0.1:5173").
+  // A sentinel `*` opts into echoing whatever Origin the request carries —
+  // intended ONLY for dev on remote VPS/tunnel setups where the operator
+  // hits the web via the server's domain/IP. With `credentials: true` we
+  // can't use `Access-Control-Allow-Origin: *`, so the fastify cors plugin
+  // echoes the actual origin when we pass `origin: true`.
+  const allowedOrigins = Array.from(
+    new Set([
+      ...env.WEB_ORIGIN.split(',').map((s) => s.trim()).filter(Boolean),
+      'http://localhost:5173',
+    ]),
+  );
+  const allowAnyOrigin = allowedOrigins.includes('*');
   await app.register(cors, {
-    origin: [env.WEB_ORIGIN, 'http://localhost:5173'],
+    origin: allowAnyOrigin ? true : allowedOrigins,
     credentials: true,
   });
   await app.register(sensible);
