@@ -9,6 +9,7 @@ export const QueueNames = {
   followupCron: 'followup-cron',
   metricsRoll: 'metrics-roll',
   profileExtract: 'profile-extract',
+  discoveryBatch: 'discovery-batch',
 } as const;
 
 export type QueueName = (typeof QueueNames)[keyof typeof QueueNames];
@@ -69,6 +70,11 @@ export const AgentRunJobZ = z.object({
   campaignId: z.string().optional(),
 });
 
+export const DiscoveryBatchJobZ = z.object({
+  /** The `DiscoveryBatch.id` to process. */
+  batchId: z.string(),
+});
+
 export const ProfileExtractJobZ = z.object({
   /** The conversation whose latest inbound triggered extraction. */
   conversationId: z.string(),
@@ -80,6 +86,7 @@ export const ProfileExtractJobZ = z.object({
 });
 
 export type ChannelScrapeJob = z.infer<typeof ChannelScrapeJobZ>;
+export type DiscoveryBatchJob = z.infer<typeof DiscoveryBatchJobZ>;
 export type ProfileExtractJob = z.infer<typeof ProfileExtractJobZ>;
 export type ContactExtractJob = z.infer<typeof ContactExtractJobZ>;
 export type TgSendJob = z.infer<typeof TgSendJobZ>;

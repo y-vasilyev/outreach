@@ -21,6 +21,18 @@ All operator-visible changes worth noting between releases.
 
 ### Added
 
+- **Batch channel discovery** — operators can submit up to 50 niches at
+  once via `POST /discovery/batch` and poll progress through
+  `GET /discovery/batch/:id`. A `DiscoveryBatch` row tracks the request,
+  the new `discovery-batch` worker iterates the niches sequentially
+  (concurrency 1 + a 1-second rate-limit pause between calls) and
+  pushes new channels through the existing `channel-scrape` →
+  `contact-extract` intake. Per-niche failures are recorded in the
+  batch summary and don't abort the run; the operator sees exactly
+  which niches succeeded vs errored. Behind the `channel_discovery`
+  runtime flag like single-niche discovery. See openspec change
+  `batch-channel-discovery`.
+
 - **SafetyFilter deterministic hard-block** — campaign-type
   `safetyProfile` gains a `hard_block_patterns` list of regex rules with
   ids and human-readable reasons. SafetyFilter evaluates them BEFORE the

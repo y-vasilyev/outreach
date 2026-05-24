@@ -531,6 +531,40 @@ model FeatureFlag {
   createdAt   DateTime @default(now())
 }
 
+// Batch channel discovery (batch-channel-discovery change). One row per
+// async batch request: stores the input niches + accumulated per-niche
+// results so the worker can iterate, the API can poll status, and the
+// operator can come back to a long-running batch hours later.
+enum DiscoveryBatchStatus {
+  pending
+  running
+  done
+  failed
+}
+
+model DiscoveryBatch {
+  id            String               @id @default(cuid())
+  // The niches submitted by the operator. Stored as JSON so a future
+  // worker can re-process a subset or annotate progress per-entry.
+  queries       Json
+  // Optional platform filter (null = all platforms). Mirrors the
+  // single-search input shape.
+  platform      String?
+  limitPerQuery Int                  @default(20)
+  status        DiscoveryBatchStatus @default(pending)
+  // Accumulated result: per-niche records + totals. Worker updates on
+  // each iteration. Shape mirrors `DiscoveryBatchSummaryZ` in
+  // `@nosquare/shared`.
+  summary       Json                 @default("{}")
+  createdById   String?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  completedAt   DateTime?
+
+  @@index([status, createdAt])
+  @@index([createdById])
+}
+
 // Standardized, queryable catalog row for a blogger/channel. Composed
 // deterministically from ProfileDataPoint rows (latest high-confidence).
 model BloggerProfile {
