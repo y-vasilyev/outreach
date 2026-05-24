@@ -15,6 +15,7 @@ export interface AppFlags {
   agencySourcing: boolean;
   objectStorage: boolean;
   bloggerMatching: boolean;
+  channelDiscovery: boolean;
 }
 
 interface ConfigResponse {
@@ -26,6 +27,7 @@ const DEFAULT_FLAGS: AppFlags = {
   agencySourcing: false,
   objectStorage: false,
   bloggerMatching: false,
+  channelDiscovery: false,
 };
 
 /**
