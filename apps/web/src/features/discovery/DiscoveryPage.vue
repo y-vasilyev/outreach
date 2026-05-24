@@ -49,6 +49,10 @@ const singleLimit = ref<string>('20');
 const singleResult = ref<DiscoveryResult | null>(null);
 
 function clampLimit(raw: string, fallback = 20): number {
+  // Empty / whitespace-only input → fallback (operator cleared the field;
+  // sending `1` would be a surprising tiny limit). Bare `Number('')` is `0`,
+  // which clampLimit would then bump up to 1, so guard before the cast.
+  if (raw.trim().length === 0) return fallback;
   const n = Math.floor(Number(raw));
   if (!Number.isFinite(n)) return fallback;
   return Math.max(1, Math.min(50, n));

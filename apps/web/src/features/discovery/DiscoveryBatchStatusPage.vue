@@ -12,28 +12,12 @@ import FeatureOff from '../../components/FeatureOff.vue';
 import { api, ApiError } from '../../lib/api';
 import { isFeatureOff } from '../../lib/featureGate';
 import { formatDateTime, formatNumber } from '../../lib/format';
-import type { DiscoveryBatchStatus, DiscoveryBatchStatusEnum } from './types';
+import type { DiscoveryBatchStatus } from './types';
+import { batchProgress, perQueryLabel, perQueryPill, pollInterval, statusPill } from './helpers';
 
 const route = useRoute();
 const router = useRouter();
 const id = computed(() => route.params.id as string);
-
-// Poll while the batch is still in motion. The worker has a ~1s pause
-// between niches; 3s polling gives near-real-time progress without
-// hammering the API. Stops as soon as status is terminal (done | failed),
-// AND on irrecoverable errors (feature-off route → 404 without our
-// NOT_FOUND code; deleted batch → application 404; auth → 403) so a
-// permanently-broken page doesn't refetch every 3s forever.
-function pollInterval(
-  data: DiscoveryBatchStatus | undefined,
-  err: unknown,
-): number | false {
-  if (err instanceof ApiError && (err.status === 403 || err.status === 404)) {
-    return false;
-  }
-  if (!data) return 3000;
-  return data.status === 'done' || data.status === 'failed' ? false : 3000;
-}
 
 const { data, isLoading, error } = useQuery({
   queryKey: ['discovery-batch', id],
@@ -49,35 +33,12 @@ const notFound = computed(
   () => error.value instanceof ApiError && error.value.status === 404 && error.value.code === 'NOT_FOUND',
 );
 
-function statusPill(s: DiscoveryBatchStatusEnum): 'ghost' | 'accent' | 'ok' | 'bad' {
-  if (s === 'done') return 'ok';
-  if (s === 'failed') return 'bad';
-  if (s === 'running') return 'accent';
-  return 'ghost';
-}
-
 const totals = computed(() => data.value?.summary.totals);
-const progress = computed(() => {
-  const t = totals.value;
-  if (!t || t.queries === 0) return 0;
-  return t.processed / t.queries;
-});
+const progress = computed(() => batchProgress(totals.value));
 
 const stillRunning = computed(
   () => data.value != null && data.value.status !== 'done' && data.value.status !== 'failed',
 );
-
-function perQueryPill(q: { done: boolean; error?: string }): 'ghost' | 'ok' | 'bad' {
-  if (q.error) return 'bad';
-  if (q.done) return 'ok';
-  return 'ghost';
-}
-
-function perQueryLabel(q: { done: boolean; error?: string }): string {
-  if (q.error) return 'error';
-  if (q.done) return 'done';
-  return 'pending';
-}
 </script>
 
 <template>
