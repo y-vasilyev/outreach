@@ -296,15 +296,13 @@ model Campaign {
   name                String
   goalText            String
   valueProp           String
-  // Structured AJTBD framing. Validated via zod (`CampaignAjtbdZ` in
-  // packages/shared). Nullable so legacy rows don't trip migrations; the
-  // on_inbound pipeline backfills a scaffold from goalText/valueProp via
-  // the data migration in 4_chat_autonomous_modes, and the runtime fails
-  // explicitly if it is still null when an agent needs it.
-  ajtbd               Json?
   // Campaign type from the registry (agency-sourcing-matching change).
   // Required as of migration 7 (backfill in migration 6 set every existing
   // campaign to `custdev`). RESTRICT: a campaign type in use can't be deleted.
+  // The legacy `ajtbd` JSON column was removed by migration
+  // `9c_drop_campaign_ajtbd` — the AJTBD shape for CustDev now lives
+  // inside `goal`, mediated by `extractAjtbdView` for the agents that
+  // still consume `CampaignAjtbd` as input.
   typeId              String
   type                CampaignType     @relation(fields: [typeId], references: [id], onDelete: Restrict)
   // Structured goal validated against the type's `goalSchema`. For

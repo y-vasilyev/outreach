@@ -3,7 +3,7 @@ import { getRedis } from '../redis.js';
 import {
   AgentRunJobZ,
   QueueNames,
-  CampaignAjtbdZ,
+  extractAjtbdView,
   isWithinSchedule,
   resolveSafetyContext,
   resolveForceHandoffIntents,
@@ -125,38 +125,37 @@ function canAutoSendOpening(campaign: {
 }
 
 /**
- * Resolve the AJTBD framing for a conversation. Returns a parsed
- * `CampaignAjtbd` when the attached campaign has one, or `undefined`
- * when the conversation is ad-hoc (no campaign).
+ * Resolve the AJTBD framing for a conversation. Returns a `CampaignAjtbd`
+ * view derived from `campaign.goal` for any attached campaign, or
+ * `undefined` when the conversation is ad-hoc (no campaign).
  *
- * **Throws** when the conversation IS attached to a campaign but that
- * campaign's `ajtbd` column is null or fails zod validation. Per
- * `chat-autonomous-modes` design: post-migration every campaign should
- * have a populated AJTBD (the migration backfills a scaffold from
- * goalText/valueProp). A null AJTBD therefore indicates a config bug
- * (e.g. campaign created via a code path that bypassed the zod schema)
- * — we fail loud rather than fall back to a hardcoded default, which
- * would silently degrade quality across the inbound pipeline.
+ * Source of truth is now `Campaign.goal`, discriminated by the
+ * campaign's `type.key` (CustDev → AJTBD passthrough; other types →
+ * scaffold from goalText/valueProp). See `extractAjtbdView` in
+ * `@nosquare/shared`. The legacy `Campaign.ajtbd` column was removed by
+ * `drop-campaign-ajtbd-column`, so this helper never throws on a
+ * missing AJTBD — `extractAjtbdView` always returns a well-formed
+ * scaffold as a last resort.
  */
 function resolveCampaignAjtbd(campaign: {
   id: string;
-  ajtbd: unknown;
+  goal: unknown;
+  goalText: string;
+  valueProp: string;
+  type?: { key: string } | null;
 } | null | undefined): CampaignAjtbd | undefined {
   if (!campaign) return undefined;
-  if (campaign.ajtbd === null || campaign.ajtbd === undefined) {
-    throw Errors.internal(
-      `campaign ${campaign.id} has no ajtbd; expected scaffold from migration 4_chat_autonomous_modes`,
-      { campaignId: campaign.id },
-    );
-  }
-  const parsed = CampaignAjtbdZ.safeParse(campaign.ajtbd);
-  if (!parsed.success) {
-    throw Errors.internal(
-      `campaign ${campaign.id} has invalid ajtbd shape`,
-      { campaignId: campaign.id, error: parsed.error.message },
-    );
-  }
-  return parsed.data;
+  // After `drop-campaign-ajtbd-column`, the legacy `Campaign.ajtbd` column
+  // is gone. The AJTBD view comes from `Campaign.goal` discriminated by
+  // `campaign.type.key`: for `custdev` we passthrough the AJTBD shape;
+  // for anything else we scaffold from goalText/valueProp so agents
+  // always see a well-formed AJTBD input.
+  return extractAjtbdView({
+    goal: campaign.goal,
+    goalText: campaign.goalText,
+    valueProp: campaign.valueProp,
+    typeKey: campaign.type?.key ?? null,
+  });
 }
 
 /**
@@ -310,7 +309,6 @@ export async function handleOnInbound(data: { conversationId?: string }): Promis
               campaign: {
                 select: {
                   id: true,
-                  ajtbd: true,
                   goal: true,
                   goalText: true,
                   valueProp: true,
@@ -908,7 +906,7 @@ export async function handleFollowupCheck(data: { conversationId?: string }): Pr
       campaign: {
         select: {
           id: true,
-          ajtbd: true,
+          goal: true,
           goalText: true,
           valueProp: true,
           type: { select: { key: true, safetyProfile: true } },

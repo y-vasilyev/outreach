@@ -471,14 +471,15 @@ async function main() {
 
   // Optional demo campaign seed. Off by default so prod / CI seeds
   // don't pollute the campaigns table. Set SEED_DEMO_CAMPAIGN=1 in dev
-  // to make a sample campaign with populated AJTBD and defaultMode =
-  // semi_auto (so new conversations under it inherit semi-auto and
-  // the GoalFitEvaluator gate exercises the auto-approve path).
+  // to make a sample campaign with populated goal (AJTBD shape for the
+  // custdev type) and defaultMode = semi_auto (so new conversations
+  // under it inherit semi-auto and the GoalFitEvaluator gate exercises
+  // the auto-approve path).
   if (process.env.SEED_DEMO_CAMPAIGN === '1') {
     const demo = await prisma.campaign.upsert({
       where: { id: 'demo-custdev' },
       update: {
-        ajtbd: DEMO_AJTBD,
+        goal: DEMO_AJTBD,
         defaultMode: 'semi_auto',
       },
       create: {
@@ -486,8 +487,9 @@ async function main() {
         name: 'Demo CustDev',
         goalText: DEMO_AJTBD.job,
         valueProp: DEMO_AJTBD.desired_outcome,
-        ajtbd: DEMO_AJTBD,
-        // typeId is required as of migration 7; goal mirrors AJTBD for custdev.
+        // typeId is required as of migration 7. `goal` carries the
+        // AJTBD shape for the custdev type. The legacy `Campaign.ajtbd`
+        // column was removed by `drop-campaign-ajtbd-column`.
         typeId: 'custdev',
         goal: DEMO_AJTBD,
         defaultMode: 'semi_auto',
@@ -495,7 +497,7 @@ async function main() {
         createdById: admin.id,
       },
     });
-    console.log(`✓ campaign: ${demo.name} (defaultMode=semi_auto, AJTBD populated)`);
+    console.log(`✓ campaign: ${demo.name} (defaultMode=semi_auto, goal populated)`);
   }
 
   console.log('\nSeed complete.');

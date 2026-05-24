@@ -35,6 +35,24 @@ All operator-visible changes worth noting between releases.
 
 ### Removed
 
+- **`Campaign.ajtbd` column** — the legacy JSON column was a parallel
+  storage to `Campaign.goal`; for `custdev` campaigns it carried the
+  same AJTBD payload, for `agency_sourcing` it held a synthetic
+  scaffold nobody edited. Runtime consumers (`HandoffDecider`,
+  `ReplyComposer`, `GoalFitEvaluator`, the worker `agent-run.ts`, web
+  `CampaignForm.vue`, the campaigns service) now read the AJTBD view
+  from `Campaign.goal` via a new pure helper
+  `extractAjtbdView({ goal, goalText, valueProp })` exported from
+  `@nosquare/shared` — passthrough when goal carries the AJTBD-shape
+  (CustDev), scaffold from `goalText` + `valueProp` otherwise. Two
+  migrations land together: `9b_backfill_campaign_goal_from_ajtbd`
+  copies any unset `goal` from `ajtbd`, then
+  `9c_drop_campaign_ajtbd` removes the column. API request/response
+  schemas (`CampaignZ`, `CreateCampaignInputZ`, `UpdateCampaignInputZ`)
+  no longer accept or return `ajtbd`. No behavior change for agents —
+  they still consume an AJTBD input contract. See openspec change
+  `drop-campaign-ajtbd-column`.
+
 - **`packages/shared/src/flags.ts`** — the "compile-time" flags module
   (`ENABLE_LLM_CONTACT_EXTRACTION`, `ENABLE_AUTO_MODE`,
   `ENABLE_FOLLOWUP_CRON`, `ENABLE_QUALITY_REVIEW`,
