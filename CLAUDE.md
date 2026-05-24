@@ -3,7 +3,7 @@
 Навигация по проекту для Claude Code. Прочти этот файл перед любой задачей.
 
 ## TL;DR
-Backend на Node.js + TypeScript (монорепо, pnpm workspaces) с React-админкой. Скрейпит каналы (TG / IG / YT), вытаскивает контакты для рекламы из описаний, шлёт CustDev-приглашения через Telegram (GramJS), ведёт диалог с подсказками от ИИ-агентов. Цель — НЕ продажа, а интервью по продукту. Это важно — пронизывает промпты и safety-правила.
+Backend на Node.js + TypeScript (монорепо, pnpm workspaces) с React-админкой для рекламной платформы. Система индексирует только публичные страницы каналов/авторов, выделяет явно опубликованные business/ad contacts ("по рекламе", media kit, менеджер, форма заявки) и помогает оператору прозрачно запросить условия размещения или провести продуктовое исследование. Нельзя использовать личные контакты, закрытые данные, скрывать отправителя/цель обращения, обходить правила платформ или делать массовую рассылку; любой исходящий проходит safety/goal gates, rate limits, opt-out handling и, для агентского sourcing, по умолчанию требует human approval.
 
 Use case и стек — в `README.md`. Архитектура и схема БД — в `DESIGN.md`. Агенты, контракты и пайплайны — в `AGENTS.md`. Если задача затрагивает архитектуру — сначала туда.
 
@@ -36,7 +36,7 @@ pnpm db:reset                   # drop + migrate + seed (только dev!)
 | Новый LLM-провайдер | `packages/llm/src/providers/<name>.ts` имплементит `LLMProvider` + `factory.ts` |
 | Новая платформа (TikTok, X) | `packages/platforms/src/<name>/Adapter.ts` имплементит `PlatformAdapter` + регистрация |
 | Новый ScrapeCreators-метод | `packages/platforms/src/scrapecreators/Client.ts` |
-| Дискавери каналов поиском | `packages/platforms/src/discovery/` (Yandex Search) + `apps/api/src/services/discovery.ts` + роут `POST /discovery/search` (за флагом `channel_discovery`) |
+| Дискавери публичных каналов | `packages/platforms/src/discovery/` (Yandex Search) + `apps/api/src/services/discovery.ts` + роут `POST /discovery/search` (за флагом `channel_discovery`; только публичные страницы и явно указанные business/ad contacts) |
 | Новый TG-метод | `packages/tg-client/src/methods/` — типизированный DTO, не сырые `Api.*` |
 | Поменять схему БД | `packages/db/prisma/schema.prisma` → `pnpm db:migrate` |
 | Новая фоновая задача | `apps/workers/src/queues/` |
@@ -54,15 +54,17 @@ pnpm db:reset                   # drop + migrate + seed (только dev!)
 
 ## Чего не делать
 
-1. **Не дёргать GramJS из API-роутов.** Только через очередь `tg-send` или сервис. Иначе — гонки за сессией и FloodWait.
-2. **Не ходить в ScrapeCreators напрямую из роутов.** Через сервис `platforms`, очередь `channel-scrape`, с учётом квоты ключа.
-3. **Не отправлять сообщение, не записав его в `message`** заранее (status=`pending`). Иначе при падении воркера потеряем состояние.
-4. **Не хранить TG-сессии в файлах в проде.** Только зашифрованной строкой в `tg_account.session_encrypted`.
-5. **Не вызывать LLM напрямую в обработчиках.** Только через `AgentRunner` — он подгружает конфиг из БД, выбирает endpoint, считает токены, пишет `agent_run`.
-6. **Не править промпты хардкодом.** Промпты — в `agent_config`. Хардкод — только как fallback, если в БД пусто.
-7. **Не уводить диалог за рамки заявленного типа кампании.** Поведение, framing и safety теперь задаёт `campaign_type` (реестр, см. `DESIGN.md`/`AGENTS.md`). Для типа `custdev` — никаких «давайте созвонимся обсудить ваш канал», «у нас есть для вас оффер», обещаний результата, упоминания «реклама» (цель — интервью). Для `agency_sourcing` коммерческая лексика (реклама/прайс/охваты) — наоборот, on-goal; запрещены гарантии результата, выдуманные детали клиента, перевод денег/ссылки до подтверждения оператором, давление. Запреты/разрешения берутся из `campaign_type.safetyProfile`, а не хардкодом; `SafetyFilter` получает `forbidden_topics`/`allowed_topics` из профиля типа. Не хардкодь framing — он в реестре.
-8. **Не ронять оператору диалог.** Любая ошибка в пайплайне → диалог в `assisted` с пометкой и причиной. Тишина в чате — худший исход.
-9. **Не логировать `api_key`, `session_encrypted`, тексты исходящих** в DEBUG/INFO даже в dev. Используй `redact()`.
+1. **Не использовать систему для unsolicited mass messaging.** Разрешённый scope: публично указанные рекламные/business contacts, разумные rate limits, уважение opt-out/stop requests, без обхода ToS платформ.
+2. **Не собирать и не использовать личные контакты.** Если контакт не обозначен как "по рекламе", "business", "manager", media kit или форма заявки, он не подходит для агентского sourcing без ручной проверки.
+3. **Не дёргать GramJS из API-роутов.** Только через очередь `tg-send` или сервис. Иначе — гонки за сессией и FloodWait.
+4. **Не ходить в ScrapeCreators напрямую из роутов.** Через сервис `platforms`, очередь `channel-scrape`, с учётом квоты ключа и только по публичному контенту.
+5. **Не отправлять сообщение, не записав его в `message`** заранее (status=`pending`). Иначе при падении воркера потеряем состояние.
+6. **Не хранить TG-сессии в файлах в проде.** Только зашифрованной строкой в `tg_account.session_encrypted`.
+7. **Не вызывать LLM напрямую в обработчиках.** Только через `AgentRunner` — он подгружает конфиг из БД, выбирает endpoint, считает токены, пишет `agent_run`.
+8. **Не править промпты хардкодом.** Промпты — в `agent_config`. Хардкод — только как fallback, если в БД пусто.
+9. **Не уводить диалог за рамки заявленного типа кампании.** Поведение, framing и safety задаёт `campaign_type` (реестр, см. `DESIGN.md`/`AGENTS.md`). Для `custdev` — честное исследовательское интервью, без имитации рекламного запроса. Для `agency_sourcing` — честный рекламный запрос к явно опубликованному business/ad contact; допустимы "реклама", "интеграция", "прайс", "охваты", но запрещены гарантии результата, давление, выдуманные детали клиента, платежи/ссылки до подтверждения оператором. Запреты/разрешения берутся из `campaign_type.safetyProfile`.
+10. **Не ронять оператору диалог.** Любая ошибка в пайплайне → диалог в `assisted` с пометкой и причиной. Тишина в чате — худший исход.
+11. **Не логировать `api_key`, `session_encrypted`, тексты исходящих** в DEBUG/INFO даже в dev. Используй `redact()`.
 
 ## Тесты
 
@@ -75,8 +77,7 @@ pnpm db:reset                   # drop + migrate + seed (только dev!)
 
 ## Фичефлаги и env
 
-- **Рантайм-флаги (rollout/kill-switch)** — в БД (`feature_flag`), переключаются из админки (Settings → Features, только admin), кэшируются в процессе и инвалидируются по Redis pub/sub (`runtime-feature-flags`). Читать через `getFeatureFlags().get('<key>')` (синхронно, hot-path-safe) в api/workers — НЕ `flags.ENABLE_*`. Реестр ключей + дефолты — `packages/shared/src/feature-flags.ts` (`FEATURE_FLAG_DEFAULTS`, все off). Сейчас управляются: `campaign_types`, `agency_sourcing`, `object_storage`, `blogger_matching`. Гейт роутов — `requireFeature(key)` preHandler (404 когда off). Аварийный override: env `FEATURE_<KEY>_FORCE=on|off` (побеждает БД; floor для инцидентов). Дефолт при недоступном сторе — off (fail-safe).
-- **Compile-time флаги** — остаются в `packages/shared/src/flags.ts` (продуктовые константы: `ENABLE_LLM_CONTACT_EXTRACTION`, `ENABLE_AUTO_MODE`, `ENABLE_FOLLOWUP_CRON`, `ENABLE_QUALITY_REVIEW`, лимиты).
+- **Рантайм-флаги (rollout/kill-switch)** — в БД (`feature_flag`), переключаются из админки (Settings → Features, только admin), кэшируются в процессе и инвалидируются по Redis pub/sub (`runtime-feature-flags`). Читать через `getFeatureFlags().get('<key>')` (синхронно, hot-path-safe) в api/workers. Реестр ключей + дефолты — `packages/shared/src/feature-flags.ts` (`FEATURE_FLAG_DEFAULTS`, все off). Сейчас управляются: `campaign_types`, `agency_sourcing`, `object_storage`, `blogger_matching`, `channel_discovery`. Гейт роутов — `requireFeature(key)` preHandler (404 когда off). Аварийный override: env `FEATURE_<KEY>_FORCE=on|off` (побеждает БД; floor для инцидентов). Дефолт при недоступном сторе — off (fail-safe). Параллельного compile-time-флажного модуля нет: новые операционные toggle'ы заводятся прямо в `FEATURE_FLAG_DEFAULTS` + соответствующая запись `feature_flag`.
 - Обязательные env: `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `ENCRYPTION_KEY`, `TG_API_ID`, `TG_API_HASH`.
 - Опциональные: `SCRAPECREATORS_API_KEY`, `YANDEX_*`, `OPENROUTER_API_KEY`, `SENTRY_DSN`, `LOG_LEVEL`, `S3_*`, `FEATURE_<KEY>_FORCE`.
 

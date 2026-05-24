@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SafetyProfileZ, AutonomyPolicyZ } from '@nosquare/shared';
 
 import type { Agent } from '../types.js';
 import { invokeJson } from './_runtime.js';
@@ -58,21 +59,12 @@ export const campaignTypeBuilderOutputSchema = z.object({
   description: z.string().default(''),
   /** JSON-schema (object) describing the campaign goal of this type. */
   goalSchema: z.record(z.unknown()).default({}),
-  safetyProfile: z.object({
-    forbidden_topics: z.array(z.string()).default([]),
-    allowed_topics: z.array(z.string()).default([]),
-    allow_links: z.boolean().default(false),
-    max_length: z.number().int().min(50).max(5000).default(600),
-  }),
-  autonomyPolicy: z.object({
-    defaultMode: z
-      .enum(['manual', 'assisted', 'semi_auto', 'auto'])
-      .default('assisted'),
-    T_safety: z.number().min(0).max(1).default(0.8),
-    T_semi_auto_goalfit: z.number().min(0).max(1).default(0.6),
-    T_auto_goalfit: z.number().min(0).max(1).default(0.75),
-    forceHandoffIntents: z.array(z.string()).default([]),
-  }),
+  // Reuse the canonical shared schemas instead of duplicating them — keeps
+  // the builder output in lock-step with `SafetyProfileZ` / `AutonomyPolicyZ`
+  // as those evolve (e.g. new hard_block_patterns shape) and stops the two
+  // copies from drifting.
+  safetyProfile: SafetyProfileZ,
+  autonomyPolicy: AutonomyPolicyZ,
   agents: z.array(DraftRoleZ).min(1),
 });
 
@@ -86,7 +78,7 @@ const FALLBACK_SYSTEM = `Ты — конструктор типов кампан
 - name: человекочитаемое название.
 - description: 1–2 предложения, в чём суть кампании и чего она НЕ делает.
 - goalSchema: JSON-схема (object) структурированной цели кампании этого типа. Обязательно укажи "type":"object", "required":[...] и "properties". Поля должны отражать, что кампания собирает или чего добивается.
-- safetyProfile: { forbidden_topics: string[] (темы/слова, повышающие риск), allowed_topics: string[] (уместные темы, риск НЕ повышают), allow_links: boolean, max_length: число символов }.
+- safetyProfile: { forbidden_topics: string[] (темы/слова, повышающие риск; advisory), allowed_topics: string[] (уместные темы, риск НЕ повышают), allow_links: boolean, max_length: число символов, hard_block_patterns: [{ id, pattern (regex source), reason, flags? }] (детерминированные блокировки ДО LLM — для категорий, которые нельзя пропускать никогда: гарантии результата, упоминание оплаты до оператора, давление; для нейтральных типов оставляй [] ) }.
 - autonomyPolicy: { defaultMode: "manual"|"assisted"|"semi_auto"|"auto", T_safety, T_semi_auto_goalfit, T_auto_goalfit (0..1), forceHandoffIntents: string[] (интенты, при которых диалог принудительно уходит оператору) }. Для коммерчески чувствительных кампаний выбирай defaultMode "assisted".
 - agents: массив объектов { role, description, systemPrompt, userPromptTemplate, outputJsonSchema }. Для КАЖДОЙ роли из required_roles напиши осмысленный системный промпт и шаблон пользовательского промпта (с {{переменными}}). Если роль возвращает структурированный JSON (intent_classifier, safety_filter, goal_fit_evaluator) — заполни outputJsonSchema схемой; для свободного текста ставь outputJsonSchema = null.
 

@@ -9,6 +9,7 @@ import Spinner from '../../components/Spinner.vue';
 import KeyValue, { type KvItem } from '../../components/KeyValue.vue';
 import Modal from '../../components/Modal.vue';
 import CampaignForm from './CampaignForm.vue';
+import OpenerStatsPanel from './OpenerStatsPanel.vue';
 import { api } from '../../lib/api';
 import { toast } from '../../lib/toast';
 import { formatNumber } from '../../lib/format';
@@ -136,6 +137,12 @@ const stats = computed(() => {
         <pre class="card-body mono" style="margin: 0; padding: 12px; max-height: 240px; overflow: auto; font-size: 11px;">{{ JSON.stringify(campaign.agentOverrides ?? {}, null, 2) }}</pre>
       </div>
     </div>
+
+    <!-- Per-variant opener counters (ab-opener-variants change). Read-only —
+         backend route `/campaigns/:id/opener-stats?withinHours=...` aggregates
+         sent / replied / replyRate per `Message.openerVariant` for the chosen
+         reply window. -->
+    <OpenerStatsPanel :campaign-id="id" />
   </div>
 
   <CampaignForm

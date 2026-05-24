@@ -25,6 +25,22 @@ export interface MediaAsset {
   createdAt: string;
 }
 
+export type ProfileFreshnessCategory =
+  | 'rateCards'
+  | 'audience'
+  | 'topics'
+  | 'languages'
+  | 'formats'
+  | 'reach'
+  | 'avgViews';
+
+export interface ProfileFreshnessSection {
+  stale: boolean;
+  ageDays: number | null;
+}
+
+export type ProfileFreshness = Record<ProfileFreshnessCategory, ProfileFreshnessSection>;
+
 export interface BloggerProfile {
   id: string;
   channelId: string | null;
@@ -41,6 +57,7 @@ export interface BloggerProfile {
   // detail-only relations / list-only counts
   dataPoints?: ProfileDataPoint[];
   mediaAssets?: MediaAsset[];
+  freshness?: ProfileFreshness;
   _count?: { dataPoints: number };
 }
 

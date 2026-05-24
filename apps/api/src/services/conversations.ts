@@ -1,5 +1,5 @@
 import { getPrisma, Prisma } from '@nosquare/db';
-import { Errors } from '@nosquare/shared';
+import { Errors, extractOpenerVariant } from '@nosquare/shared';
 import type { z } from 'zod';
 import type { ConversationFiltersZ } from '@nosquare/shared';
 import { getQueues } from '../queues.js';
@@ -174,12 +174,49 @@ export const conversationsService = {
     scheduledAt?: string;
     operatorId: string;
     bypassSafety?: boolean;
+    /**
+     * Opener variantKey to persist on the outbound `Message.openerVariant`.
+     * Normally inferred from `fromSuggestionId` (see below); the explicit
+     * argument exists so `approveSuggestion` can reuse the meta it has
+     * already loaded without a second DB roundtrip. When BOTH are
+     * present the explicit value wins. ab-opener-variants change.
+     */
+    openerVariant?: string;
   }) {
     const prisma = getPrisma();
     const conv = input.bypassSafety
       ? await prisma.conversation.findUnique({ where: { id: input.conversationId } })
       : await assertOutboundSafe({ conversationId: input.conversationId, text: input.text });
     if (!conv) throw Errors.notFound('conversation', input.conversationId);
+
+    // Resolve the opener variantKey if not explicitly supplied. The
+    // generic send-from-suggestion route (`POST
+    // /conversations/:id/messages` with `fromSuggestionId`) skips
+    // `approveSuggestion` and lands here directly, so we must do the
+    // meta lookup ourselves to preserve attribution. `extractOpenerVariant`
+    // gates on agentName + meta shape so non-opener suggestions never
+    // leak a variantKey onto the message column.
+    //
+    // SECURITY: the lookup MUST be scoped to the current conversation —
+    // a caller supplying a `fromSuggestionId` from a different
+    // conversation would otherwise copy that suggestion's opener
+    // variant AND get its `status` flipped to `sent` below. The findFirst
+    // (id + conversationId) call returns null in that mismatch case;
+    // we then refuse the request rather than silently dropping the
+    // suggestion link. ab-opener-variants change.
+    let resolvedOpenerVariant: string | null = input.openerVariant ?? null;
+    if (input.fromSuggestionId) {
+      const sug = await prisma.suggestion.findFirst({
+        where: { id: input.fromSuggestionId, conversationId: input.conversationId },
+        select: { agentName: true, meta: true },
+      });
+      if (!sug) {
+        throw Errors.notFound('suggestion', input.fromSuggestionId);
+      }
+      if (!resolvedOpenerVariant) {
+        resolvedOpenerVariant = extractOpenerVariant(sug);
+      }
+    }
 
     const message = await prisma.message.create({
       data: {
@@ -190,12 +227,17 @@ export const conversationsService = {
         status: 'pending',
         suggestionId: input.fromSuggestionId ?? null,
         operatorId: input.operatorId,
+        ...(resolvedOpenerVariant ? { openerVariant: resolvedOpenerVariant } : {}),
       },
     });
 
     if (input.fromSuggestionId) {
-      await prisma.suggestion.update({
-        where: { id: input.fromSuggestionId },
+      // Same conversation-scoped guard as above: `updateMany` is a no-op
+      // when the suggestion doesn't belong to this conversation (the
+      // `findFirst` above would already have thrown in that case, but
+      // belt-and-braces against future refactors).
+      await prisma.suggestion.updateMany({
+        where: { id: input.fromSuggestionId, conversationId: input.conversationId },
         data: { status: 'sent' },
       });
     }
@@ -238,6 +280,11 @@ export const conversationsService = {
         data: { status: 'edited', text: overrideText },
       });
     }
+    // Carry the opener variantKey from the source suggestion onto the
+    // outbound Message — same path as `tryAutoApprove`. The helper gates
+    // on `agentName` and the meta shape, so a non-opener suggestion never
+    // leaks a variantKey to the message column. ab-opener-variants change.
+    const openerVariant = extractOpenerVariant({ agentName: s.agentName, meta: s.meta });
     return this.sendOperatorMessage({
       conversationId: s.conversationId,
       text,
@@ -245,6 +292,7 @@ export const conversationsService = {
       scheduledAt: scheduledAt ?? readOutreachStartAt(s.conversation.meta),
       operatorId,
       bypassSafety: true,
+      ...(openerVariant ? { openerVariant } : {}),
     });
   },
 

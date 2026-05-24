@@ -14,7 +14,7 @@ import { api } from '../../lib/api';
 import { useFlags } from '../../lib/config';
 import { isFeatureOff } from '../../lib/featureGate';
 import { toast } from '../../lib/toast';
-import type { Campaign, CampaignAjtbd } from './types';
+import type { Campaign } from './types';
 import type { CampaignType } from '../campaign-types/types';
 import type { TgAccount } from '../tg-accounts/types';
 
@@ -177,15 +177,25 @@ watch(
       agencyClientBrief.value = typeof cg.client_brief === 'string' ? cg.client_brief : '';
       goalJson.value = JSON.stringify(c.goal ?? {}, null, 2);
 
-      const a = c.ajtbd;
-      ajtbdJob.value = a?.job ?? c.goalText;
-      ajtbdWhen.value = a?.when ?? '';
-      ajtbdDesiredOutcome.value = a?.desired_outcome ?? c.valueProp;
-      ajtbdPush.value = a?.forces?.push ?? [];
-      ajtbdPull.value = a?.forces?.pull ?? [];
-      ajtbdAnxieties.value = a?.forces?.anxieties ?? [];
-      ajtbdHabits.value = a?.forces?.habits ?? [];
-      ajtbdNonGoals.value = a?.non_goals ?? [];
+      // CustDev's `goal` IS the AJTBD shape. After
+      // `drop-campaign-ajtbd-column` the AJTBD editor fields are sourced
+      // from `c.goal`; non-AJTBD goals (agency_sourcing etc.) leave the
+      // fields with reasonable fallbacks from goalText / valueProp.
+      const g = (c.goal ?? {}) as {
+        job?: string;
+        when?: string;
+        desired_outcome?: string;
+        forces?: { push?: string[]; pull?: string[]; anxieties?: string[]; habits?: string[] };
+        non_goals?: string[];
+      };
+      ajtbdJob.value = g.job ?? c.goalText;
+      ajtbdWhen.value = g.when ?? '';
+      ajtbdDesiredOutcome.value = g.desired_outcome ?? c.valueProp;
+      ajtbdPush.value = g.forces?.push ?? [];
+      ajtbdPull.value = g.forces?.pull ?? [];
+      ajtbdAnxieties.value = g.forces?.anxieties ?? [];
+      ajtbdHabits.value = g.forces?.habits ?? [];
+      ajtbdNonGoals.value = g.non_goals ?? [];
 
       const f = (c.targetFilter ?? {}) as {
         platforms?: string[];
@@ -263,9 +273,34 @@ watch(
 
 const canSubmit = computed(() => !!name.value && !!goal.value && !!valueProp.value);
 
-// Build the type-specific `goal` object from the active editor.
+// Build the type-specific `goal` object from the active editor. When
+// `typesAvailable` is false the server still defaults to CustDev (flag
+// off, registry dark), so we send an AJTBD-shaped `goal` here too —
+// otherwise the AJTBD editor fields the operator just filled would be
+// silently dropped and only the goalText/valueProp scaffold would
+// reach the DB. After `drop-campaign-ajtbd-column` there is no longer
+// a separate `ajtbd` column to fall back to.
+function buildCustdevGoal(): Record<string, unknown> {
+  return {
+    job: ajtbdJob.value || goal.value,
+    when: ajtbdWhen.value,
+    forces: {
+      push: ajtbdPush.value,
+      pull: ajtbdPull.value,
+      anxieties: ajtbdAnxieties.value,
+      habits: ajtbdHabits.value,
+    },
+    desired_outcome: ajtbdDesiredOutcome.value || valueProp.value,
+    non_goals: ajtbdNonGoals.value,
+  };
+}
+
 function buildGoal(): Record<string, unknown> | undefined {
-  if (!typesAvailable.value) return undefined; // legacy: server scaffolds custdev goal
+  if (!typesAvailable.value) {
+    // Registry is dark — server forces custdev. Still send the AJTBD-
+    // shaped goal so the editor's content survives the request.
+    return buildCustdevGoal();
+  }
   const key = selectedTypeKey.value;
   if (key === 'agency_sourcing') {
     return {
@@ -274,19 +309,7 @@ function buildGoal(): Record<string, unknown> | undefined {
     };
   }
   if (key === 'custdev') {
-    // Custdev goal mirrors the AJTBD framing; server also scaffolds it.
-    return {
-      job: ajtbdJob.value || goal.value,
-      when: ajtbdWhen.value,
-      forces: {
-        push: ajtbdPush.value,
-        pull: ajtbdPull.value,
-        anxieties: ajtbdAnxieties.value,
-        habits: ajtbdHabits.value,
-      },
-      desired_outcome: ajtbdDesiredOutcome.value || valueProp.value,
-      non_goals: ajtbdNonGoals.value,
-    };
+    return buildCustdevGoal();
   }
   // Unknown type: operator-authored JSON.
   try {
@@ -324,34 +347,27 @@ const mut = useMutation({
       maxPerDayPerAccount: scheduleMaxPerDay.value,
     };
 
-    const ajtbd: CampaignAjtbd = {
-      job: ajtbdJob.value || goal.value,
-      when: ajtbdWhen.value,
-      forces: {
-        push: ajtbdPush.value,
-        pull: ajtbdPull.value,
-        anxieties: ajtbdAnxieties.value,
-        habits: ajtbdHabits.value,
-      },
-      desired_outcome: ajtbdDesiredOutcome.value || valueProp.value,
-      non_goals: ajtbdNonGoals.value,
-    };
-
+    // After `drop-campaign-ajtbd-column` the API no longer accepts an
+    // `ajtbd` field — for CustDev the AJTBD content is embedded inside
+    // the type-specific `goal` (see `buildGoal()` below).
     const goalObj = buildGoal();
 
     const body: Record<string, unknown> = {
       name: name.value,
       goalText: goal.value,
       valueProp: valueProp.value,
-      ajtbd,
       defaultMode: mode.value,
       targetFilter,
       agentOverrides,
       schedule,
       outreachAccountPool: outreachAccountPool.value,
     };
-    // Only send typeId/goal when the registry is enabled; otherwise the legacy
-    // server path scaffolds the custdev goal from ajtbd as before.
+    // `typeId` only goes through when the registry is enabled (otherwise
+    // the server defaults to custdev). `goal` is ALWAYS sent now — the
+    // legacy `ajtbd` column was removed by `drop-campaign-ajtbd-column`,
+    // so `buildGoal()` returns a populated AJTBD-shaped goal even on the
+    // flag-off CustDev path; sending it preserves the editor's content
+    // instead of relying on a goalText/valueProp scaffold.
     if (typesAvailable.value && typeId.value) body.typeId = typeId.value;
     if (goalObj !== undefined) body.goal = goalObj;
 

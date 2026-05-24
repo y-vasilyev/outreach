@@ -1,5 +1,5 @@
 import { getPrisma } from '@nosquare/db';
-import { Errors } from '@nosquare/shared';
+import { Errors, computeProfileFreshness } from '@nosquare/shared';
 
 /**
  * Blogger commercial profile read service (agency-sourcing-matching M5, task
@@ -7,6 +7,9 @@ import { Errors } from '@nosquare/shared';
  * detail view returns the standardized rolled-up fields plus the contributing
  * `profile_data_point` rows (with provenance) so an operator can audit how the
  * profile was composed.
+ *
+ * Per-section freshness (`freshness` on the detail response) is derived
+ * on read from the data points — see `blogger-profile-freshness` change.
  */
 export const bloggerProfilesService = {
   async list(opts: { limit?: number; offset?: number } = {}) {
@@ -38,6 +41,13 @@ export const bloggerProfilesService = {
       },
     });
     if (!profile) throw Errors.notFound('blogger_profile', id);
+    const freshness = computeProfileFreshness(
+      profile.dataPoints.map((dp) => ({
+        field: dp.field,
+        value: dp.value,
+        capturedAt: dp.capturedAt,
+      })),
+    );
     return {
       ...profile,
       // Prisma serializes Decimal to a string over JSON; map confidence back to
@@ -53,6 +63,7 @@ export const bloggerProfilesService = {
         bytes: a.bytes,
         createdAt: a.createdAt,
       })),
+      freshness,
     };
   },
 };

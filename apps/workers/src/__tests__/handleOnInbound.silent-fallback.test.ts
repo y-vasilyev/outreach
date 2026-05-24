@@ -94,7 +94,10 @@ function setupBaseConversation(opts: {
     contact: { id: 'c1', value: '999', type: 'tg_username', channel: { analysis: {} } },
     campaign: {
       id: 'cmp1',
-      ajtbd: SAMPLE_AJTBD,
+      // After `drop-campaign-ajtbd-column` the worker derives the AJTBD
+      // view from `campaign.goal` (via `extractAjtbdView`). For CustDev,
+      // the goal IS the AJTBD shape.
+      goal: SAMPLE_AJTBD,
       goalText: 'interview goal',
       valueProp: 'interview value',
     },

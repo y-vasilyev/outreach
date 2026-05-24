@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const prisma = {
     conversation: { findUnique: vi.fn() },
-    suggestion: { update: vi.fn() },
+    suggestion: { update: vi.fn(), findUnique: vi.fn() },
     message: { create: vi.fn() },
     $transaction: vi.fn(),
   };
@@ -32,6 +32,7 @@ import {
   T_SAFETY,
   T_SEMI_AUTO_GOALFIT,
   T_AUTO_GOALFIT,
+  extractOpenerVariant,
 } from '../services/auto-approve.js';
 
 beforeEach(() => {
@@ -39,6 +40,12 @@ beforeEach(() => {
   mocks.prisma.conversation.findUnique.mockReset();
   mocks.prisma.suggestion.update.mockReset();
   mocks.prisma.suggestion.update.mockResolvedValue({});
+  mocks.prisma.suggestion.findUnique.mockReset();
+  // Default: no opener metadata. Individual tests can override per case.
+  mocks.prisma.suggestion.findUnique.mockResolvedValue({
+    agentName: 'reply_composer',
+    meta: {},
+  });
   mocks.prisma.message.create.mockReset();
   mocks.prisma.message.create.mockResolvedValue({ id: 'msg1' });
   mocks.prisma.$transaction.mockReset();
@@ -240,6 +247,133 @@ describe('tryAutoApprove — composition rule', () => {
       const ok = await tryAutoApprove({ ...baseCtx, score: 0.95 });
       expect(ok).toBe(false);
       expect(mocks.tgSendAdd).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('openerVariant propagation (ab-opener-variants)', () => {
+    it('writes Message.openerVariant when the source suggestion is opening_composer', async () => {
+      setConv('semi_auto');
+      mocks.prisma.suggestion.findUnique.mockResolvedValueOnce({
+        agentName: 'opening_composer',
+        meta: { openerVariant: 'B' },
+      });
+      const ok = await tryAutoApprove({
+        ...baseCtx,
+        score: 0.9,
+        phase: 'first_touch',
+      });
+      expect(ok).toBe(true);
+      expect(mocks.prisma.message.create).toHaveBeenCalledTimes(1);
+      expect(mocks.prisma.message.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ openerVariant: 'B' }),
+      });
+    });
+
+    it('writes Message.openerVariant for agency_opening_composer too', async () => {
+      setConv('semi_auto');
+      mocks.prisma.suggestion.findUnique.mockResolvedValueOnce({
+        agentName: 'agency_opening_composer',
+        meta: { openerVariant: 'with_brand' },
+      });
+      const ok = await tryAutoApprove({
+        ...baseCtx,
+        score: 0.9,
+        phase: 'first_touch',
+      });
+      expect(ok).toBe(true);
+      expect(mocks.prisma.message.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ openerVariant: 'with_brand' }),
+      });
+    });
+
+    it('does NOT set openerVariant when the suggestion is a reply (different agent)', async () => {
+      setConv('semi_auto');
+      mocks.prisma.suggestion.findUnique.mockResolvedValueOnce({
+        agentName: 'reply_composer',
+        // Reply suggestions never carry this meta key in production,
+        // but defend against an operator stamping it manually.
+        meta: { openerVariant: 'A' },
+      });
+      const ok = await tryAutoApprove({
+        ...baseCtx,
+        score: 0.9,
+        gate: { action: 'continue', score: T_SEMI_AUTO_GOALFIT },
+      });
+      expect(ok).toBe(true);
+      const createCall = mocks.prisma.message.create.mock.calls[0]![0];
+      expect(createCall.data.openerVariant).toBeUndefined();
+    });
+
+    it('does NOT set openerVariant when meta.openerVariant is missing', async () => {
+      setConv('semi_auto');
+      mocks.prisma.suggestion.findUnique.mockResolvedValueOnce({
+        agentName: 'opening_composer',
+        meta: {},
+      });
+      const ok = await tryAutoApprove({
+        ...baseCtx,
+        score: 0.9,
+        phase: 'first_touch',
+      });
+      expect(ok).toBe(true);
+      const createCall = mocks.prisma.message.create.mock.calls[0]![0];
+      expect(createCall.data.openerVariant).toBeUndefined();
+    });
+
+    it('does NOT set openerVariant when meta is corrupted (non-string)', async () => {
+      setConv('semi_auto');
+      mocks.prisma.suggestion.findUnique.mockResolvedValueOnce({
+        agentName: 'opening_composer',
+        meta: { openerVariant: 42 },
+      });
+      const ok = await tryAutoApprove({
+        ...baseCtx,
+        score: 0.9,
+        phase: 'first_touch',
+      });
+      expect(ok).toBe(true);
+      const createCall = mocks.prisma.message.create.mock.calls[0]![0];
+      expect(createCall.data.openerVariant).toBeUndefined();
+    });
+  });
+
+  describe('extractOpenerVariant helper', () => {
+    it('returns null for null suggestion', () => {
+      expect(extractOpenerVariant(null)).toBeNull();
+    });
+
+    it('returns null for non-opener agentName', () => {
+      expect(
+        extractOpenerVariant({ agentName: 'reply_composer', meta: { openerVariant: 'A' } }),
+      ).toBeNull();
+    });
+
+    it('returns the variantKey for opening_composer', () => {
+      expect(
+        extractOpenerVariant({ agentName: 'opening_composer', meta: { openerVariant: 'value_prop' } }),
+      ).toBe('value_prop');
+    });
+
+    it('returns the variantKey for agency_opening_composer', () => {
+      expect(
+        extractOpenerVariant({
+          agentName: 'agency_opening_composer',
+          meta: { openerVariant: 'concise' },
+        }),
+      ).toBe('concise');
+    });
+
+    it('trims whitespace and returns null for blank', () => {
+      expect(
+        extractOpenerVariant({ agentName: 'opening_composer', meta: { openerVariant: '   ' } }),
+      ).toBeNull();
+    });
+
+    it('rejects strings longer than 32 chars (treats as corrupted)', () => {
+      const long = 'x'.repeat(33);
+      expect(
+        extractOpenerVariant({ agentName: 'opening_composer', meta: { openerVariant: long } }),
+      ).toBeNull();
     });
   });
 

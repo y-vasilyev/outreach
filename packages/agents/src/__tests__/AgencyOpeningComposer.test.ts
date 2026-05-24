@@ -105,6 +105,105 @@ describe('agency_opening_composer', () => {
     expect(out.variants[0]!.auto_send_eligible).toBe(false);
   });
 
+  it('publishes outputSchema that includes variantKey (so AgentRunner does not strip it)', () => {
+    const parsed = agencyOpeningComposer.outputSchema.parse({
+      variants: [
+        {
+          text: 't',
+          rationale: 'r',
+          length: 'short',
+          risk_score: 0.1,
+          auto_send_eligible: false,
+          variantKey: 'A',
+        },
+      ],
+    });
+    expect(parsed.variants[0]!.variantKey).toBe('A');
+  });
+
+  it('rejects a variant whose text exceeds the 800-char cap (existing constraint preserved)', () => {
+    const tooLong = 'x'.repeat(801);
+    expect(() =>
+      agencyOpeningComposer.outputSchema.parse({
+        variants: [
+          {
+            text: tooLong,
+            rationale: 'r',
+            length: 'short',
+            risk_score: 0.1,
+            auto_send_eligible: false,
+            variantKey: 'A',
+          },
+        ],
+      }),
+    ).toThrow(/≤800 chars/);
+  });
+
+  it('stamps alphabetical variantKey on every variant by default', async () => {
+    const llm = makeLLM({
+      completeJsonImpl: () => ({
+        variants: [
+          { text: 'Hey, no brand here.', rationale: '', length: 'short', risk_score: 0.2 },
+          { text: 'Generic format question.', rationale: '', length: 'medium', risk_score: 0.2 },
+        ],
+      }),
+    });
+    const ctx = makeCtx({ llm, config: baseConfig });
+    const out = await agencyOpeningComposer.run(
+      {
+        channel_analysis: { topic: 'edtech' },
+        contact: {},
+        campaign: { goal_text: 'x', client_brief: '' },
+        observed_integrations: [],
+      },
+      ctx,
+    );
+    expect(out.variants.map((v) => v.variantKey)).toEqual(['A', 'B']);
+    // No-fabrication guard still in effect:
+    expect(out.variants.every((v) => v.auto_send_eligible === false)).toBe(true);
+  });
+
+  it('preserves LLM-supplied variant_key and runs the no-fabrication guard around it', async () => {
+    const llm = makeLLM({
+      completeJsonImpl: () => ({
+        variants: [
+          {
+            text: 'Видел вашу интеграцию с Skillbox — расскажете про формат?',
+            rationale: 'cites observed',
+            length: 'medium',
+            risk_score: 0.1,
+            cited_integration: 'Skillbox',
+            auto_send_eligible: true,
+            variant_key: 'with_brand',
+          },
+          {
+            text: 'Здравствуйте, мы агентство — расскажете про форматы и прайс?',
+            rationale: 'generic hook',
+            length: 'medium',
+            risk_score: 0.15,
+            auto_send_eligible: false,
+            variant_key: 'concise',
+          },
+        ],
+      }),
+    });
+    const ctx = makeCtx({ llm, config: baseConfig });
+    const out = await agencyOpeningComposer.run(
+      {
+        channel_analysis: { topic: 'edtech' },
+        contact: {},
+        campaign: { goal_text: 'x', client_brief: '' },
+        observed_integrations: [
+          { brand: 'Skillbox', snippet: 'Реклама. Курс Skillbox по дизайну', date: '2026-04-01' },
+        ],
+      },
+      ctx,
+    );
+    expect(out.variants[0]!.variantKey).toBe('with_brand');
+    expect(out.variants[0]!.auto_send_eligible).toBe(true);
+    expect(out.variants[1]!.variantKey).toBe('concise');
+  });
+
   it('drops auto-send eligibility when the text does not contain the cited integration', async () => {
     const llm = makeLLM({
       completeJsonImpl: () => ({

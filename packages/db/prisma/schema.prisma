@@ -296,15 +296,13 @@ model Campaign {
   name                String
   goalText            String
   valueProp           String
-  // Structured AJTBD framing. Validated via zod (`CampaignAjtbdZ` in
-  // packages/shared). Nullable so legacy rows don't trip migrations; the
-  // on_inbound pipeline backfills a scaffold from goalText/valueProp via
-  // the data migration in 4_chat_autonomous_modes, and the runtime fails
-  // explicitly if it is still null when an agent needs it.
-  ajtbd               Json?
   // Campaign type from the registry (agency-sourcing-matching change).
   // Required as of migration 7 (backfill in migration 6 set every existing
   // campaign to `custdev`). RESTRICT: a campaign type in use can't be deleted.
+  // The legacy `ajtbd` JSON column was removed by migration
+  // `9c_drop_campaign_ajtbd` — the AJTBD shape for CustDev now lives
+  // inside `goal`, mediated by `extractAjtbdView` for the agents that
+  // still consume `CampaignAjtbd` as input.
   typeId              String
   type                CampaignType     @relation(fields: [typeId], references: [id], onDelete: Restrict)
   // Structured goal validated against the type's `goalSchema`. For
@@ -379,8 +377,16 @@ model Message {
   operator       User?            @relation(fields: [operatorId], references: [id], onDelete: SetNull)
   sentAt         DateTime?
   createdAt      DateTime         @default(now())
+  // Stable variantKey identifying which opener variant was sent. Populated
+  // only for outbound messages whose source `Suggestion.agentName` is
+  // `opening_composer` or `agency_opening_composer`; null everywhere else
+  // (replies, ad-hoc operator messages, inbound). Drives the per-variant
+  // sent/replied/replyRate aggregates served by
+  // `GET /campaigns/:id/opener-stats` (see change `ab-opener-variants`).
+  openerVariant  String?
 
   @@index([conversationId, createdAt])
+  @@index([conversationId, openerVariant])
 }
 
 model Suggestion {
@@ -531,6 +537,40 @@ model FeatureFlag {
   updatedById String?
   updatedAt   DateTime @updatedAt
   createdAt   DateTime @default(now())
+}
+
+// Batch channel discovery (batch-channel-discovery change). One row per
+// async batch request: stores the input niches + accumulated per-niche
+// results so the worker can iterate, the API can poll status, and the
+// operator can come back to a long-running batch hours later.
+enum DiscoveryBatchStatus {
+  pending
+  running
+  done
+  failed
+}
+
+model DiscoveryBatch {
+  id            String               @id @default(cuid())
+  // The niches submitted by the operator. Stored as JSON so a future
+  // worker can re-process a subset or annotate progress per-entry.
+  queries       Json
+  // Optional platform filter (null = all platforms). Mirrors the
+  // single-search input shape.
+  platform      String?
+  limitPerQuery Int                  @default(20)
+  status        DiscoveryBatchStatus @default(pending)
+  // Accumulated result: per-niche records + totals. Worker updates on
+  // each iteration. Shape mirrors `DiscoveryBatchSummaryZ` in
+  // `@nosquare/shared`.
+  summary       Json                 @default("{}")
+  createdById   String?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  completedAt   DateTime?
+
+  @@index([status, createdAt])
+  @@index([createdById])
 }
 
 // Standardized, queryable catalog row for a blogger/channel. Composed

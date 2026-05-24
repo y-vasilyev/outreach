@@ -12,13 +12,14 @@ const DEFAULT_CAMPAIGN_TYPE_KEY = 'custdev';
 /**
  * Resolve the campaign type (by id, else the default `custdev`) and validate
  * the supplied goal against its schema. Returns `{ typeId, goal }` to persist.
- * For custdev the goal falls back to the AJTBD (provided or scaffolded), so
- * existing create flows that only send `ajtbd` keep working.
+ * For custdev (the default type), when the caller didn't supply an explicit
+ * goal, we synthesise an AJTBD-shaped scaffold from `goalText` / `valueProp`
+ * — preserves backward compat with create flows that only set those two
+ * legacy text fields.
  */
 async function resolveTypeAndGoal(opts: {
   typeId?: string;
   goal?: Record<string, unknown>;
-  ajtbd?: Record<string, unknown>;
   goalText: string;
   valueProp: string;
 }): Promise<{ typeId: string; goal: object }> {
@@ -40,7 +41,7 @@ async function resolveTypeAndGoal(opts: {
   const candidateGoal =
     opts.goal ??
     (type.key === DEFAULT_CAMPAIGN_TYPE_KEY
-      ? opts.ajtbd ?? buildAjtbdScaffold({ goalText: opts.goalText, valueProp: opts.valueProp })
+      ? buildAjtbdScaffold({ goalText: opts.goalText, valueProp: opts.valueProp })
       : undefined);
   const goal = campaignTypesService.validateGoal(type, candidateGoal);
   return { typeId: type.id, goal };
@@ -153,12 +154,13 @@ export const campaignsService = {
 
   async create(input: CreateInput, createdById: string | null) {
     const prisma = getPrisma();
-    const ajtbd =
-      input.ajtbd ?? buildAjtbdScaffold({ goalText: input.goalText, valueProp: input.valueProp });
+    // After `drop-campaign-ajtbd-column` the legacy column is gone. For
+    // CustDev (the default type), if the caller didn't supply an explicit
+    // `goal`, fall back to a scaffold derived from goalText / valueProp —
+    // `resolveTypeAndGoal` handles that.
     const { typeId, goal } = await resolveTypeAndGoal({
       ...(input.typeId !== undefined && { typeId: input.typeId }),
       ...(input.goal !== undefined && { goal: input.goal }),
-      ajtbd: ajtbd as Record<string, unknown>,
       goalText: input.goalText,
       valueProp: input.valueProp,
     });
@@ -167,7 +169,6 @@ export const campaignsService = {
         name: input.name,
         goalText: input.goalText,
         valueProp: input.valueProp,
-        ajtbd: ajtbd as object,
         typeId,
         goal,
         targetFilter: input.targetFilter as object,
@@ -185,14 +186,11 @@ export const campaignsService = {
     const prisma = getPrisma();
 
     // Re-resolve + validate the type/goal only when the client touches the
-    // type, the goal, or the AJTBD (custdev goal mirrors the AJTBD).
+    // type or the goal.
     let typeGoal: { typeId: string; goal: object } | undefined;
-    if (patch.typeId !== undefined || patch.goal !== undefined || patch.ajtbd !== undefined) {
+    if (patch.typeId !== undefined || patch.goal !== undefined) {
       const existing = await prisma.campaign.findUnique({ where: { id } });
       if (!existing) throw Errors.notFound('campaign', id);
-      const ajtbd = (patch.ajtbd ?? existing.ajtbd ?? undefined) as
-        | Record<string, unknown>
-        | undefined;
       typeGoal = await resolveTypeAndGoal({
         ...(patch.typeId !== undefined
           ? { typeId: patch.typeId }
@@ -200,7 +198,6 @@ export const campaignsService = {
             ? { typeId: existing.typeId }
             : {}),
         ...(patch.goal !== undefined && { goal: patch.goal }),
-        ...(ajtbd !== undefined && { ajtbd }),
         goalText: patch.goalText ?? existing.goalText,
         valueProp: patch.valueProp ?? existing.valueProp,
       });
@@ -212,7 +209,6 @@ export const campaignsService = {
         ...(patch.name !== undefined && { name: patch.name }),
         ...(patch.goalText !== undefined && { goalText: patch.goalText }),
         ...(patch.valueProp !== undefined && { valueProp: patch.valueProp }),
-        ...(patch.ajtbd !== undefined && { ajtbd: patch.ajtbd as object }),
         ...(typeGoal !== undefined && { typeId: typeGoal.typeId, goal: typeGoal.goal }),
         ...(patch.targetFilter !== undefined && { targetFilter: patch.targetFilter as object }),
         ...(patch.agentOverrides !== undefined && { agentOverrides: patch.agentOverrides as object }),

@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { PlatformZ } from './common.js';
 import { RoleGuessZ } from './contact.js';
-import { CampaignAjtbdZ } from './ajtbd.js';
 
 export const CampaignModeZ = z.enum(['auto', 'semi_auto', 'assisted', 'manual']);
 export const CampaignStatusZ = z.enum(['draft', 'running', 'paused', 'finished']);
@@ -33,10 +32,11 @@ export const CampaignZ = z.object({
   name: z.string(),
   goalText: z.string(),
   valueProp: z.string(),
-  ajtbd: CampaignAjtbdZ.nullable(),
   // Campaign-type registry (agency-sourcing-matching change). Nullable
   // during the backfill window; `goal` is validated against the type's
-  // goalSchema server-side.
+  // goalSchema server-side. Note: the legacy `Campaign.ajtbd` storage
+  // column was removed by `drop-campaign-ajtbd-column` — the AJTBD view
+  // for CustDev now lives inside `goal`.
   typeId: z.string().nullable(),
   goal: z.record(z.unknown()).nullable(),
   targetFilter: TargetFilterZ,
@@ -52,10 +52,10 @@ export const CreateCampaignInputZ = z.object({
   name: z.string().min(1),
   goalText: z.string().min(1),
   valueProp: z.string().min(1),
-  ajtbd: CampaignAjtbdZ.optional(),
   // Campaign type to attach. Defaults to `custdev` server-side when omitted
   // (preserves pre-registry behavior). `goal` is validated against the
-  // type's goalSchema; for custdev it falls back to the AJTBD scaffold.
+  // type's goalSchema; for custdev the server scaffolds an AJTBD shape
+  // from `goalText` + `valueProp` if `goal` is omitted.
   typeId: z.string().optional(),
   goal: z.record(z.unknown()).optional(),
   targetFilter: TargetFilterZ,

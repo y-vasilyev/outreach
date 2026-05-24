@@ -4,6 +4,109 @@ All operator-visible changes worth noting between releases.
 
 ## Unreleased
 
+### Changed
+
+- **`downloadInboundMedia` is now unit-tested** — the tg-client method
+  that backs the inbound media-asset pipeline was previously covered only
+  indirectly via the `mediaStore` tests in workers. Extracted the core
+  logic into the exported helper `downloadInboundMediaWithClient` (pure,
+  takes a minimal `DownloadMediaClient` shape) and added 13 unit tests
+  covering every branch of the contract (invalid msgId, no message, no
+  media, missing `downloadMedia`, throws, null/string/Uint8Array/Buffer/
+  unsupported returns, correct `getMessages` argument shape, never
+  throws). Behavior is unchanged. A `RUNBOOK.md` in the archived
+  openspec change documents the live-smoke procedure operators run
+  before flipping `object_storage` on in prod. See openspec change
+  `verify-download-inbound-media`.
+
+### Added
+
+- **A/B opener variants** — the opener composers
+  (`opening_composer` and `agency_opening_composer`) now stamp each
+  variant with a stable `variantKey` (LLM can supply a semantic key
+  like `'concise'` / `'with_brand'`; otherwise a deterministic
+  post-process assigns `'A'`, `'B'`, `'C'`, …). The key flows through
+  `Suggestion.meta.openerVariant` into the new `Message.openerVariant`
+  column, both on the auto-send path (`tryAutoApprove`) and the
+  operator-approve path (`approveSuggestion`). A new read-only
+  `GET /campaigns/:id/opener-stats?withinHours=<H>` endpoint returns
+  per-variant `{ variantKey, sent, replied, replyRate }` rows (default
+  `withinHours=48`, capped at 30 days). No feature flag — purely
+  additive observability layered on top of the existing opener flow.
+  See openspec change `ab-opener-variants`.
+
+- **Batch channel discovery** — operators can submit up to 50 niches at
+  once via `POST /discovery/batch` and poll progress through
+  `GET /discovery/batch/:id`. A `DiscoveryBatch` row tracks the request,
+  the new `discovery-batch` worker iterates the niches sequentially
+  (concurrency 1 + a 1-second rate-limit pause between calls) and
+  pushes new channels through the existing `channel-scrape` →
+  `contact-extract` intake. Per-niche failures are recorded in the
+  batch summary and don't abort the run; the operator sees exactly
+  which niches succeeded vs errored. Behind the `channel_discovery`
+  runtime flag like single-niche discovery. See openspec change
+  `batch-channel-discovery`.
+
+- **SafetyFilter deterministic hard-block** — campaign-type
+  `safetyProfile` gains a `hard_block_patterns` list of regex rules with
+  ids and human-readable reasons. SafetyFilter evaluates them BEFORE the
+  LLM scoring step; any match forces `allow=false`, `risk_score=1`, and
+  a structured `reason` line. The LLM stays advisory. The
+  `agency_sourcing` seed ships with six patterns covering result
+  guarantees (verbal/adjective/numeric/English forms), time-pressure
+  tactics, and pre-operator payment mentions;
+  CustDev gets an explicit empty list (legacy advisory-only behavior).
+  Malformed patterns are skipped without crashing the pipeline. See
+  openspec change `safety-filter-hard-block`.
+
+### Removed
+
+- **`Campaign.ajtbd` column** — the legacy JSON column was a parallel
+  storage to `Campaign.goal`; for `custdev` campaigns it carried the
+  same AJTBD payload, for `agency_sourcing` it held a synthetic
+  scaffold nobody edited. Runtime consumers (`HandoffDecider`,
+  `ReplyComposer`, `GoalFitEvaluator`, the worker `agent-run.ts`, web
+  `CampaignForm.vue`, the campaigns service) now read the AJTBD view
+  from `Campaign.goal` via a new pure helper
+  `extractAjtbdView({ goal, goalText, valueProp })` exported from
+  `@nosquare/shared` — passthrough when goal carries the AJTBD-shape
+  (CustDev), scaffold from `goalText` + `valueProp` otherwise. Two
+  migrations land together: `9b_backfill_campaign_goal_from_ajtbd`
+  copies any unset `goal` from `ajtbd`, then
+  `9c_drop_campaign_ajtbd` removes the column. API request/response
+  schemas (`CampaignZ`, `CreateCampaignInputZ`, `UpdateCampaignInputZ`)
+  no longer accept or return `ajtbd`. No behavior change for agents —
+  they still consume an AJTBD input contract. See openspec change
+  `drop-campaign-ajtbd-column`.
+
+- **`packages/shared/src/flags.ts`** — the "compile-time" flags module
+  (`ENABLE_LLM_CONTACT_EXTRACTION`, `ENABLE_AUTO_MODE`,
+  `ENABLE_FOLLOWUP_CRON`, `ENABLE_QUALITY_REVIEW`,
+  `MAX_DRY_RUN_TOKENS`, `DEFAULT_DAILY_MSG_LIMIT`,
+  `DEFAULT_DAILY_NEW_CONTACT_LIMIT`, `WARMUP_STAGES`, and the
+  derived `FeatureFlag` type) had no consumers anywhere in
+  `packages/` or `apps/` — neither static imports nor dynamic
+  `flags['…']` access. Deleted along with its `index.ts` re-export.
+  All operational toggles in the system are now runtime flags
+  (`feature_flag` table + admin UI). No behavior change. See
+  openspec change `remove-dead-flags-ts`.
+
+### Fixed
+
+- **`prisma migrate deploy` on a fresh Postgres cluster** — the
+  `4_chat_autonomous_modes` migration previously combined
+  `ALTER TYPE "ConversationMode" ADD VALUE 'semi_auto'` with `UPDATE`
+  statements that referenced the freshly-added enum value in the same
+  transaction; Postgres rejects that with `unsafe use of new value
+  'semi_auto' of enum type ConversationMode`, so any clean prod
+  deploy failed. The backfill is now split into a separate
+  `9a_chat_modes_backfill_semi_auto` migration, which runs after
+  migration 4 commits and is idempotent on a clean cluster. No
+  user-facing behaviour change; legacy `mode='auto'` /
+  `defaultMode='auto'` rows are still backfilled to `semi_auto`,
+  just in a separate transaction. See openspec change
+  `fix-migration-4-enum-tx`.
+
 ### Added
 
 - **Channel discovery via web search** — find candidate blogger channels by
@@ -67,8 +170,11 @@ All operator-visible changes worth noting between releases.
 
 - **BREAKING**: `ConversationMode.auto` renamed to `semi_auto` (matches
   pre-existing behaviour). New `auto` mode introduces strict semantics with
-  silent operator fallback. Existing rows are migrated automatically by
-  migration `4_chat_autonomous_modes`.
+  silent operator fallback. The enum value `semi_auto` is added by
+  migration `4_chat_autonomous_modes`; existing legacy rows are
+  backfilled to `semi_auto` by migration
+  `9a_chat_modes_backfill_semi_auto` (split for the enum-in-tx fix —
+  see `fix-migration-4-enum-tx`).
 - `Campaign.defaultMode` is now applied to new conversations created under
   the campaign (previously it was set but never read).
 

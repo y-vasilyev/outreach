@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { HardBlockPatternZ } from '@nosquare/shared';
 
 import type { Agent } from '../types.js';
 import { invokeJson, readParams } from './_runtime.js';
@@ -28,6 +29,19 @@ export const safetyFilterInputSchema = z.object({
    */
   forbidden_topics: z.array(z.string()).optional(),
   allowed_topics: z.array(z.string()).optional(),
+  /**
+   * Deterministic hard-block patterns from the campaign-type
+   * `safetyProfile` (safety-filter-hard-block change). Each entry is
+   * `{ id, pattern, reason, flags? }` where `pattern` is a regex source
+   * compiled at run time. Drafts matching ANY pattern are rejected with
+   * `allow=false` BEFORE the LLM scoring step. Bounds (`id`/`pattern`/
+   * `reason` length + flags allowlist) are enforced via the shared
+   * `HardBlockPatternZ`, so direct agent calls (admin dry-runs, tests)
+   * are checked the same as values resolved from the campaign type;
+   * run-time compile errors are still skipped (not thrown) so a single
+   * bad pattern can't disable the whole filter.
+   */
+  hard_block_patterns: z.array(HardBlockPatternZ).optional(),
   /** Optional history to detect "do not message" cases. */
   history: z
     .array(
@@ -150,6 +164,38 @@ export const safetyFilter: Agent<SafetyFilterInput, SafetyFilterOutput> = {
         risk_score: 1,
         rewrite_hint: buildRewriteHint(hardReasons),
       };
+    }
+
+    /**
+     * Pattern-based hard-block (safety-filter-hard-block change). Each
+     * profile-provided regex is compiled lazily in a try/catch — a single
+     * malformed entry is skipped, not fatal. The first matching pattern
+     * (and any others on the same draft) are reported with `<id>:<reason>`
+     * so logs and operator UI can attribute the block to a specific rule.
+     */
+    if (Array.isArray(input.hard_block_patterns) && input.hard_block_patterns.length > 0 && draft) {
+      const patternHits: Array<{ id: string; reason: string }> = [];
+      for (const p of input.hard_block_patterns) {
+        let regex: RegExp;
+        try {
+          regex = new RegExp(p.pattern, p.flags);
+        } catch {
+          // Malformed source — skip silently. The resolver tries to keep
+          // these out, but a hand-crafted payload could still hit this.
+          continue;
+        }
+        if (regex.test(draft)) {
+          patternHits.push({ id: p.id, reason: p.reason });
+        }
+      }
+      if (patternHits.length > 0) {
+        return {
+          allow: false,
+          reasons: patternHits.map((h) => `${h.id}:${h.reason}`),
+          risk_score: 1,
+          rewrite_hint: patternHits.map((h) => h.reason).join(' '),
+        };
+      }
     }
 
     // No hard violations — ask the LLM for a tone risk_score, but DO NOT

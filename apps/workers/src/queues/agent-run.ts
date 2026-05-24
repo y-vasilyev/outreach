@@ -3,7 +3,7 @@ import { getRedis } from '../redis.js';
 import {
   AgentRunJobZ,
   QueueNames,
-  CampaignAjtbdZ,
+  extractAjtbdView,
   isWithinSchedule,
   resolveSafetyContext,
   resolveForceHandoffIntents,
@@ -36,7 +36,11 @@ interface ReplyComposerOut {
   variants: Array<{ text: string; intent_target: string; rationale: string }>;
 }
 interface OpenerOut {
-  variants: Array<{ text: string; rationale: string; risk_score?: number }>;
+  // `variantKey` is populated by the composer's deterministic post-process
+  // (`assignVariantKeys`) — always non-empty (alphabetical fallback when the
+  // LLM doesn't supply a semantic key). Used downstream to attribute the
+  // outbound message to a specific opener variant (ab-opener-variants).
+  variants: Array<{ text: string; rationale: string; risk_score?: number; variantKey: string }>;
 }
 interface SafetyOut {
   allow: boolean;
@@ -125,38 +129,37 @@ function canAutoSendOpening(campaign: {
 }
 
 /**
- * Resolve the AJTBD framing for a conversation. Returns a parsed
- * `CampaignAjtbd` when the attached campaign has one, or `undefined`
- * when the conversation is ad-hoc (no campaign).
+ * Resolve the AJTBD framing for a conversation. Returns a `CampaignAjtbd`
+ * view derived from `campaign.goal` for any attached campaign, or
+ * `undefined` when the conversation is ad-hoc (no campaign).
  *
- * **Throws** when the conversation IS attached to a campaign but that
- * campaign's `ajtbd` column is null or fails zod validation. Per
- * `chat-autonomous-modes` design: post-migration every campaign should
- * have a populated AJTBD (the migration backfills a scaffold from
- * goalText/valueProp). A null AJTBD therefore indicates a config bug
- * (e.g. campaign created via a code path that bypassed the zod schema)
- * — we fail loud rather than fall back to a hardcoded default, which
- * would silently degrade quality across the inbound pipeline.
+ * Source of truth is now `Campaign.goal`, discriminated by the
+ * campaign's `type.key` (CustDev → AJTBD passthrough; other types →
+ * scaffold from goalText/valueProp). See `extractAjtbdView` in
+ * `@nosquare/shared`. The legacy `Campaign.ajtbd` column was removed by
+ * `drop-campaign-ajtbd-column`, so this helper never throws on a
+ * missing AJTBD — `extractAjtbdView` always returns a well-formed
+ * scaffold as a last resort.
  */
 function resolveCampaignAjtbd(campaign: {
   id: string;
-  ajtbd: unknown;
+  goal: unknown;
+  goalText: string;
+  valueProp: string;
+  type?: { key: string } | null;
 } | null | undefined): CampaignAjtbd | undefined {
   if (!campaign) return undefined;
-  if (campaign.ajtbd === null || campaign.ajtbd === undefined) {
-    throw Errors.internal(
-      `campaign ${campaign.id} has no ajtbd; expected scaffold from migration 4_chat_autonomous_modes`,
-      { campaignId: campaign.id },
-    );
-  }
-  const parsed = CampaignAjtbdZ.safeParse(campaign.ajtbd);
-  if (!parsed.success) {
-    throw Errors.internal(
-      `campaign ${campaign.id} has invalid ajtbd shape`,
-      { campaignId: campaign.id, error: parsed.error.message },
-    );
-  }
-  return parsed.data;
+  // After `drop-campaign-ajtbd-column`, the legacy `Campaign.ajtbd` column
+  // is gone. The AJTBD view comes from `Campaign.goal` discriminated by
+  // `campaign.type.key`: for `custdev` we passthrough the AJTBD shape;
+  // for anything else we scaffold from goalText/valueProp so agents
+  // always see a well-formed AJTBD input.
+  return extractAjtbdView({
+    goal: campaign.goal,
+    goalText: campaign.goalText,
+    valueProp: campaign.valueProp,
+    typeKey: campaign.type?.key ?? null,
+  });
 }
 
 /**
@@ -169,6 +172,7 @@ function resolveCampaignAjtbd(campaign: {
 interface SafetyExtras {
   forbidden_topics: string[];
   allowed_topics: string[];
+  hard_block_patterns: Array<{ id: string; pattern: string; reason: string; flags?: string }>;
   overrides: { params: { max_length: number; allow_links: boolean } };
 }
 
@@ -177,9 +181,19 @@ function safetyExtrasForCampaign(
 ): SafetyExtras | null {
   if (!getFeatureFlags().get('campaign_types')) return null;
   const ctx: ResolvedSafetyContext = resolveSafetyContext(campaign?.type?.safetyProfile ?? null);
+  // Re-serialize compiled regexes back to source+flags for SafetyFilter's
+  // input schema. The resolver already validated/dropped malformed
+  // sources, so this round-trip is safe.
+  const hardBlocks = ctx.hard_block_patterns.map((p) => ({
+    id: p.id,
+    pattern: p.regex.source,
+    reason: p.reason,
+    ...(p.regex.flags ? { flags: p.regex.flags } : {}),
+  }));
   return {
     forbidden_topics: ctx.forbidden_topics,
     allowed_topics: ctx.allowed_topics,
+    hard_block_patterns: hardBlocks,
     overrides: { params: ctx.params },
   };
 }
@@ -299,7 +313,6 @@ export async function handleOnInbound(data: { conversationId?: string }): Promis
               campaign: {
                 select: {
                   id: true,
-                  ajtbd: true,
                   goal: true,
                   goalText: true,
                   valueProp: true,
@@ -558,6 +571,7 @@ export async function handleOnInbound(data: { conversationId?: string }): Promis
                 ...(safetyExtras
                   ? {
                       forbidden_topics: safetyExtras.forbidden_topics,
+                      hard_block_patterns: safetyExtras.hard_block_patterns,
                       allowed_topics: safetyExtras.allowed_topics,
                     }
                   : {}),
@@ -821,6 +835,7 @@ export async function handleOutreachFirstMessage(data: { conversationId?: string
                 ...(safetyExtras
                   ? {
                       forbidden_topics: safetyExtras.forbidden_topics,
+                      hard_block_patterns: safetyExtras.hard_block_patterns,
                       allowed_topics: safetyExtras.allowed_topics,
                     }
                   : {}),
@@ -836,11 +851,22 @@ export async function handleOutreachFirstMessage(data: { conversationId?: string
             const sug = await prisma.suggestion.create({
               data: {
                 conversationId: conv.id,
-                agentName: 'opening_composer',
+                // Persist the actual composer's agent name — CustDev /
+                // flag-off uses 'opening_composer', agency routing uses
+                // 'agency_opening_composer'. Both names are recognised by
+                // `extractOpenerVariant` and counted by the opener-stats
+                // service. ab-opener-variants change.
+                agentName: openingAgent,
                 text: v.text,
                 rationale: v.rationale,
                 score,
                 status: 'pending',
+                // `meta.openerVariant` carries the composer's stable
+                // variantKey through to the outbound `Message.openerVariant`
+                // (set in tryAutoApprove / approveSuggestion). This is what
+                // `GET /campaigns/:id/opener-stats` aggregates over.
+                // See ab-opener-variants change.
+                meta: { openerVariant: v.variantKey },
               },
             });
             await publishRealtime(`conversation:${conv.id}`, {
@@ -895,7 +921,7 @@ export async function handleFollowupCheck(data: { conversationId?: string }): Pr
       campaign: {
         select: {
           id: true,
-          ajtbd: true,
+          goal: true,
           goalText: true,
           valueProp: true,
           type: { select: { key: true, safetyProfile: true } },
@@ -1025,6 +1051,7 @@ export async function handleFollowupCheck(data: { conversationId?: string }): Pr
         ...(safetyExtras
           ? {
               forbidden_topics: safetyExtras.forbidden_topics,
+              hard_block_patterns: safetyExtras.hard_block_patterns,
               allowed_topics: safetyExtras.allowed_topics,
             }
           : {}),

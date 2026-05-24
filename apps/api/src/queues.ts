@@ -11,6 +11,7 @@ interface QueueMap {
   agentRun: Queue;
   followupCron: Queue;
   metricsRoll: Queue;
+  discoveryBatch: Queue;
 }
 
 let _queues: QueueMap | undefined;
@@ -24,6 +25,7 @@ export function getQueues(): QueueMap {
       agentRun: new Queue(QueueNames.agentRun, conn()),
       followupCron: new Queue(QueueNames.followupCron, conn()),
       metricsRoll: new Queue(QueueNames.metricsRoll, conn()),
+      discoveryBatch: new Queue(QueueNames.discoveryBatch, conn()),
     };
   }
   return _queues;

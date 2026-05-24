@@ -246,7 +246,8 @@ async function main() {
       },
       agentSet: BASE_AGENT_SET,
       // Mirrors the legacy SafetyFilter intent: ad-sales lexicon raises the
-      // risk score (advisory), 600-char cap, no links in turn one.
+      // risk score (advisory), 600-char cap, no links in turn one. No
+      // hard-block patterns — CustDev keeps the legacy advisory behavior.
       safetyProfile: {
         forbidden_topics: [
           'реклама',
@@ -262,6 +263,7 @@ async function main() {
         allowed_topics: [],
         allow_links: false,
         max_length: 600,
+        hard_block_patterns: [],
       },
       // Empty: CustDev escalations (hostile / spam / request_human /
       // wants_payment_for_ads / wants_to_schedule) already live in
@@ -314,6 +316,68 @@ async function main() {
         allowed_topics: ['реклама', 'интеграция', 'прайс', 'охваты', 'формат', 'размещение'],
         allow_links: false,
         max_length: 800,
+        // safety-filter-hard-block: deterministic regexes that REJECT the
+        // variant before LLM scoring. These cover the safety-critical
+        // categories that the agency promo composer's prompt forbids but
+        // a small/hot LLM might still emit. `id` is logged for ops.
+        hard_block_patterns: [
+          // Split into multiple smaller rules — keeps each `pattern`
+          // under HardBlockPatternZ.pattern's 200-char cap and gives each
+          // category its own stable id for ops triage.
+          {
+            id: 'agency_guarantee_verb',
+            // "гарантирую/гарантируем продажи / охват / подписчиков ..."
+            pattern:
+              '(гарантиру[а-я]+|гаранти[яи])\\s+(результат|охват|продаж|подписч|пр[оие]смотр|кликов|конверс|трафик)',
+            reason: 'обещание гарантированного результата (verbal/noun form)',
+            flags: 'iu',
+          },
+          {
+            id: 'agency_guarantee_adjective',
+            // "гарантированный охват / гарантированные продажи / ..."
+            pattern:
+              'гарантированн[а-я]+\\s+(результат|охват|продаж|подписч|пр[оие]смотр|кликов|конверс|трафик)',
+            reason: 'обещание гарантированного результата (adjective form)',
+            flags: 'iu',
+          },
+          {
+            id: 'agency_guarantee_numeric',
+            // "+1000 подписчиков / +500 просмотров / +1500 sales ..."
+            pattern: '\\+\\s*\\d+\\s*(подписчик|охват|view|sale|просмотр|click|конверс)',
+            reason: 'обещание гарантированного числового результата',
+            flags: 'iu',
+          },
+          {
+            id: 'agency_guarantee_en',
+            // "guarantee result / reach / sale / view / click / conversion"
+            pattern:
+              'guarantee[a-z]*\\s+(result|reach|sale|view|click|conversion)',
+            reason: 'guarantee of a specific commercial result (en)',
+            flags: 'iu',
+          },
+          {
+            id: 'agency_time_pressure',
+            // "только сегодня / осталось N мест / последнее место / срочно
+            // решай". Non-capturing alternation for the «последнее|последние»
+            // case so the «-ее» (n.sg.) / «-ие» (pl.) variants both match.
+            // Use a Cyrillic-safe end delimiter via lookahead instead of
+            // `\\b` — JS `\\b` is ASCII-only even with the `u` flag and
+            // therefore wouldn't stop a Cyrillic-prefix false match like
+            // "последняя местная".
+            pattern:
+              '(только\\s+сегодня|осталось\\s+(\\d+|несколько|последн[а-я]+)\\s+мест[оа]?(?=$|\\s|[.,!?;:])|срочно\\s+решай|последн(?:ее|ие|яя)\\s+мест[оа]?(?=$|\\s|[.,!?;:]))',
+            reason: 'временное давление / scarcity tactics',
+            flags: 'iu',
+          },
+          {
+            id: 'agency_payment_mention',
+            // payment / wire / bank-card mentions before operator approval
+            pattern:
+              '(перевед[а-я]+\\s+(на|по|сразу)|оплат[а-я]+\\s+(по\\s+ссылк|на\\s+карт|сейчас|сразу)|реквизит[а-я]+|номер\\s+карт[а-я]+|банковск[а-я]+\\s+карт)',
+            reason: 'упоминание оплаты/перевода до подтверждения оператором',
+            flags: 'iu',
+          },
+        ],
       },
       // Agency dialogues default to `assisted` (D7 + non-goal: no auto price
       // negotiation): the AI drafts, a human confirms before sending. Price/
@@ -407,14 +471,15 @@ async function main() {
 
   // Optional demo campaign seed. Off by default so prod / CI seeds
   // don't pollute the campaigns table. Set SEED_DEMO_CAMPAIGN=1 in dev
-  // to make a sample campaign with populated AJTBD and defaultMode =
-  // semi_auto (so new conversations under it inherit semi-auto and
-  // the GoalFitEvaluator gate exercises the auto-approve path).
+  // to make a sample campaign with populated goal (AJTBD shape for the
+  // custdev type) and defaultMode = semi_auto (so new conversations
+  // under it inherit semi-auto and the GoalFitEvaluator gate exercises
+  // the auto-approve path).
   if (process.env.SEED_DEMO_CAMPAIGN === '1') {
     const demo = await prisma.campaign.upsert({
       where: { id: 'demo-custdev' },
       update: {
-        ajtbd: DEMO_AJTBD,
+        goal: DEMO_AJTBD,
         defaultMode: 'semi_auto',
       },
       create: {
@@ -422,8 +487,9 @@ async function main() {
         name: 'Demo CustDev',
         goalText: DEMO_AJTBD.job,
         valueProp: DEMO_AJTBD.desired_outcome,
-        ajtbd: DEMO_AJTBD,
-        // typeId is required as of migration 7; goal mirrors AJTBD for custdev.
+        // typeId is required as of migration 7. `goal` carries the
+        // AJTBD shape for the custdev type. The legacy `Campaign.ajtbd`
+        // column was removed by `drop-campaign-ajtbd-column`.
         typeId: 'custdev',
         goal: DEMO_AJTBD,
         defaultMode: 'semi_auto',
@@ -431,7 +497,7 @@ async function main() {
         createdById: admin.id,
       },
     });
-    console.log(`✓ campaign: ${demo.name} (defaultMode=semi_auto, AJTBD populated)`);
+    console.log(`✓ campaign: ${demo.name} (defaultMode=semi_auto, goal populated)`);
   }
 
   console.log('\nSeed complete.');

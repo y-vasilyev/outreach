@@ -68,7 +68,10 @@ function setupConversation(opts: { typeKey?: string; agentSet?: unknown }): void
     contact: { id: 'c1', channelId: 'ch1', value: '999', type: 'tg_username', channel: { analysis: {} } },
     campaign: {
       id: 'cmp1',
-      ajtbd: SAMPLE_AJTBD,
+      // After `drop-campaign-ajtbd-column` the worker derives the AJTBD
+      // view from `campaign.goal` (via `extractAjtbdView`). For CustDev,
+      // the goal IS the AJTBD shape.
+      goal: SAMPLE_AJTBD,
       goalText: 'g',
       valueProp: 'v',
       ...(opts.typeKey

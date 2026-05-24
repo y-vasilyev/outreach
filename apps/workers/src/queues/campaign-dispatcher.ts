@@ -4,6 +4,7 @@ import {
   type CampaignSchedule,
   isWithinSchedule,
   resolveAgentName,
+  resolveSafetyContext,
 } from '@nosquare/shared';
 import { getRunner } from '../services/runner.js';
 import { logger } from '../logger.js';
@@ -13,7 +14,11 @@ import { ensureContactTgProfile } from '../services/contact-profile.js';
 import { rolloverTgAccountDailyCounters } from '../services/tg-account-limits.js';
 
 interface OpenerOut {
-  variants: Array<{ text: string; rationale: string; risk_score: number }>;
+  // `variantKey` is populated by the composer's deterministic post-process
+  // (`assignVariantKeys`) — always non-empty (alphabetical fallback when the
+  // LLM doesn't supply a semantic key). Used downstream to attribute the
+  // outbound message to a specific opener variant (ab-opener-variants).
+  variants: Array<{ text: string; rationale: string; risk_score: number; variantKey: string }>;
 }
 interface SafetyOut {
   allow: boolean;
@@ -71,7 +76,7 @@ export function startCampaignDispatcher() {
         // B4: load the campaign type so opener/safety roles resolve via the
         // type's agentSet for agency_sourcing campaigns (behind the flag).
         // The `include` is additive; CustDev campaigns simply have type=null.
-        include: { type: { select: { key: true, agentSet: true } } },
+        include: { type: { select: { key: true, agentSet: true, safetyProfile: true } } },
       });
 
       for (const c of campaigns) {
@@ -149,7 +154,11 @@ export function startCampaignDispatcher() {
                 {
                   suggestions: {
                     some: {
-                      agentName: 'opening_composer',
+                      // Match BOTH opener agent names so agency campaigns
+                      // don't re-fire on top of an existing
+                      // `agency_opening_composer` suggestion (parallel of
+                      // the per-conversation guard below). ab-opener-variants.
+                      agentName: { in: ['opening_composer', 'agency_opening_composer'] },
                       status: { in: ['pending', 'approved', 'sent'] },
                     },
                   },
@@ -233,12 +242,15 @@ export function startCampaignDispatcher() {
           // messages or a usable opening suggestion. The candidate filter
           // above handles campaign-bound conversations, but the upsert may
           // also bind an older ad-hoc/different-campaign conversation.
+          // Match BOTH opener agent names so an agency campaign doesn't
+          // re-fire on top of an existing `agency_opening_composer`
+          // suggestion (ab-opener-variants change).
           const [existingMsgs, existingOpeningSuggestions] = await Promise.all([
             prisma.message.count({ where: { conversationId: conv.id } }),
             prisma.suggestion.count({
               where: {
                 conversationId: conv.id,
-                agentName: 'opening_composer',
+                agentName: { in: ['opening_composer', 'agency_opening_composer'] },
                 status: { in: ['pending', 'approved', 'sent'] },
               },
             }),
@@ -276,6 +288,20 @@ export function startCampaignDispatcher() {
           // agency_opening_composer (agency-shaped input below).
           const openingAgent = resolveRoleAgent(c, 'opening_composer', 'opening_composer');
           const safetyAgent = resolveRoleAgent(c, 'safety_filter', 'safety_filter');
+          // safety-filter-hard-block: serialize the type's deterministic
+          // hard-block regexes for the SafetyFilter input. Only attached
+          // when `campaign_types` is on AND the type has a profile; the
+          // legacy/CustDev path passes an empty array (no-op).
+          const safetyHardBlocks = getFeatureFlags().get('campaign_types')
+            ? resolveSafetyContext(c.type?.safetyProfile ?? null).hard_block_patterns.map(
+                (p) => ({
+                  id: p.id,
+                  pattern: p.regex.source,
+                  reason: p.reason,
+                  ...(p.regex.flags ? { flags: p.regex.flags } : {}),
+                }),
+              )
+            : [];
           const openerInput =
             openingAgent === 'agency_opening_composer'
               ? {
@@ -319,17 +345,29 @@ export function startCampaignDispatcher() {
                 channel_analysis: contactForPrompt.channel?.analysis ?? {},
                 contact: { id: contact.id },
                 campaign: { name: c.name },
+                hard_block_patterns: safetyHardBlocks,
               }, { conversationId: conv.id });
               if (!safety.allow) continue;
               const score = 1 - safety.risk_score;
               const sug = await prisma.suggestion.create({
                 data: {
                   conversationId: conv.id,
-                  agentName: 'opening_composer',
+                  // Persist the actual composer's agent name — CustDev /
+                  // flag-off uses 'opening_composer', agency routing uses
+                  // 'agency_opening_composer'. Both names are recognised by
+                  // `extractOpenerVariant` and counted by the opener-stats
+                  // service. ab-opener-variants change.
+                  agentName: openingAgent,
                   text: v.text,
                   rationale: v.rationale,
                   score,
                   status: 'pending',
+                  // `meta.openerVariant` carries the composer's stable
+                  // variantKey through to the outbound `Message.openerVariant`
+                  // (set in tryAutoApprove / approveSuggestion). This is what
+                  // `GET /campaigns/:id/opener-stats` aggregates over.
+                  // See ab-opener-variants change.
+                  meta: { openerVariant: v.variantKey },
                 },
               });
               if (score > bestScore) {

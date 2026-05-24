@@ -47,16 +47,67 @@ export const PipelineRoleZ = z.enum([
 export const AgentSetZ = z.record(AgentSlotZ).default({});
 
 /**
+ * One deterministic hard-block pattern. SafetyFilter rejects any draft
+ * whose text matches at least one of these BEFORE invoking its LLM
+ * scoring step. `pattern` is compiled to a JS `RegExp` with `flags`; both
+ * are length- and content-bounded so an admin (or a malformed builder
+ * output) can't ReDoS the worker.
+ */
+export const HardBlockPatternZ = z.object({
+  /** Stable identifier (logged + used in `reasons[]`). */
+  id: z.string().min(1).max(80),
+  /** Regex source. Bounded length to keep ReDoS risk low. */
+  pattern: z.string().min(1).max(200),
+  /** Short human-readable reason; surfaces in `rewrite_hint`. */
+  reason: z.string().min(1).max(200),
+  /** Allowed regex flags: case-insensitive / multiline / unicode. */
+  flags: z
+    .string()
+    .max(8)
+    .regex(/^[imu]*$/)
+    .optional(),
+});
+export type HardBlockPattern = z.infer<typeof HardBlockPatternZ>;
+
+/**
+ * Shape of the base safety profile (everything except
+ * `hard_block_patterns`). Factored out so `BaseSafetyProfileZ` and
+ * `SafetyProfileZ` stay in lock-step — adding a new base field is one
+ * edit, not two.
+ */
+const safetyProfileBaseShape = {
+  forbidden_topics: z.array(z.string()).default([]),
+  allowed_topics: z.array(z.string()).default([]),
+  allow_links: z.boolean().default(false),
+  max_length: z.number().int().min(50).max(5000).default(600),
+} as const;
+
+/**
+ * Base safety profile (no `hard_block_patterns`). Exported so
+ * `resolveSafetyContext` can validate the base shape independently and
+ * keep a valid profile alive when a single `hard_block_patterns` entry
+ * is malformed.
+ */
+export const BaseSafetyProfileZ = z
+  .object(safetyProfileBaseShape)
+  .passthrough()
+  .default({});
+
+/**
  * Safety profile read by SafetyFilter instead of global defaults. The
  * `custdev` type seeds the legacy forbidden vocabulary; `agency_sourcing`
  * permits commercial vocabulary.
+ *
+ * `forbidden_topics`/`allowed_topics` remain advisory tone signals.
+ * `hard_block_patterns` are DETERMINISTIC blocks evaluated before the
+ * LLM scoring step (see `SafetyFilter`); they exist so safety-critical
+ * categories like "guarantees", "payment links", or "time-pressure
+ * tactics" cannot slip through a stylistic LLM pass.
  */
 export const SafetyProfileZ = z
   .object({
-    forbidden_topics: z.array(z.string()).default([]),
-    allowed_topics: z.array(z.string()).default([]),
-    allow_links: z.boolean().default(false),
-    max_length: z.number().int().min(50).max(5000).default(600),
+    ...safetyProfileBaseShape,
+    hard_block_patterns: z.array(HardBlockPatternZ).default([]),
   })
   .passthrough()
   .default({});

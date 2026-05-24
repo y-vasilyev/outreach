@@ -10,6 +10,7 @@ import {
 import { startFollowupScheduler } from './queues/followup-scheduler.js';
 import { startQualityReviewScheduler } from './queues/quality-review-scheduler.js';
 import { startProfileExtractWorker } from './queues/profile-extract.js';
+import { startDiscoveryBatchWorker } from './queues/discovery-batch.js';
 import { initFeatureFlags } from './feature-flags.js';
 import { logger } from './logger.js';
 
@@ -28,6 +29,7 @@ async function main() {
     startAgentRunWorker(),
     startTgListenWorker(),
     startProfileExtractWorker(),
+    startDiscoveryBatchWorker(),
   ];
   const dispatcher = startCampaignDispatcher();
   const followups = startFollowupScheduler();

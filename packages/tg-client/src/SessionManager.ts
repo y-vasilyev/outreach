@@ -727,39 +727,14 @@ export class SessionManager {
 
       async downloadInboundMedia(opts: { peerKey: string; tgMsgId: string }) {
         requireAuth();
-        // Best-effort: any failure (message gone, no media, download error)
-        // resolves to null so the inbound path records an honest "pending"
-        // media_asset instead of a dead presigned URL. We do NOT route through
-        // `wrap` (which maps to AppError + can touch account status) — a single
-        // un-downloadable attachment must never degrade the session.
-        try {
-          const msgId = Number(opts.tgMsgId);
-          if (!Number.isFinite(msgId)) return null;
-          // GramJS accepts `{ ids: [...] }` to fetch specific message(s); our
-          // narrow GramJSClient surface only enumerates `limit`, so pass the
-          // real options through `unknown`.
-          const fetched = (await client.getMessages(
-            opts.peerKey,
-            { ids: [msgId] } as unknown as { limit: number },
-          )) as Array<{ media?: unknown } | null> | undefined;
-          const message = Array.isArray(fetched) ? fetched[0] : undefined;
-          if (!message || !message.media) return null;
-          const dl = (client as unknown as {
-            downloadMedia?: (m: unknown, opts?: unknown) => Promise<unknown>;
-          }).downloadMedia;
-          if (typeof dl !== 'function') return null;
-          const bytes = await dl.call(client, message);
-          if (bytes == null) return null;
-          if (bytes instanceof Uint8Array) return bytes;
-          if (typeof bytes === 'string') return new TextEncoder().encode(bytes);
-          // Buffer is a Uint8Array subclass; covered above. Anything else → null.
-          return null;
-        } catch (err) {
-          console.warn(
-            `[tg-client] downloadInboundMedia failed tgAccountId=${tgAccountId} msg=${opts.tgMsgId}: ${(err as Error).message}`,
-          );
-          return null;
-        }
+        // Best-effort: any failure resolves to null. The handle delegates to
+        // the standalone helper so the same contract is unit-testable
+        // without spinning up SessionManager.
+        return downloadInboundMediaWithClient(
+          client as DownloadMediaClient,
+          tgAccountId,
+          opts,
+        );
       },
 
       subscribeIncoming(cb: IncomingHandler) {
@@ -1286,6 +1261,61 @@ const PEER_PERMANENT_RE =
 /** Errors that prove the SESSION itself is dead (re-auth required). */
 const SESSION_DEAD_RE =
   /\b(?:AUTH_KEY_UNREGISTERED|AUTH_KEY_INVALID|SESSION_REVOKED|SESSION_EXPIRED|USER_DEACTIVATED_BAN|USER_DEACTIVATED|AUTH_KEY_DUPLICATED)\b/i;
+
+/**
+ * Minimum shape of a GramJS client `downloadInboundMediaWithClient` needs.
+ * Extracted so the helper is unit-testable against a fake without spinning
+ * up SessionManager. `downloadMedia` is optional because some GramJS
+ * builds expose it as a method on the prototype rather than the instance,
+ * and a missing function must degrade to `null` (not throw).
+ */
+export interface DownloadMediaClient {
+  getMessages: (target: unknown, opts: unknown) => Promise<unknown>;
+  downloadMedia?: (m: unknown, opts?: unknown) => Promise<unknown>;
+}
+
+/**
+ * Pure helper for fetching the raw bytes of a TG message's media. Behavior
+ * is best-effort: ANY failure (invalid `tgMsgId`, message gone, no media,
+ * `downloadMedia` absent, `downloadMedia` throws, non-binary download
+ * result) resolves to `null` — never throws. Callers (tg-listen worker)
+ * rely on this so an un-downloadable attachment writes an honest-pending
+ * `media_asset` row instead of crashing the inbound pipeline. See
+ * `media-asset-storage` spec scenarios "downloadInboundMedia never throws
+ * on any GramJS failure" and "downloadInboundMedia returns bytes on
+ * success".
+ */
+export async function downloadInboundMediaWithClient(
+  client: DownloadMediaClient,
+  tgAccountId: string,
+  opts: { peerKey: string; tgMsgId: string },
+): Promise<Uint8Array | null> {
+  try {
+    const msgId = Number(opts.tgMsgId);
+    if (!Number.isFinite(msgId)) return null;
+    // GramJS accepts `{ ids: [...] }` to fetch specific message(s); the
+    // narrower GramJSClient surface (`{ limit }`) is widened to `unknown`
+    // so the real options pass through.
+    const fetched = (await client.getMessages(opts.peerKey, { ids: [msgId] })) as
+      | Array<{ media?: unknown } | null>
+      | undefined;
+    const message = Array.isArray(fetched) ? fetched[0] : undefined;
+    if (!message || !message.media) return null;
+    const dl = client.downloadMedia;
+    if (typeof dl !== 'function') return null;
+    const bytes = await dl.call(client, message);
+    if (bytes == null) return null;
+    if (bytes instanceof Uint8Array) return bytes;
+    if (typeof bytes === 'string') return new TextEncoder().encode(bytes);
+    // Buffer is a Uint8Array subclass; covered above. Anything else → null.
+    return null;
+  } catch (err) {
+    console.warn(
+      `[tg-client] downloadInboundMedia failed tgAccountId=${tgAccountId} msg=${opts.tgMsgId}: ${(err as Error).message}`,
+    );
+    return null;
+  }
+}
 
 /**
  * Classify a TG error message. Exported so tg-send can check

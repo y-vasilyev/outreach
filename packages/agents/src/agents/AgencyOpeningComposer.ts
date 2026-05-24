@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Agent } from '../types.js';
 import { invokeJson } from './_runtime.js';
 import { LengthCoerced, RiskScoreCoerced } from './_coerce.js';
+import { assignVariantKeys } from './OpeningComposer.js';
 
 /**
  * AgencyOpeningComposer — `agency_opening_composer`
@@ -72,6 +73,43 @@ export const agencyOpeningComposerOutputSchema = z.object({
          * hook is NOT eligible. Enforced deterministically below.
          */
         auto_send_eligible: z.boolean().default(false),
+        /**
+         * Optional LLM-supplied stable identifier for this variant
+         * (e.g. `'concise'`, `'with_brand'`). The agent's deterministic
+         * post-process normalises this into `variantKey` on every variant
+         * — see `ab-opener-variants` change. Operators tuning the prompt
+         * may emit semantic keys; absent/blank values fall back to
+         * alphabetical (`'A'`, `'B'`, …).
+         */
+        variant_key: z.string().optional(),
+      }),
+    )
+    .min(1)
+    .max(5),
+});
+
+/**
+ * Same shape as `agencyOpeningComposerOutputSchema`, but every variant
+ * carries a non-optional `variantKey` populated by the post-process. This
+ * is what callers actually see — see `assignVariantKeys`.
+ *
+ * Existing field validation (text ≤800 chars, length / risk_score
+ * coercion, the auto_send_eligible default) is preserved — `AgentRunner`
+ * re-parses through this schema after `run()` returns, so loosening any
+ * of these would silently widen the contract.
+ */
+export const agencyOpeningComposerPostprocessedOutputSchema = z.object({
+  variants: z
+    .array(
+      z.object({
+        text: z.string().max(800, 'agency opening text must be ≤800 chars'),
+        rationale: z.string(),
+        length: LengthCoerced,
+        risk_score: RiskScoreCoerced,
+        cited_integration: z.string().optional(),
+        auto_send_eligible: z.boolean().default(false),
+        variant_key: z.string().optional(),
+        variantKey: z.string().min(1),
       }),
     )
     .min(1)
@@ -81,8 +119,14 @@ export const agencyOpeningComposerOutputSchema = z.object({
 export type AgencyOpeningComposerInput = z.infer<
   typeof agencyOpeningComposerInputSchema
 >;
+/**
+ * Output type as it appears AFTER the deterministic post-process — every
+ * variant carries a non-optional `variantKey` (alphabetical fallback or a
+ * disambiguated LLM-supplied key). The raw-LLM schema is
+ * `agencyOpeningComposerOutputSchema`.
+ */
 export type AgencyOpeningComposerOutput = z.infer<
-  typeof agencyOpeningComposerOutputSchema
+  typeof agencyOpeningComposerPostprocessedOutputSchema
 >;
 
 const FALLBACK_SYSTEM = `Ты пишешь первое сообщение блогеру/автору канала от лица агентства по размещению рекламы. Цель — открыть КОММЕРЧЕСКИЙ разговор: узнать прайс, форматы, сроки, охваты под запрос клиента. Здесь коммерческая лексика уместна (это не CustDev).
@@ -116,7 +160,9 @@ auto_send_eligible:
 ВАРИАНТЫ:
 Сгенерируй 2–3 варианта. В rationale укажи, какую observed_integration ты процитировал, или явно «нет наблюдаемых интеграций — общий заход по тематике».
 
-Возвращай JSON: { variants: [{ text, rationale, length, risk_score, cited_integration?, auto_send_eligible }] }.`;
+Опционально можешь пометить каждый вариант семантическим variant_key (например, "concise", "with_brand", "format_first"). Это short ASCII-идентификатор для статистики, не текст. Если затрудняешься — поле можно опустить, система сама проставит A/B/C.
+
+Возвращай JSON: { variants: [{ text, rationale, length, risk_score, cited_integration?, auto_send_eligible, variant_key? }] }.`;
 
 const FALLBACK_USER = `Канал (анализ): {{channel_analysis}}
 Контакт: {{contact}}
@@ -136,7 +182,11 @@ export const agencyOpeningComposer: Agent<
   description:
     'Пишет первое сообщение от лица агентства, цитируя реальную интеграцию автора; не выдумывает прошлых размещений.',
   inputSchema: agencyOpeningComposerInputSchema,
-  outputSchema: agencyOpeningComposerOutputSchema,
+  // The agent's public `outputSchema` MUST include the post-processed
+  // `variantKey` — `AgentRunner` re-parses `run()`'s return value through
+  // this schema and would otherwise strip unknown fields, dropping the
+  // attribution we just stamped on every variant (ab-opener-variants).
+  outputSchema: agencyOpeningComposerPostprocessedOutputSchema,
   variables: [
     'channel_analysis',
     'contact',
@@ -194,7 +244,7 @@ export const agencyOpeningComposer: Agent<
       .filter((s): s is string => Boolean(s && s.trim().length > 0))
       .map((s) => s.toLowerCase());
 
-    const variants = out.variants.map((v) => {
+    const guarded = out.variants.map((v) => {
       // (a) No observed integrations at all → never auto-send; strip any
       // citation the model invented.
       if (!hasObserved) {
@@ -218,6 +268,11 @@ export const agencyOpeningComposer: Agent<
       const eligible = v.auto_send_eligible && citesReal && textMentionsCited;
       return { ...v, auto_send_eligible: eligible };
     });
+
+    // Stamp `variantKey` on every variant via the shared post-process so
+    // CustDev and Agency openers follow byte-for-byte identical rules
+    // (see ab-opener-variants change).
+    const variants = assignVariantKeys(guarded);
 
     return { variants };
   },
