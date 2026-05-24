@@ -20,12 +20,24 @@ export const ConversationZ = z.object({
   createdAt: z.string(),
 });
 
+// Query parameters arrive as URL-encoded strings. An empty field on a form
+// posts as `""`, not `undefined` — so without preprocessing, a request like
+// `?status=&mode=` fails Zod enum validation. We normalise empties (and
+// whitespace-only values) to `undefined` at the boundary so the service
+// layer can rely on truthy checks. `q` additionally caps length to protect
+// the downstream `ILIKE` scan. See inbox-campaign-filter design.md.
+const trimEmptyToUndef = (v: unknown): unknown => {
+  if (typeof v !== 'string') return v;
+  const t = v.trim();
+  return t === '' ? undefined : t;
+};
+
 export const ConversationFiltersZ = z.object({
-  status: ConversationStatusZ.optional(),
-  mode: ConversationModeZ.optional(),
-  campaignId: z.string().optional(),
-  assignedOperatorId: z.string().optional(),
-  q: z.string().optional(),
+  status: z.preprocess(trimEmptyToUndef, ConversationStatusZ.optional()),
+  mode: z.preprocess(trimEmptyToUndef, ConversationModeZ.optional()),
+  campaignId: z.preprocess(trimEmptyToUndef, z.string().optional()),
+  assignedOperatorId: z.preprocess(trimEmptyToUndef, z.string().optional()),
+  q: z.preprocess(trimEmptyToUndef, z.string().max(200).optional()),
 });
 
 export const SetModeInputZ = z.object({

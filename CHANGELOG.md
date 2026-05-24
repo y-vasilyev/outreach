@@ -4,6 +4,24 @@ All operator-visible changes worth noting between releases.
 
 ## Unreleased
 
+### Added
+
+- **Inbox: per-campaign filter and friends** — the inbox now exposes a
+  filter bar with campaign / status / mode dropdowns and a debounced
+  contact/channel text search. State lives in the URL, so reloads and
+  shared links restore the same view; user-initiated changes use
+  `router.push` (back/forward navigates between filter states), while
+  auto-selecting the first conversation uses `router.replace` so it
+  doesn't pollute history. The campaign detail page now has an "Инбокс
+  кампании" action that deep-links into `/inbox?campaignId=<id>`.
+  `assignedOperatorId` is honoured via deep-link (no UI picker yet —
+  `GET /users` is admin-only and the inbox is shared with operators /
+  viewers; a role-safe lookup will come in a follow-up change). The
+  shared `ConversationFiltersZ` schema gained empty/whitespace
+  normalisation for enum/id fields and a `q.max(200)` cap to keep the
+  downstream `ILIKE` scan bounded. See openspec change
+  `inbox-campaign-filter`.
+
 ### Changed
 
 - **`downloadInboundMedia` is now unit-tested** — the tg-client method

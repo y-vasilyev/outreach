@@ -65,6 +65,13 @@ export const conversationsService = {
         ...(filters.mode && { mode: filters.mode }),
         ...(filters.campaignId && { campaignId: filters.campaignId }),
         ...(filters.assignedOperatorId && { assignedOperatorId: filters.assignedOperatorId }),
+        ...(filters.q && {
+          OR: [
+            { contact: { value: { contains: filters.q, mode: 'insensitive' as const } } },
+            { contact: { channel: { handle: { contains: filters.q, mode: 'insensitive' as const } } } },
+            { contact: { channel: { title: { contains: filters.q, mode: 'insensitive' as const } } } },
+          ],
+        }),
       },
       include: {
         contact: { include: { channel: { select: { handle: true, platform: true, title: true } } } },
