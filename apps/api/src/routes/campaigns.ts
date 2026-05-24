@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { CreateCampaignInputZ } from '@nosquare/shared';
+import { CreateCampaignInputZ, OpenerStatsQueryZ } from '@nosquare/shared';
 import { campaignsService } from '../services/campaigns.js';
+import { openerStatsService } from '../services/opener-stats.js';
 
 export async function campaignsRoutes(app: FastifyInstance) {
   app.addHook('onRequest', app.authenticate);
@@ -49,4 +50,17 @@ export async function campaignsRoutes(app: FastifyInstance) {
       .parse(req.body);
     return campaignsService.addContacts(params.id, body.contactIds);
   });
+
+  // Per-variant opener counters (ab-opener-variants change). Read-only,
+  // no audit, no LLM. Returns `[]` until at least one opener-tagged
+  // message has been sent for the campaign.
+  app.get(
+    '/campaigns/:id/opener-stats',
+    { preHandler: [app.requireRole(['admin', 'operator', 'viewer'])] },
+    async (req) => {
+      const params = z.object({ id: z.string() }).parse(req.params);
+      const { withinHours } = OpenerStatsQueryZ.parse(req.query ?? {});
+      return openerStatsService.get(params.id, withinHours);
+    },
+  );
 }

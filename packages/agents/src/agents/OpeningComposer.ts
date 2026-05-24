@@ -39,6 +39,44 @@ export const openingComposerOutputSchema = z.object({
         length: LengthCoerced,
         // Coerce 0..100 percentages → 0..1; clamp out-of-range numbers.
         risk_score: RiskScoreCoerced,
+        /**
+         * Optional LLM-supplied stable identifier for this variant
+         * (e.g. `'concise'`, `'value_prop'`). The agent's deterministic
+         * post-process normalises this into `variantKey` on every variant
+         * — see `ab-opener-variants` change. Operators tuning the prompt
+         * may emit semantic keys; absent/blank values fall back to
+         * alphabetical (`'A'`, `'B'`, …).
+         */
+        variant_key: z.string().optional(),
+      }),
+    )
+    .min(1)
+    .max(5),
+});
+
+/**
+ * Schema for the value the composer actually returns to callers — same as
+ * the raw LLM-validated schema, but every variant now carries a
+ * non-optional `variantKey` filled in by the deterministic post-process.
+ * The raw `variant_key` field stays around for round-tripping but
+ * downstream consumers (campaign-dispatcher, agent-run, auto-approve)
+ * should read `variantKey`.
+ *
+ * Existing field validation (text ≤600 chars, length / risk_score
+ * coercion) is preserved — `AgentRunner` re-parses through this schema
+ * after `run()` returns, so anything looser here would silently widen
+ * the contract.
+ */
+export const openingComposerPostprocessedOutputSchema = z.object({
+  variants: z
+    .array(
+      z.object({
+        text: z.string().max(600, 'opening text must be ≤600 chars'),
+        rationale: z.string(),
+        length: LengthCoerced,
+        risk_score: RiskScoreCoerced,
+        variant_key: z.string().optional(),
+        variantKey: z.string().min(1),
       }),
     )
     .min(1)
@@ -46,7 +84,13 @@ export const openingComposerOutputSchema = z.object({
 });
 
 export type OpeningComposerInput = z.infer<typeof openingComposerInputSchema>;
-export type OpeningComposerOutput = z.infer<typeof openingComposerOutputSchema>;
+/**
+ * Output type as it appears AFTER the deterministic post-process. Each
+ * variant carries a non-optional `variantKey` (alphabetical fallback or a
+ * disambiguated LLM-supplied key). The schema describing the raw LLM
+ * response is `openingComposerOutputSchema` (without `variantKey`).
+ */
+export type OpeningComposerOutput = z.infer<typeof openingComposerPostprocessedOutputSchema>;
 
 const FALLBACK_SYSTEM = `Ты пишешь первое сообщение в личку автору канала с приглашением на 15–20-минутное исследовательское интервью по продукту. Это НЕ продажа и НЕ предложение рекламы.
 
@@ -130,7 +174,9 @@ const FALLBACK_SYSTEM = `Ты пишешь первое сообщение в л
 Сгенерируй 2–3 варианта разной длины. Каждый ≤ 600 символов. В rationale ОБЯЗАТЕЛЬНО укажи какую зацепку из channel_analysis / recent_posts ты использовал — или явно напиши «нет конкретной зацепки».
 Каждый вариант должен проходить bridge test: hook → исследовательский вопрос → просьба. Если не проходит, перепиши короче без hook.
 
-Возвращай JSON: { variants: [{ text, rationale, length, risk_score }] }.`;
+Опционально можешь пометить каждый вариант семантическим variant_key (например, "concise", "value_prop", "hook_post"). Это short ASCII-идентификатор для статистики, не текст. Если затрудняешься — поле можно опустить, система сама проставит A/B/C.
+
+Возвращай JSON: { variants: [{ text, rationale, length, risk_score, variant_key? }] }.`;
 
 const FALLBACK_USER = `Канал: {{channel_analysis}}
 Контакт: {{contact}}
@@ -145,11 +191,83 @@ Recent posts (для зацепки):
 
 Верни JSON. 2–3 варианта.`;
 
+/**
+ * Deterministic post-process for the `variantKey` field on opener composer
+ * output. Centralised so `OpeningComposer` and `AgencyOpeningComposer`
+ * stay byte-for-byte aligned on the rules described by the
+ * `ab-opener-variants` change spec:
+ *
+ *   1. Take the LLM's optional `variant_key`, `trim()`, cap at 32 chars.
+ *   2. Treat blank/whitespace as missing.
+ *   3. Deduplicate within the response — first seen wins, later
+ *      collisions get `_2`, `_3`, … suffix until unique.
+ *   4. Missing keys get the next-free alphabetical fallback — `'A'`,
+ *      `'B'`, `'C'`, … skipping any letter that an LLM-supplied key
+ *      already claimed. So an LLM-supplied `'A'` does NOT collide with
+ *      the fallback `'A'` — the missing slot rolls over to `'B'`.
+ *   5. The final key set is guaranteed unique within one composer run.
+ *
+ * Returns the variants array decorated with a non-optional `variantKey`.
+ */
+export function assignVariantKeys<V extends { variant_key?: string | undefined }>(
+  variants: V[],
+): Array<V & { variantKey: string }> {
+  const MAX_LEN = 32;
+  const used = new Set<string>();
+  // First pass: normalise + reserve LLM-supplied keys.
+  const normalised: Array<string | undefined> = variants.map((v) => {
+    const raw = typeof v.variant_key === 'string' ? v.variant_key.trim() : '';
+    if (raw.length === 0) return undefined;
+    const capped = raw.slice(0, MAX_LEN);
+    let candidate = capped;
+    let n = 2;
+    while (used.has(candidate)) {
+      // Append `_N` suffix, re-capping if the result exceeds MAX_LEN.
+      const suffix = `_${n}`;
+      const room = MAX_LEN - suffix.length;
+      const base = capped.length > room ? capped.slice(0, room) : capped;
+      candidate = `${base}${suffix}`;
+      n += 1;
+    }
+    used.add(candidate);
+    return candidate;
+  });
+
+  // Second pass: fill missing slots with the next free alphabetical key.
+  let nextLetter = 0;
+  const fallbackKey = (): string => {
+    // 'A', 'B', ..., 'Z', 'AA', 'AB', ... — keeps positions readable
+    // even past 26 variants (which we cap to 5 anyway, but stay safe).
+    while (true) {
+      let n = nextLetter;
+      let s = '';
+      do {
+        s = String.fromCharCode(65 + (n % 26)) + s;
+        n = Math.floor(n / 26) - 1;
+      } while (n >= 0);
+      nextLetter += 1;
+      if (!used.has(s)) {
+        used.add(s);
+        return s;
+      }
+    }
+  };
+
+  return variants.map((v, i) => {
+    const k = normalised[i] ?? fallbackKey();
+    return { ...v, variantKey: k };
+  });
+}
+
 export const openingComposer: Agent<OpeningComposerInput, OpeningComposerOutput> = {
   name: 'opening_composer',
   description: 'Пишет 2–3 варианта первого CustDev-сообщения.',
   inputSchema: openingComposerInputSchema,
-  outputSchema: openingComposerOutputSchema,
+  // The agent's public `outputSchema` MUST include the post-processed
+  // `variantKey` — `AgentRunner` re-parses `run()`'s return value through
+  // this schema and would otherwise strip unknown fields, dropping the
+  // attribution we just stamped on every variant (ab-opener-variants).
+  outputSchema: openingComposerPostprocessedOutputSchema,
   variables: [
     'channel_analysis',
     'contact',
@@ -178,7 +296,7 @@ export const openingComposer: Agent<OpeningComposerInput, OpeningComposerOutput>
       })
       .join('\n');
 
-    return invokeJson({
+    const raw = await invokeJson({
       ctx,
       vars: {
         channel_analysis: input.channel_analysis,
@@ -194,5 +312,10 @@ export const openingComposer: Agent<OpeningComposerInput, OpeningComposerOutput>
       fallbackSystemPrompt: FALLBACK_SYSTEM,
       fallbackUserPromptTemplate: FALLBACK_USER,
     });
+
+    // Deterministic post-process: stamp `variantKey` on every variant.
+    // Centralised in `assignVariantKeys` so AgencyOpeningComposer follows
+    // the exact same rules (see ab-opener-variants change).
+    return { variants: assignVariantKeys(raw.variants) };
   },
 };

@@ -377,8 +377,16 @@ model Message {
   operator       User?            @relation(fields: [operatorId], references: [id], onDelete: SetNull)
   sentAt         DateTime?
   createdAt      DateTime         @default(now())
+  // Stable variantKey identifying which opener variant was sent. Populated
+  // only for outbound messages whose source `Suggestion.agentName` is
+  // `opening_composer` or `agency_opening_composer`; null everywhere else
+  // (replies, ad-hoc operator messages, inbound). Drives the per-variant
+  // sent/replied/replyRate aggregates served by
+  // `GET /campaigns/:id/opener-stats` (see change `ab-opener-variants`).
+  openerVariant  String?
 
   @@index([conversationId, createdAt])
+  @@index([conversationId, openerVariant])
 }
 
 model Suggestion {

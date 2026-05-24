@@ -36,7 +36,11 @@ interface ReplyComposerOut {
   variants: Array<{ text: string; intent_target: string; rationale: string }>;
 }
 interface OpenerOut {
-  variants: Array<{ text: string; rationale: string; risk_score?: number }>;
+  // `variantKey` is populated by the composer's deterministic post-process
+  // (`assignVariantKeys`) — always non-empty (alphabetical fallback when the
+  // LLM doesn't supply a semantic key). Used downstream to attribute the
+  // outbound message to a specific opener variant (ab-opener-variants).
+  variants: Array<{ text: string; rationale: string; risk_score?: number; variantKey: string }>;
 }
 interface SafetyOut {
   allow: boolean;
@@ -847,11 +851,22 @@ export async function handleOutreachFirstMessage(data: { conversationId?: string
             const sug = await prisma.suggestion.create({
               data: {
                 conversationId: conv.id,
-                agentName: 'opening_composer',
+                // Persist the actual composer's agent name — CustDev /
+                // flag-off uses 'opening_composer', agency routing uses
+                // 'agency_opening_composer'. Both names are recognised by
+                // `extractOpenerVariant` and counted by the opener-stats
+                // service. ab-opener-variants change.
+                agentName: openingAgent,
                 text: v.text,
                 rationale: v.rationale,
                 score,
                 status: 'pending',
+                // `meta.openerVariant` carries the composer's stable
+                // variantKey through to the outbound `Message.openerVariant`
+                // (set in tryAutoApprove / approveSuggestion). This is what
+                // `GET /campaigns/:id/opener-stats` aggregates over.
+                // See ab-opener-variants change.
+                meta: { openerVariant: v.variantKey },
               },
             });
             await publishRealtime(`conversation:${conv.id}`, {

@@ -14,7 +14,11 @@ import { ensureContactTgProfile } from '../services/contact-profile.js';
 import { rolloverTgAccountDailyCounters } from '../services/tg-account-limits.js';
 
 interface OpenerOut {
-  variants: Array<{ text: string; rationale: string; risk_score: number }>;
+  // `variantKey` is populated by the composer's deterministic post-process
+  // (`assignVariantKeys`) — always non-empty (alphabetical fallback when the
+  // LLM doesn't supply a semantic key). Used downstream to attribute the
+  // outbound message to a specific opener variant (ab-opener-variants).
+  variants: Array<{ text: string; rationale: string; risk_score: number; variantKey: string }>;
 }
 interface SafetyOut {
   allow: boolean;
@@ -150,7 +154,11 @@ export function startCampaignDispatcher() {
                 {
                   suggestions: {
                     some: {
-                      agentName: 'opening_composer',
+                      // Match BOTH opener agent names so agency campaigns
+                      // don't re-fire on top of an existing
+                      // `agency_opening_composer` suggestion (parallel of
+                      // the per-conversation guard below). ab-opener-variants.
+                      agentName: { in: ['opening_composer', 'agency_opening_composer'] },
                       status: { in: ['pending', 'approved', 'sent'] },
                     },
                   },
@@ -234,12 +242,15 @@ export function startCampaignDispatcher() {
           // messages or a usable opening suggestion. The candidate filter
           // above handles campaign-bound conversations, but the upsert may
           // also bind an older ad-hoc/different-campaign conversation.
+          // Match BOTH opener agent names so an agency campaign doesn't
+          // re-fire on top of an existing `agency_opening_composer`
+          // suggestion (ab-opener-variants change).
           const [existingMsgs, existingOpeningSuggestions] = await Promise.all([
             prisma.message.count({ where: { conversationId: conv.id } }),
             prisma.suggestion.count({
               where: {
                 conversationId: conv.id,
-                agentName: 'opening_composer',
+                agentName: { in: ['opening_composer', 'agency_opening_composer'] },
                 status: { in: ['pending', 'approved', 'sent'] },
               },
             }),
@@ -341,11 +352,22 @@ export function startCampaignDispatcher() {
               const sug = await prisma.suggestion.create({
                 data: {
                   conversationId: conv.id,
-                  agentName: 'opening_composer',
+                  // Persist the actual composer's agent name — CustDev /
+                  // flag-off uses 'opening_composer', agency routing uses
+                  // 'agency_opening_composer'. Both names are recognised by
+                  // `extractOpenerVariant` and counted by the opener-stats
+                  // service. ab-opener-variants change.
+                  agentName: openingAgent,
                   text: v.text,
                   rationale: v.rationale,
                   score,
                   status: 'pending',
+                  // `meta.openerVariant` carries the composer's stable
+                  // variantKey through to the outbound `Message.openerVariant`
+                  // (set in tryAutoApprove / approveSuggestion). This is what
+                  // `GET /campaigns/:id/opener-stats` aggregates over.
+                  // See ab-opener-variants change.
+                  meta: { openerVariant: v.variantKey },
                 },
               });
               if (score > bestScore) {

@@ -21,6 +21,20 @@ All operator-visible changes worth noting between releases.
 
 ### Added
 
+- **A/B opener variants** — the opener composers
+  (`opening_composer` and `agency_opening_composer`) now stamp each
+  variant with a stable `variantKey` (LLM can supply a semantic key
+  like `'concise'` / `'with_brand'`; otherwise a deterministic
+  post-process assigns `'A'`, `'B'`, `'C'`, …). The key flows through
+  `Suggestion.meta.openerVariant` into the new `Message.openerVariant`
+  column, both on the auto-send path (`tryAutoApprove`) and the
+  operator-approve path (`approveSuggestion`). A new read-only
+  `GET /campaigns/:id/opener-stats?withinHours=<H>` endpoint returns
+  per-variant `{ variantKey, sent, replied, replyRate }` rows (default
+  `withinHours=48`, capped at 30 days). No feature flag — purely
+  additive observability layered on top of the existing opener flow.
+  See openspec change `ab-opener-variants`.
+
 - **Batch channel discovery** — operators can submit up to 50 niches at
   once via `POST /discovery/batch` and poll progress through
   `GET /discovery/batch/:id`. A `DiscoveryBatch` row tracks the request,

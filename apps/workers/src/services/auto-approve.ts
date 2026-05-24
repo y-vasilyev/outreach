@@ -1,9 +1,14 @@
 import { getPrisma } from '@nosquare/db';
 import { Queue } from 'bullmq';
-import { QueueNames } from '@nosquare/shared';
+import { QueueNames, extractOpenerVariant } from '@nosquare/shared';
 import { getRedis } from '../redis.js';
 import { publishRealtime } from './realtime-emit.js';
 import { logger } from '../logger.js';
+
+// Re-export for existing tests that imported the helper from this module
+// (before it moved into @nosquare/shared). New callers should import from
+// @nosquare/shared directly.
+export { extractOpenerVariant };
 
 let _tgSendQueue: Queue | undefined;
 function tgSendQueue(): Queue {
@@ -141,6 +146,19 @@ export async function tryAutoApprove(ctx: AutoApproveContext): Promise<boolean> 
     }
   }
 
+  // Read the source suggestion so we can carry `meta.openerVariant`
+  // forward onto the outbound Message (ab-opener-variants change). The
+  // field is only honoured when the source agent is an opener composer —
+  // for any other agent the column stays null. Reading outside the
+  // transaction is fine: the row already exists (the caller created it),
+  // and any concurrent update would only flip `status`, never the
+  // `agentName` / `meta` we need here.
+  const sug = await prisma.suggestion.findUnique({
+    where: { id: ctx.suggestionId },
+    select: { agentName: true, meta: true },
+  });
+  const openerVariant = extractOpenerVariant(sug);
+
   // Mark the suggestion as approved (so the inbox doesn't show it as
   // pending) and create a pending outbound message bound to it. tg-send
   // takes it from there, including jitter and FloodGuard awareness.
@@ -157,6 +175,12 @@ export async function tryAutoApprove(ctx: AutoApproveContext): Promise<boolean> 
         text: ctx.text,
         status: 'pending',
         suggestionId: ctx.suggestionId,
+        // `openerVariant` is set only when the source suggestion came
+        // from an opener composer (`opening_composer` /
+        // `agency_opening_composer`); replies and other agents go through
+        // `extractOpenerVariant`, which returns null and leaves the
+        // column null on the new row.
+        ...(openerVariant ? { openerVariant } : {}),
       },
     });
   });
