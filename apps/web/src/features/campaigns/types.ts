@@ -28,6 +28,19 @@ export interface Campaign {
   updatedAt: string;
 }
 
+/**
+ * One row per distinct `Message.openerVariant` observed across a campaign's
+ * outbound traffic — mirror of `OpenerStatsRow` in
+ * packages/shared/src/schemas/opener-stats.ts. Read-only.
+ */
+export interface OpenerStatsRow {
+  variantKey: string;
+  sent: number;
+  replied: number;
+  /** Clamped to [0, 1] server-side. */
+  replyRate: number;
+}
+
 export interface CampaignPreviewItem {
   contactId: string;
   contactValue: string;
