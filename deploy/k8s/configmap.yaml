@@ -1,6 +1,40 @@
+# Non-secret runtime config shared by api + workers.
+# Secrets (DATABASE_URL, REDIS_URL, JWT_SECRET, ENCRYPTION_KEY, TG creds,
+# provider API keys, QDRANT_URL/API key, S3 creds) live in secrets.yaml.
+#
+# Schemas:
+#   apps/api/src/env.ts
+#   apps/workers/src/env.ts
+# Both parse `process.env` through zod — extra keys here are silently
+# ignored, missing required keys make the pod crash-loop on boot.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: backend-config
-  namespace: talkmeter
+  name: outreach-config
+  namespace: outreach
+data:
+  NODE_ENV: "production"
 
+  # api Fastify bind (`apps/api/src/index.ts`). Host must stay 0.0.0.0 inside
+  # the container so the Service can reach the pod via clusterIP.
+  API_HOST: "0.0.0.0"
+  API_PORT: "4000"
+
+  # Public origins. Single-domain deploy: web is same-origin as the API
+  # via the Ingress, so WEB_ORIGIN narrows CORS to the production host.
+  # Comma-separated allowlist is supported (`env.ts` splits on ","); `*`
+  # is the dev-only sentinel — DO NOT use it here.
+  WEB_ORIGIN: "https://outreach.su"
+  PUBLIC_API_URL: "https://outreach.su"
+
+  # Logging. `LOG_MESSAGE_BODIES=false` is the prod default — outbound
+  # message text is never written to logs (CLAUDE.md §"Чего не делать").
+  LOG_LEVEL: "info"
+  LOG_MESSAGE_BODIES: "false"
+
+  # Bootstrap account id used by tg-client when no DB row exists yet.
+  # Pure identifier, no secret material.
+  TG_BOOTSTRAP_ACCOUNT_ID: "parser-default"
+
+  # ScrapeCreators base URL. The API key itself is a secret.
+  SCRAPECREATORS_BASE_URL: "https://api.scrapecreators.com"

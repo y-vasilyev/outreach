@@ -1,38 +1,42 @@
+# Web SPA — Vue 3 + Vite build served by nginx (`infra/Dockerfile.web`,
+# `infra/nginx.conf`). Single-domain prod deploy: this pod only serves
+# static assets at `/`; `/api` and `/socket.io` are split off at the
+# Ingress and routed to the api service directly.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: admin
-  namespace: talkmeter
+  name: web
+  namespace: outreach
   labels:
-    app: admin
+    app: web
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: admin
+      app: web
   template:
     metadata:
       labels:
-        app: admin
+        app: web
     spec:
       containers:
-        - name: admin
-          image: cr.yandex/crp6nndlr4elmeapikta/talkmeter-admin:latest
+        - name: web
+          image: cr.yandex/__paste-cr-registry-id__/outreach-web:latest
           imagePullPolicy: Always
           ports:
-            - containerPort: 8080
+            - containerPort: 80
               name: http
           resources:
             requests:
-              memory: "64Mi"
-              cpu: "50m"
+              memory: "32Mi"
+              cpu: "20m"
             limits:
               memory: "128Mi"
-              cpu: "100m"
+              cpu: "200m"
           livenessProbe:
             httpGet:
               path: /
-              port: 8080
+              port: 80
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 5
@@ -40,8 +44,8 @@ spec:
           readinessProbe:
             httpGet:
               path: /
-              port: 8080
-            initialDelaySeconds: 5
+              port: 80
+            initialDelaySeconds: 3
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
@@ -49,13 +53,13 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: admin-service
-  namespace: talkmeter
+  name: web
+  namespace: outreach
 spec:
   selector:
-    app: admin
+    app: web
   ports:
     - name: http
-      port: 8080
-      targetPort: 8080
+      port: 80
+      targetPort: 80
   type: ClusterIP

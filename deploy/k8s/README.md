@@ -1,113 +1,137 @@
-# Talkmeter Kubernetes deploy
+# Outreach Kubernetes deploy
 
 Kustomize bundle + thin shell script (`deploy.sh`) that builds and rolls
-out the five service images: `backend` (.NET 10 + Orleans), `admin`
-(Vue SPA), `webapp` (PWA bundle on talkmeter.ru/feedback path), `pwa`
-(standalone PWA on app.talkmeter.ru), `mini-app` (Telegram WebApp on
-talkmeter.ru/mini-app).
+out the three outreach services:
+
+| Service | Source | Image | Container port |
+|---|---|---|---|
+| `api` | `apps/api` (Fastify + Socket.IO) | `cr.yandex/<id>/outreach-api` | 4000 |
+| `web` | `apps/web` (Vue 3 SPA, nginx) | `cr.yandex/<id>/outreach-web` | 80 |
+| `workers` | `apps/workers` (BullMQ consumers) | `cr.yandex/<id>/outreach-workers` | — |
+
+Domain: **outreach.su**. TLS via cert-manager (`ClusterIssuer: letsencrypt`).
+Postgres, Redis and Qdrant are **external/managed** — only their connection
+strings/keys live in the cluster (see `secrets.yaml`).
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `namespace.yaml` | Creates `talkmeter` ns. |
-| `configmap.yaml` | Non-secret backend env (.NET key style: `Database__ApplyMigrationsOnStart`, `Cors__AllowedOrigins__0`, etc.). |
-| `secrets.yaml` | Backend secrets (.NET key style: `Database__ConnectionString`, `Jwt__Secret`, `Telegram__BotToken`, `PwaPush__*`, `Admin__*`). **Real values committed = leak via git history; rotate.** |
-| `backend-deployment.yaml` | API + silo co-host. Probes hit `/health/live` (no-check) and `/health/ready` (Postgres). |
-| `admin-deployment.yaml` | Vue admin SPA. |
-| `webapp-deployment.yaml` | Legacy PWA mount (talkmeter.ru/feedback). |
-| `pwa-deployment.yaml` | Standalone PWA (app.talkmeter.ru). |
-| `mini-app-deployment.yaml` | Telegram WebApp (talkmeter.ru/mini-app). |
-| `ingress.yaml` | NGINX routes + TLS. WebSocket-friendly (`proxy-read-timeout: 3600`). Routes `/ws/user-events` and `/ws/speaker-dashboard` to backend. |
+| `namespace.yaml` | Creates `outreach` ns. |
+| `configmap.yaml` | Non-secret env shared by api + workers (`NODE_ENV`, `WEB_ORIGIN`, `LOG_*`, etc.). |
+| `secrets.yaml` | All secrets as placeholders (`__paste-...__`). Replace before first deploy or migrate to SealedSecrets / ExternalSecrets. |
+| `api-deployment.yaml` | api Deployment + ClusterIP Service `:4000`. Probes hit `/health` (live) and `/health/deep` (ready — pings PG + Redis). |
+| `web-deployment.yaml` | web Deployment + ClusterIP Service `:80`. Nginx serves the Vite bundle. |
+| `workers-deployment.yaml` | workers Deployment. No HTTP/probes; `strategy: Recreate` to keep BullMQ single-writer per queue during rolls. |
+| `ingress.yaml` | NGINX Ingress, single host. `/socket.io` → api, `/api(/\|$)(.*)` → api (prefix stripped via rewrite), `/` → web. |
 | `kustomization.yaml` | Orchestration. |
-| `deploy.sh` | Build → push → `kubectl apply -k` → `set image` → rollout status. |
-| `scripts/generate-vapid-keys.sh` | One-shot VAPID key pair generator (P-256, base64url, format expected by `PwaPushClient.CreateEcdsa`). |
+| `deploy.sh` | Build → push → `kubectl apply -k` → `set image` → `rollout status`. |
 
 ## First deploy walkthrough
 
-1. **Generate VAPID keys** (one-time):
+1. **Set the secrets.** Open `secrets.yaml` and replace every
+   `__paste-...__` placeholder. The required keys (pod will crash-loop
+   without them) are:
+   - `DATABASE_URL` — external Postgres connection string
+   - `REDIS_URL` — external Redis URL
+   - `JWT_SECRET` — ≥ 16 bytes (recommend 32+); `openssl rand -base64 48`
+   - `ENCRYPTION_KEY` — ≥ 10 bytes (recommend 32 hex); `openssl rand -hex 32`
+
+   Optional (features fail closed when missing):
+   - `TG_API_ID` / `TG_API_HASH` — Telegram MTProto creds
+   - `OPENROUTER_API_KEY`, `YANDEX_*` — LLM/discovery providers
+   - `SCRAPECREATORS_API_KEY` — channel scraping
+   - `S3_*` — object storage (only used when `object_storage` flag is on)
+   - `QDRANT_URL` / `QDRANT_API_KEY` — placeholders, not wired into code yet
+
+   For prod, prefer **not** to commit `secrets.yaml` with real values:
    ```bash
-   ./scripts/generate-vapid-keys.sh
+   # one-time: drop the file from kustomize and create the Secret directly
+   kubectl -n outreach create secret generic outreach-secrets \
+     --from-env-file=./outreach.env
+   # then remove `secrets.yaml` from kustomization.yaml resources
    ```
-   Copy the printed `PwaPush__PublicKey` / `PwaPush__PrivateKey` values
-   into `secrets.yaml` (replace the `__paste-vapid-...__` placeholders).
-   The same `PublicKey` is exposed to PWA via
-   `GET /api/v1/users/me/push-public-key` — rotating it invalidates all
-   existing browser subscriptions.
 
-2. **Set the rest of the secrets** (`Jwt__Secret`, `Admin__Password`, and
-   verify `Database__ConnectionString` / `Telegram__BotToken`).
+2. **Set your image registry.** `deploy.sh` reads `CR_REGISTRY` from env
+   (Yandex Container Registry id) and the deployment YAMLs use
+   `__paste-cr-registry-id__` as the bootstrap `:latest` source — those
+   are overwritten by `kubectl set image` on every deploy, so they only
+   matter if you ever do a bare `kubectl apply -k` without `deploy.sh`.
+   If you want a clean apply too, sed those placeholders to your real id.
 
-3. **Dry-run** the bundle:
+3. **Dry-run.**
    ```bash
+   cd deploy/k8s
    ./deploy.sh --dry-run
    ```
-   Renders kustomize + client-side validation, no docker/kubectl writes.
+   Renders kustomize and runs `kubectl apply --dry-run=client`. No build,
+   no push, no apply.
 
-4. **Deploy**:
+4. **Deploy.**
    ```bash
-   ./deploy.sh
+   CR_REGISTRY=crpXXXXXXXX ./deploy.sh
    ```
-   Builds + pushes 5 images, applies kustomize, sets new tags on the
-   five Deployments, waits for rollout.
+   Builds 3 images, pushes both the immutable `<sha>-<ts>` tag and
+   `:latest`, applies kustomize, pins each Deployment to the new tag,
+   waits for rollout.
 
-5. **Smoke checks**:
+5. **Smoke checks.**
    ```bash
-   kubectl -n talkmeter logs deploy/backend | grep -E "Started|Reminders ensured"
-   curl -fsS https://talkmeter.ru/health/live
-   curl -fsS https://talkmeter.ru/health/ready
+   kubectl -n outreach get pods
+   kubectl -n outreach logs deploy/api | tail -50
+   kubectl -n outreach exec deploy/api -- wget -qO- http://localhost:4000/health
+   kubectl -n outreach exec deploy/api -- wget -qO- http://localhost:4000/health/deep
+   curl -fsS https://outreach.su/api/health
    ```
-   In a browser, open the PWA, log in, watch DevTools → Network → WS:
-   `wss://talkmeter.ru/ws/user-events/{userId}?access_token=…` should
-   stay open without 1006 close (NGINX `proxy-read-timeout: 3600` keeps
-   the long-lived connection alive).
+   Open https://outreach.su in a browser, log in, watch DevTools →
+   Network → WS for `/socket.io/` — it should upgrade and stay open
+   (NGINX `proxy-read-timeout: 3600` keeps the long-lived connection
+   alive).
 
-## Rolling VAPID keys
+## Re-deploying an existing tag
 
-VAPID rotation is a coordinated change — all browsers' existing
-subscriptions become invalid because the `applicationServerKey` they
-were created with no longer matches.
+Roll the cluster to a tag that's already in the registry, without
+rebuilding:
 
-1. Generate new key pair (`./scripts/generate-vapid-keys.sh`).
-2. Update `PwaPush__PublicKey` + `PwaPush__PrivateKey` in `secrets.yaml`
-   (or your secret store).
-3. `kubectl rollout restart deploy/backend -n talkmeter`.
-4. PWA clients on next page load fetch the new public key and
-   re-subscribe automatically (`pushManager.getSubscription()` → fall
-   through to `subscribe()` because old subscription's `applicationServerKey`
-   doesn't match). Old subscriptions linger as dead `pwa_push_subscriptions`
-   rows until the dispatcher tries them and gets 410, which marks them
-   `disabled_at` (see `IPwaPushSubscriptionRepository.DisableByEndpointAsync`).
+```bash
+CR_REGISTRY=crpXXXXXXXX IMAGE_TAG=abc1234-20260525120000 ./deploy.sh --skip-build
+```
 
-## Backend env-var reference
+## Cleanup / reset
 
-ASP.NET Core reads env-vars where `__` separates configuration sections
-(`Database:ConnectionString` ↔ `Database__ConnectionString`). Backend
-binds these in `Feedback.Api/Program.cs`. Anything else — including
-all Node.js-era keys — is silently ignored.
+```bash
+./deploy.sh --clean
+```
 
-| Env (configmap or secret) | Source | Notes |
+⚠ Deletes **all** Deployments/Services/Ingresses/ConfigMaps/Secrets in
+the `outreach` namespace before applying. Use only in fresh-start
+scenarios — your hand-edited Secret values are gone after this.
+
+## External dependencies
+
+| Dep | Wired via | Required? |
 |---|---|---|
-| `ASPNETCORE_ENVIRONMENT` / `ASPNETCORE_URLS` | configmap | Hosting. |
-| `DOTNET_GCServer` / `DOTNET_TieredPGO` | configmap | Runtime tuning. |
-| `Database__ConnectionString` | **secret** | EF Core + Orleans clustering / storage / reminders. |
-| `Database__ApplyMigrationsOnStart` | configmap | EF auto-migrate on boot. |
-| `Jwt__Secret` | **secret** | ≥ 32 bytes. Access + refresh token signing. |
-| `Telegram__BotToken` | **secret** | Bot API send + webhook verify. |
-| `PwaPush__Subject` | **secret** | `mailto:` or URL identifying app contact. |
-| `PwaPush__PublicKey` | **secret** | base64url, P-256 uncompressed (65 bytes). |
-| `PwaPush__PrivateKey` | **secret** | base64url, P-256 scalar (32 bytes). |
-| `PwaPush__TtlSeconds` | configmap | Push service TTL header. |
-| `Admin__Email` / `Admin__Password` | **secret** | Admin seeder bootstrap. |
-| `Cors__AllowedOrigins__0..N` | configmap | Exact origins; no wildcards with credentials. |
-| `NotificationDispatch__TalkReminderLeadMinutes` | configmap | Talk reminder scheduler. |
+| Postgres (managed) | `DATABASE_URL` in Secret → Prisma | yes — pod crash-loops without it |
+| Redis (managed) | `REDIS_URL` in Secret → BullMQ + feature-flag pub/sub | yes |
+| Qdrant (managed) | `QDRANT_URL` / `QDRANT_API_KEY` placeholders | not consumed yet — placeholders for the matching/semantic-search work |
+| cert-manager | `ClusterIssuer/letsencrypt` referenced by `ingress.yaml` | yes (TLS) |
+| NGINX Ingress | `ingressClassName: nginx`, regex routing | yes |
 
 ## Architecture notes
 
-- Notification pipeline (`NotificationBroadcastGrain`, observer-pattern
-  WS): see `docs/notifications-dispatch.md`.
-- Multi-silo Orleans (`replicas > 1`) is **not** wired in this bundle.
-  When you go HA: convert `backend-deployment` to `StatefulSet`, add a
-  headless service exposing silo port 11111 + gateway 30000, set
-  `podAntiAffinity`. The application code is already cross-silo-safe
-  (grain-observer fan-out, no MemoryStreams for inbox events).
+- The web bundle is built **without** baking `VITE_PUBLIC_API_URL`, so it
+  defaults to same-origin `/api` (see `apps/web/src/lib/api.ts`
+  `getBaseUrl()`). That matches the single-host ingress and means a
+  rebuild is not needed when DNS / domains change.
+- The API mounts every route at root (`apps/api/src/index.ts` registers
+  `healthRoutes`, `authRoutes`, … without a prefix). The `/api` prefix
+  the web uses is stripped at the Ingress via
+  `nginx.ingress.kubernetes.io/rewrite-target: /$2`. Don't add a
+  `prefix:` block in Fastify and the rewrite — you'll end up with `/api/api/…`.
+- Workers are pinned to `replicas: 1` + `strategy: Recreate` until the
+  TG-send / ScrapeCreators / agent-run queue handlers are audited for
+  idempotent concurrent execution. See the comment in
+  `workers-deployment.yaml`.
+- Outbound message bodies are never logged in prod
+  (`LOG_MESSAGE_BODIES=false` in `configmap.yaml`, enforced via
+  `packages/shared` redact()).

@@ -1,143 +1,79 @@
+# Single-host ingress for outreach.su.
+#
+# Routing (order matters in path-based matching with `use-regex`):
+#   /socket.io     → api-service:4000  (long-lived WS, path preserved)
+#   /api(/|$)(.*)  → api-service:4000  (REST; `/api` prefix is stripped via
+#                                       rewrite-target — the api mounts
+#                                       routes at root, see
+#                                       apps/api/src/index.ts and
+#                                       apps/web/src/lib/api.ts getBaseUrl())
+#   /              → web-service:80    (Vue SPA static bundle)
+#
+# TLS: cert-manager (already installed in-cluster) issues a Let's Encrypt
+# cert for outreach.su; the `ClusterIssuer` is named `letsencrypt`.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: talkmeter-ingress
-  namespace: talkmeter
+  name: outreach
+  namespace: outreach
   annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # Lifted from the original talkmeter bundle. Outreach has no media
+    # upload path at the moment, but the admin UI does post zod-validated
+    # campaign payloads that can grow with large channel/contact lists.
     nginx.ingress.kubernetes.io/proxy-body-size: "10m"
-    # HSTS pin so browsers refuse plaintext after a first successful TLS
-    # handshake. 1 year + subdomains is the modern default; preload is
-    # left off until the domain owners explicitly request inclusion in
-    # the browser preload list (irreversible).
+    # HSTS — 1 year + subdomains. `preload` left off intentionally: opting
+    # into the browser preload list is irreversible and should be a
+    # deliberate decision by the domain owner, not a default.
     nginx.ingress.kubernetes.io/hsts: "true"
     nginx.ingress.kubernetes.io/hsts-max-age: "31536000"
     nginx.ingress.kubernetes.io/hsts-include-subdomains: "true"
     nginx.ingress.kubernetes.io/hsts-preload: "false"
-    # WebSocket connections (/ws/user-events, /ws/speaker-dashboard) are
-    # long-lived — nginx default 60 s read/send timeouts would kill the
-    # PWA's user-events stream every minute and force a reconnect storm.
-    # 1 hour is conservative; the gateway sends keepalives every 30 s
-    # (Program.cs WebSocketOptions.KeepAliveInterval) so idle but live
-    # sockets stay healthy well within this window.
+    # Socket.IO uses a long-lived WS upgrade. Default nginx timeouts (60s)
+    # would force a reconnect storm on every minute of idle. 1h matches
+    # the socket.io-server ping interval defaults comfortably.
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-    cert-manager.io/cluster-issuer: letsencrypt
+    # Required so the regex capture in /api(/|$)(.*) below works for the
+    # rewrite-target.
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
 spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - talkmeter.ru
-      secretName: tls-talkmeter-ru
-    - hosts:
-        - app.talkmeter.ru
-      secretName: tls-app-talkmeter-ru
+        - outreach.su
+      secretName: tls-outreach-su
   rules:
-    - host: app.talkmeter.ru
+    - host: outreach.su
       http:
         paths:
-          # API + WS must come BEFORE the catch-all `/` so they hit
-          # backend-service, not pwa-nginx. Without these the PWA static
-          # nginx tries to serve /api/* via try_files → index.html, which
-          # returns 405 for POST/PUT/DELETE (try_files fallback to a
-          # static file rejects non-GET methods).
-          - path: /api
-            pathType: Prefix
+          # Socket.IO. No rewrite needed — the api also mounts it at /socket.io.
+          # Listed FIRST so it wins against /api when the rewrite group eats it.
+          - path: /socket.io
+            pathType: ImplementationSpecific
             backend:
               service:
-                name: backend-service
+                name: api
                 port:
-                  number: 8080
-          - path: /ws/user-events
-            pathType: Prefix
+                  number: 4000
+          # REST. `/api/foo` → `/foo` (rewrite-target /$2 strips the prefix).
+          - path: /api(/|$)(.*)
+            pathType: ImplementationSpecific
             backend:
               service:
-                name: backend-service
+                name: api
                 port:
-                  number: 8080
-          - path: /ws/speaker-dashboard
-            pathType: Prefix
+                  number: 4000
+          # SPA catch-all. The regex group `()()` ensures rewrite-target /$2
+          # resolves to the original path (it would otherwise emit "/" for
+          # every request if the captures were missing).
+          - path: /()(.*)
+            pathType: ImplementationSpecific
             backend:
               service:
-                name: backend-service
+                name: web
                 port:
-                  number: 8080
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: pwa-service
-                port:
-                  number: 8080
-    - host: talkmeter.ru
-      http:
-        paths:
-          # Per-user events WS: inbox_new (NotificationBroadcastGrain →
-          # IUserNotificationsGrain observers) + achievement frames
-          # (UserAchievementsGrain). PWA opens one of these on bootstrap.
-          - path: /ws/user-events
-            pathType: Prefix
-            backend:
-              service:
-                name: backend-service
-                port:
-                  number: 8080
-          - path: /ws/speaker-dashboard
-            pathType: Prefix
-            backend:
-              service:
-                name: backend-service
-                port:
-                  number: 8080
-          - path: /api
-            pathType: Prefix
-            backend:
-              service:
-                name: backend-service
-                port:
-                  number: 8080
-          - path: /telegram
-            pathType: Prefix
-            backend:
-              service:
-                name: backend-service
-                port:
-                  number: 8080
-          # Telegram WebApp (mini-app build of webapp/packages/mini-app).
-          # Register the same URL in @BotFather's Web App settings.
-          - path: /mini-app
-            pathType: Prefix
-            backend:
-              service:
-                name: mini-app-service
-                port:
-                  number: 8080
-          - path: /feedback
-            pathType: Prefix
-            backend:
-              service:
-                name: webapp-service
-                port:
-                  number: 8080
-          - path: /speaker-dashboard
-            pathType: Prefix
-            backend:
-              service:
-                name: webapp-service
-                port:
-                  number: 8080
-          - path: /pc
-            pathType: Prefix
-            backend:
-              service:
-                name: webapp-service
-                port:
-                  number: 8080
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: admin-service
-                port:
-                  number: 8080
+                  number: 80

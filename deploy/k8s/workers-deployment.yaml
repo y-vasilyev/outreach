@@ -1,0 +1,49 @@
+# Workers (BullMQ consumers) — `apps/workers`. No HTTP surface, so no
+# probes; k8s restarts on crash, BullMQ rescues in-flight jobs via Redis.
+#
+# Single replica by default: not every queue handler is idempotent yet.
+# Before scaling > 1, audit `apps/workers/src/queues/*` for:
+#   - tg-send (FloodWait window must stay single-writer per account)
+#   - channel-scrape (ScrapeCreators quota — concurrent runners burn it 2×)
+#   - agent-run (LLM cost accounting writes one `agent_run` row per call;
+#     concurrent retries can duplicate cost rows).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workers
+  namespace: outreach
+  labels:
+    app: workers
+spec:
+  replicas: 1
+  # Workers hold open queue subscriptions to Redis; a rolling restart that
+  # briefly runs two pods is fine, but we don't want surge to push us up
+  # against the FloodWait/quota concerns above. Recreate keeps it strictly
+  # single-writer during rolls (small downtime, ~5s, is acceptable).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: workers
+  template:
+    metadata:
+      labels:
+        app: workers
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: workers
+          image: cr.yandex/__paste-cr-registry-id__/outreach-workers:latest
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: outreach-config
+            - secretRef:
+                name: outreach-secrets
+          resources:
+            requests:
+              memory: "384Mi"
+              cpu: "200m"
+            limits:
+              memory: "768Mi"
+              cpu: "1000m"
