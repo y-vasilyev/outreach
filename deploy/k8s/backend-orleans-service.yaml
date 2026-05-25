@@ -1,0 +1,22 @@
+# Headless service for Orleans inter-silo discovery. Pod IPs resolve via
+# DNS so silo membership gossip stays stable across rolling restarts. The
+# regular `backend-service` (clusterIP, port 8080 only) keeps handling
+# external HTTP/WS traffic; this service is internal-only.
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-orleans
+  namespace: talkmeter
+  labels:
+    app: backend
+spec:
+  clusterIP: None
+  selector:
+    app: backend
+  ports:
+    - name: silo
+      port: 11111
+      targetPort: 11111
+    - name: gateway
+      port: 30000
+      targetPort: 30000

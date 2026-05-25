@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: talkmeter
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secrets.yaml
+  - backend-deployment.yaml
+  - backend-orleans-service.yaml
+  - backend-pdb.yaml
+  - admin-deployment.yaml
+  - webapp-deployment.yaml
+  - pwa-deployment.yaml
+  - mini-app-deployment.yaml
+  - ingress.yaml
+
+commonLabels:
+  app.kubernetes.io/name: talkmeter
+  app.kubernetes.io/managed-by: kustomize

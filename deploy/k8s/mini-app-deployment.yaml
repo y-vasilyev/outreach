@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mini-app
+  namespace: talkmeter
+  labels:
+    app: mini-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mini-app
+  template:
+    metadata:
+      labels:
+        app: mini-app
+    spec:
+      containers:
+        - name: mini-app
+          image: cr.yandex/crp6nndlr4elmeapikta/talkmeter-mini-app:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+          # Probes hit the actual served route so we exercise nginx alias
+          # + bundle availability end-to-end. The `/` location is a 200
+          # stub for any caller that hits root, kept for backward compat.
+          livenessProbe:
+            httpGet:
+              path: /mini-app/
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /mini-app/
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mini-app-service
+  namespace: talkmeter
+spec:
+  selector:
+    app: mini-app
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
