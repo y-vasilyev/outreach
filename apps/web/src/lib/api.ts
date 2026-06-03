@@ -61,10 +61,13 @@ export function appendQuery(path: string, params?: QueryParams): string {
 
 async function request<T>(method: Method, path: string, body?: unknown): Promise<T> {
   const url = `${getBaseUrl()}${path.startsWith('/') ? path : `/${path}`}`;
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    Accept: 'application/json',
-  };
+  // Don't send Content-Type when there's no body — Fastify rejects a
+  // POST/PATCH that advertises application/json but ships an empty
+  // request body ("Body cannot be empty when content-type is set to
+  // 'application/json'"). The header is only meaningful when we're
+  // actually sending a JSON payload.
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
