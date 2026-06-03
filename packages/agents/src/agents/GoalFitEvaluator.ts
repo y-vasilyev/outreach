@@ -48,6 +48,21 @@ export const goalFitEvaluatorInputSchema = z.object({
   /** The top draft from ReplyComposer that auto-approve would send. */
   draft: z.string(),
   /**
+   * Campaign-type framing (harden-agency-sourcing-pipeline). When provided,
+   * the gate uses the type's `goalIntent` to choose the right non-goals
+   * (CustDev: ad sales drift; agency_sourcing: premature money/commitment;
+   * other: generic goalSchema-derived). Absent ⇒ CustDev framing for
+   * back-compat.
+   */
+  campaign_type: z
+    .object({
+      key: z.string().min(1),
+      goalIntent: z.string().optional(),
+      target_data_points: z.array(z.string()).optional(),
+      allowed_topics: z.array(z.string()).optional(),
+    })
+    .optional(),
+  /**
    * Previous gate decision for hysteresis. Null when this is the first
    * gate run for the conversation.
    */
@@ -70,18 +85,29 @@ export const goalFitEvaluatorOutputSchema = z.object({
 export type GoalFitEvaluatorInput = z.infer<typeof goalFitEvaluatorInputSchema>;
 export type GoalFitEvaluatorOutput = z.infer<typeof goalFitEvaluatorOutputSchema>;
 
-const FALLBACK_SYSTEM = `Ты оцениваешь, насколько активный CustDev-диалог по-прежнему движется к цели кампании, описанной через AJTBD.
+const FALLBACK_SYSTEM = `Ты оцениваешь, насколько активный диалог по-прежнему движется к цели кампании. ВАЖНО: тип кампании задаёт критерии goal-fit — не путай CustDev и агентский сценарий.
 
 Возвращай JSON: { score: 0..1, action: "continue" | "soften" | "handoff_silent", reasons: string[] }.
 
-action:
-- continue — диалог идёт по плану, ответ хороший, можно отправить.
-- soften — на трассе, но черновик начинает скользить (слишком напористо или к non_goal). В semi_auto допустимо отправлять, в auto — нет.
-- handoff_silent — диалог явно в non_goal или сошёл с цели. Молчаливо передаём оператору.
+ПОВЕДЕНИЕ ПО ТИПУ КАМПАНИИ:
 
-ВАЖНО: ты оцениваешь fit к цели, не стиль и не безопасность. Это отдельные слои. Твой вклад — «ещё CustDev или уже что-то другое?».`;
+— CustDev (campaign_type.key="custdev" или campaign_type.goalIntent="research_interview" или campaign_type не задан):
+  Цель — назначить короткое исследовательское интервью по AJTBD.
+  Non-goals: продажа рекламы/интеграций, обсуждение прайса/коммерческих условий, попытка собеседника превратить разговор в коммерцию.
+  continue — идёт к интервью / даёт исследовательский материал. soften — лёгкий дрейф в продуктовый питч. handoff_silent — собеседник принял за рекламу/просит прайс/обсуждает оплату.
 
-const FALLBACK_USER = `AJTBD кампании: {{ajtbd}}
+— Агентский (campaign_type.key="agency_sourcing" или goalIntent="collect_commercial_data"):
+  Цель — собрать у блогера ПРАЙС, охваты/просмотры, демографию аудитории, гео, контакт для сделок (см. campaign_type.target_data_points).
+  On-goal: блогер делится прайсом/охватами/аудиторией; уточняет форматы.
+  Non-goals: оператор обещает гарантии результата, выдумывает детали клиента, переводит/просит деньги до подтверждения, обещает условия до согласования. Сам блогер ушёл в нерелевантную тему.
+  continue — двигаемся к одному из target_data_points. soften — оператор начинает обещать или уходит в продажу. handoff_silent — есть прямой коммит цены/денег/гарантий ИЛИ блогер требует немедленного согласования сделки.
+
+— Прочие типы: используй campaign_type.goalIntent + AJTBD как ориентир; non-goals — всё, что явно противоречит goalIntent.
+
+ВАЖНО: ты оцениваешь fit к цели, не стиль и не безопасность (это отдельные слои). Твой вклад — «диалог по-прежнему ведёт к цели или уже нет?».`;
+
+const FALLBACK_USER = `Тип кампании: {{campaign_type}}
+AJTBD (если есть, иначе общий каркас цели): {{ajtbd}}
 
 Хвост истории:
 {{history_tail}}
@@ -101,7 +127,15 @@ export const goalFitEvaluator: Agent<GoalFitEvaluatorInput, GoalFitEvaluatorOutp
     'Оценивает goal-fit активного CustDev-диалога к AJTBD кампании. Решает: continue / soften / handoff_silent.',
   inputSchema: goalFitEvaluatorInputSchema,
   outputSchema: goalFitEvaluatorOutputSchema,
-  variables: ['ajtbd', 'history_tail', 'intent', 'handoff', 'draft', 'previous_decision'],
+  variables: [
+    'ajtbd',
+    'campaign_type',
+    'history_tail',
+    'intent',
+    'handoff',
+    'draft',
+    'previous_decision',
+  ],
   defaultModel: 'google/gemini-2.5-flash-lite',
   defaultParams: {
     temperature: 0.0,
@@ -126,6 +160,7 @@ export const goalFitEvaluator: Agent<GoalFitEvaluatorInput, GoalFitEvaluatorOutp
       ctx,
       vars: {
         ajtbd: input.ajtbd,
+        campaign_type: input.campaign_type ?? null,
         history_tail: tail,
         intent: input.intent,
         handoff: input.handoff,

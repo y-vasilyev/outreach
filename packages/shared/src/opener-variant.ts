@@ -15,10 +15,22 @@
  * (vs. corrupted meta or a misfire from a non-opener agent).
  */
 
-const OPENER_AGENT_NAMES: ReadonlySet<string> = new Set([
+/**
+ * Canonical list of agent names that produce opener Suggestions. Exported
+ * as an `as const` tuple so callers can both (a) feed it to `Prisma`
+ * queries via `{ in: [...OPENER_AGENT_NAMES] }` and (b) narrow against the
+ * literal union via `OpenerAgentName`. Add new opener agents here in ONE
+ * place — dispatcher, agent-run, addContacts dedup, and the meta-extractor
+ * all derive from this tuple.
+ */
+export const OPENER_AGENT_NAMES = [
   'opening_composer',
   'agency_opening_composer',
-]);
+] as const;
+
+export type OpenerAgentName = (typeof OPENER_AGENT_NAMES)[number];
+
+const OPENER_AGENT_NAME_SET: ReadonlySet<string> = new Set(OPENER_AGENT_NAMES);
 
 /** Max length the composer post-process caps at; anything longer is treated as corrupted. */
 const MAX_VARIANT_KEY_LEN = 32;
@@ -43,7 +55,7 @@ export function extractOpenerVariant(
   sug: OpenerSuggestionSlice | null | undefined,
 ): string | null {
   if (!sug) return null;
-  if (!OPENER_AGENT_NAMES.has(sug.agentName)) return null;
+  if (!OPENER_AGENT_NAME_SET.has(sug.agentName)) return null;
   if (!sug.meta || typeof sug.meta !== 'object') return null;
   const raw = (sug.meta as { openerVariant?: unknown }).openerVariant;
   if (typeof raw !== 'string') return null;

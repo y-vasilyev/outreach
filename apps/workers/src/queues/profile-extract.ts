@@ -1,6 +1,7 @@
 import { Worker } from 'bullmq';
 import { getRedis } from '../redis.js';
 import {
+  hasCommercialSignal,
   ProfileExtractJobZ,
   QueueNames,
   rollUpProfileFields,
@@ -89,6 +90,16 @@ export async function handleProfileExtract(data: {
   // the extractor-agent input shape is unchanged.
   const replies = sourceMessage.text ? [sourceMessage.text] : [];
   if (replies.length === 0) return { ok: true, skipped: 'empty_inbound' };
+
+  // Cheap deterministic pre-gate (harden-agency-sourcing-pipeline): skip the
+  // two extractor LLM calls when the inbound contains no commercial signal at
+  // all (no digits AND no commercial keyword). This is not a content
+  // classifier — only a cost filter. False positives are fine; the extractors
+  // return empty data_points gracefully.
+  if (!hasCommercialSignal(sourceMessage.text)) {
+    return { ok: true, skipped: 'no_signal' };
+  }
+
   const channelTitle = conv.contact.channel?.title ?? '';
   const language = conv.contact.channel?.language ?? 'ru';
   const extractorInput = {
@@ -109,6 +120,15 @@ export async function handleProfileExtract(data: {
     }),
   ]);
 
+  // Distinguish "both extractor calls failed" (BullMQ should retry) from
+  // "calls returned empty data_points" (legitimate success). The previous
+  // behaviour swallowed both as `{ ok:true }`; now a double-failure throws so
+  // the queue's retry/backoff kicks in. Sync callers (handleOnInbound) catch
+  // and log without aborting the inbound pipeline.
+  if (!rate && !audience) {
+    throw new Error('profile-extract: both extractors failed');
+  }
+
   const drafts: Array<{ extractedBy: string; draft: ProfileDataPointDraft }> = [];
   for (const dp of rate?.data_points ?? []) {
     drafts.push({ extractedBy: 'rate_card_extractor', draft: dp });
@@ -118,7 +138,7 @@ export async function handleProfileExtract(data: {
   }
 
   if (drafts.length === 0) {
-    return { ok: true, channelId, dataPoints: 0, degraded: !rate && !audience };
+    return { ok: true, channelId, dataPoints: 0 };
   }
 
   // Ensure the catalog profile exists (keyed by channelId), then persist all
@@ -132,7 +152,29 @@ export async function handleProfileExtract(data: {
       create: { channelId },
     });
 
+    // Backfill media assets that were attached to inbound messages on THIS
+    // conversation BEFORE the profile existed (e.g. a media-kit PDF arrived
+    // as the very first message). At write time those rows have
+    // `profileId = null` because the catalog profile didn't exist yet. As
+    // soon as we create the profile, attach them by conversation scope.
+    // Idempotent: re-runs match zero rows once everything is linked.
+    // (See `media-asset-storage` + `blogger-commercial-profile` specs.)
+    await tx.mediaAsset.updateMany({
+      where: { conversationId: conv.id, profileId: null },
+      data: { profileId: profile.id },
+    });
+
     for (const { extractedBy, draft } of drafts) {
+      // Idempotency: the same (profileId, sourceMessageId, field, extractedBy)
+      // tuple should produce at most one row. handleProfileExtract may be
+      // re-run for the same source message (sync invocation from on_inbound
+      // followed by an on-demand BullMQ enqueue) and we don't want
+      // duplicates. Cheaper than adding a unique index migration.
+      const existing = await tx.profileDataPoint.findFirst({
+        where: { profileId: profile.id, sourceMessageId, field: draft.field, extractedBy },
+        select: { id: true },
+      });
+      if (existing) continue;
       await tx.profileDataPoint.create({
         data: {
           profileId: profile.id,

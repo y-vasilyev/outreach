@@ -112,8 +112,40 @@ export function extractAjtbdView(campaign: {
     // fall through to the scaffold so agents always see a well-formed
     // AJTBD.
   }
+  // Agency campaigns get an enriched scaffold (harden-agency-sourcing-
+  // pipeline): the desired_outcome surfaces the campaign's
+  // `target_data_points` so downstream gate prompts that read AJTBD see
+  // what's actually being collected, not just the legacy goalText.
+  // `non_goals` are the agency-specific anti-patterns the gate must flag
+  // as `handoff_silent` — premature monetary commitments, fabricated
+  // client details, result guarantees.
+  if (campaign.typeKey === 'agency_sourcing') {
+    const targets = readTargetDataPoints(campaign.goal);
+    const desired = targets.length > 0
+      ? `Собрать у блогера: ${targets.join(', ')}.`
+      : campaign.valueProp;
+    return {
+      job: campaign.goalText || 'Собрать прайс/охваты блогера для базы агентства.',
+      when: '',
+      forces: { push: [], pull: [], anxieties: [], habits: [] },
+      desired_outcome: desired,
+      non_goals: [
+        'Гарантировать результат / охваты / продажи.',
+        'Выдумывать детали клиента (бренд, бюджет, контракт).',
+        'Обещать оплату / переводить деньги до согласования оператором.',
+        'Фиксировать коммерческие условия от имени клиента.',
+      ],
+    };
+  }
   return buildAjtbdScaffold({
     goalText: campaign.goalText,
     valueProp: campaign.valueProp,
   });
+}
+
+function readTargetDataPoints(goal: unknown): string[] {
+  if (!goal || typeof goal !== 'object') return [];
+  const raw = (goal as { target_data_points?: unknown }).target_data_points;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((x): x is string => typeof x === 'string' && x.length > 0);
 }

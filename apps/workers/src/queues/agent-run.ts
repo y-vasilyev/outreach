@@ -1,17 +1,19 @@
-import { Worker, Queue } from 'bullmq';
+import { Worker } from 'bullmq';
 import { getRedis } from '../redis.js';
 import {
   AgentRunJobZ,
   QueueNames,
+  extractAgencyClientBrief,
   extractAjtbdView,
   isWithinSchedule,
-  resolveSafetyContext,
+  buildSafetyInput,
+  MIN_SPONSORED_CONFIDENCE,
   resolveForceHandoffIntents,
   resolveAgentName,
   type CampaignAjtbd,
   type CampaignSchedule,
-  type ResolvedSafetyContext,
 } from '@nosquare/shared';
+import { handleProfileExtract } from './profile-extract.js';
 import { Errors } from '@nosquare/shared/errors';
 import { getPrisma } from '@nosquare/db';
 import { logger } from '../logger.js';
@@ -40,7 +42,20 @@ interface OpenerOut {
   // (`assignVariantKeys`) — always non-empty (alphabetical fallback when the
   // LLM doesn't supply a semantic key). Used downstream to attribute the
   // outbound message to a specific opener variant (ab-opener-variants).
-  variants: Array<{ text: string; rationale: string; risk_score?: number; variantKey: string }>;
+  //
+  // `auto_send_eligible` is emitted by `agency_opening_composer` and signals
+  // whether the variant truthfully cites a sponsored integration. CustDev's
+  // `opening_composer` does not emit it — treat `undefined ≡ true`. When the
+  // composer marks a variant `false`, the worker still saves it as `pending`
+  // but never auto-approves it, regardless of safety score. harden-agency-
+  // sourcing-pipeline change.
+  variants: Array<{
+    text: string;
+    rationale: string;
+    risk_score?: number;
+    variantKey: string;
+    auto_send_eligible?: boolean;
+  }>;
 }
 interface SafetyOut {
   allow: boolean;
@@ -162,41 +177,12 @@ function resolveCampaignAjtbd(campaign: {
   });
 }
 
-/**
- * Extra SafetyFilter args derived from a campaign type's `safetyProfile`:
- * the topic lists (agent input) and the params override (max_length /
- * allow_links). Returns `null` when `ENABLE_CAMPAIGN_TYPES` is off so the
- * call site passes NEITHER overrides nor topic vars — i.e. byte-for-byte
- * the pre-registry SafetyFilter invocation (DB params untouched).
- */
-interface SafetyExtras {
-  forbidden_topics: string[];
-  allowed_topics: string[];
-  hard_block_patterns: Array<{ id: string; pattern: string; reason: string; flags?: string }>;
-  overrides: { params: { max_length: number; allow_links: boolean } };
-}
-
-function safetyExtrasForCampaign(
-  campaign: { type?: { safetyProfile: unknown } | null } | null | undefined,
-): SafetyExtras | null {
-  if (!getFeatureFlags().get('campaign_types')) return null;
-  const ctx: ResolvedSafetyContext = resolveSafetyContext(campaign?.type?.safetyProfile ?? null);
-  // Re-serialize compiled regexes back to source+flags for SafetyFilter's
-  // input schema. The resolver already validated/dropped malformed
-  // sources, so this round-trip is safe.
-  const hardBlocks = ctx.hard_block_patterns.map((p) => ({
-    id: p.id,
-    pattern: p.regex.source,
-    reason: p.reason,
-    ...(p.regex.flags ? { flags: p.regex.flags } : {}),
-  }));
-  return {
-    forbidden_topics: ctx.forbidden_topics,
-    allowed_topics: ctx.allowed_topics,
-    hard_block_patterns: hardBlocks,
-    overrides: { params: ctx.params },
-  };
-}
+// `safetyExtrasForCampaign` was replaced by the shared `buildSafetyInput`
+// helper (harden-agency-sourcing-pipeline). All SafetyFilter call sites
+// — dispatcher first-message, agent-run inbound reply, agent-run
+// first-message, agent-run followup reply, operator approve, direct send
+// — go through that single helper now, so they pass identical safety
+// context derived from `campaign.type.safetyProfile`.
 
 /**
  * Resolve the agent_config name for a pipeline role given the campaign's
@@ -226,6 +212,35 @@ function isAgencyConversation(
   return Boolean(getFeatureFlags().get('agency_sourcing') && campaign?.type?.key === 'agency_sourcing');
 }
 
+/**
+ * Diagnostic: campaign is type=agency_sourcing but the `agency_sourcing`
+ * flag is off. In that case `isAgencyConversation` returns false and the
+ * inbound pipeline silently degrades to the CustDev path — which is the
+ * exact footgun we want operators to NOT hit unannounced. Emits a single
+ * warn-line per tick; doesn't change behaviour. harden-agency-sourcing-
+ * pipeline.
+ */
+function warnIfAgencyTypeUnderFlagOff(
+  campaign: { id?: string | null; type?: { key?: string | null } | null } | null | undefined,
+  conversationId: string,
+  pipeline: 'on_inbound' | 'outreach_first_message',
+): void {
+  if (
+    campaign?.type?.key === 'agency_sourcing' &&
+    !getFeatureFlags().get('agency_sourcing')
+  ) {
+    logger.warn(
+      {
+        event: 'agency_sourcing_disabled',
+        conversationId,
+        pipeline,
+        campaignId: campaign.id ?? null,
+      },
+      'campaign type=agency_sourcing but agency_sourcing flag off; degrading to CustDev path',
+    );
+  }
+}
+
 interface DataCollectionPlannerOut {
   next_data_point?: string;
   reply: string;
@@ -234,8 +249,13 @@ interface DataCollectionPlannerOut {
 }
 
 // Default agency data points to harvest when a campaign's goal doesn't
-// declare its own `target_data_points`.
-const AGENCY_DEFAULT_TARGETS = ['rate_card', 'reach', 'audience', 'geo', 'deals_contact'];
+// declare its own `target_data_points`. `deals_contact` was removed
+// (harden-agency-sourcing-pipeline) because no extractor currently writes
+// a `contact.*`-shaped ProfileDataPoint — leaving it in the defaults made
+// the planner re-ask the same question forever. Operators may still set
+// it explicitly via `goal.target_data_points`; the planner then asks the
+// question (documented limitation: no automated capture path yet).
+const AGENCY_DEFAULT_TARGETS = ['rate_card', 'reach', 'audience_demographics', 'geo'];
 
 /** Read `target_data_points` from an agency campaign's goal, else the default set. */
 function agencyTargets(goal: unknown): string[] {
@@ -249,22 +269,32 @@ function agencyTargets(goal: unknown): string[] {
   return AGENCY_DEFAULT_TARGETS;
 }
 
-// Keyword roots that mark a target as "collected" given a ProfileDataPoint
-// field (extractors emit fields like `rate.post`, `reach.story`, `audience.geo`).
+// Map a target key to the EXACT ProfileDataPoint fields that satisfy it
+// (harden-agency-sourcing-pipeline). The previous keyword-substring map
+// was too permissive: `audience` matched any `audience.*` so capturing
+// only geo flagged demographics as collected. Now `audience_demographics`
+// is the gender+age slice, `geo` is geo only, and `audience` is the union.
+// `rate_card` matches `rate.<format>`; `reach` matches `reach`/`reach.*`/
+// `views.*`.
 const TARGET_FIELD_KEYWORDS: Record<string, string[]> = {
-  rate_card: ['rate', 'price'],
+  rate_card: ['rate'],
   reach: ['reach', 'views'],
-  audience: ['audience'],
-  audience_demographics: ['audience'],
-  geo: ['geo'],
-  deals_contact: ['contact', 'deals', 'manager'],
+  audience_demographics: ['audience.age', 'audience.gender'],
+  geo: ['audience.geo'],
+  audience: ['audience.age', 'audience.gender', 'audience.geo'],
 };
 
+/**
+ * `field` satisfies `target` when it EXACTLY matches one of the keys or
+ * is a dotted sub-key of one (e.g. `rate.post` for `rate`). No substring
+ * fallback — that's what mis-attributed `audience.geo` to
+ * `audience_demographics` before.
+ */
 function targetCollected(target: string, fields: string[]): boolean {
   const kws = TARGET_FIELD_KEYWORDS[target] ?? [target];
   return fields.some((f) => {
     const lf = f.toLowerCase();
-    return kws.some((k) => lf === k || lf.startsWith(`${k}.`) || lf.includes(k));
+    return kws.some((k) => lf === k || lf.startsWith(`${k}.`));
   });
 }
 
@@ -287,13 +317,11 @@ async function collectedAgencyTargets(
   return targets.filter((t) => targetCollected(t, fields));
 }
 
-let _profileExtractQueue: Queue | undefined;
-function profileExtractQueue(): Queue {
-  if (!_profileExtractQueue) {
-    _profileExtractQueue = new Queue(QueueNames.profileExtract, { connection: getRedis() });
-  }
-  return _profileExtractQueue;
-}
+// `profile-extract` is now invoked SYNCHRONOUSLY from `handleOnInbound`
+// for agency conversations (see comment at the call site). The BullMQ
+// queue still exists for on-demand re-runs (manual operator action) and
+// is served by `apps/workers/src/queues/profile-extract.ts` worker — we
+// just no longer fan out from the inbound hot path.
 
 /**
  * `on_inbound` pipeline body, exported for unit-testing the silent
@@ -330,17 +358,18 @@ export async function handleOnInbound(data: { conversationId?: string }): Promis
           });
           if (!conv) throw new Error('conversation not found');
 
+          warnIfAgencyTypeUnderFlagOff(conv.campaign, conv.id, 'on_inbound');
+
           // Load AJTBD up-front so every agent in this run sees the same
           // framing. Throws (caught by BullMQ → retried/failed) when a
           // campaign exists but its ajtbd is missing/invalid — see
           // resolveCampaignAjtbd doc.
           const ajtbd = resolveCampaignAjtbd(conv.campaign);
 
-          // Campaign-type safety profile + force-handoff intents. Behind the
-          // flag: when off, `safetyExtras` is null (no overrides, no topic
-          // vars) and no extra escalation intents apply, so the SafetyFilter
-          // invocation is byte-for-byte the pre-registry path.
-          const safetyExtras = safetyExtrasForCampaign(conv.campaign);
+          // Campaign-type force-handoff intents. Behind the campaign_types
+          // flag (off ⇒ empty list, no extra escalation). SafetyFilter input
+          // itself is now built per-variant via `buildSafetyInput` at the
+          // call sites — see `safetyExtrasForCampaign` migration note above.
           const forceHandoffIntents = getFeatureFlags().get('campaign_types')
             ? resolveForceHandoffIntents(conv.campaign?.type?.autonomyPolicy ?? null)
             : [];
@@ -353,21 +382,36 @@ export async function handleOnInbound(data: { conversationId?: string }): Promis
           const last = [...messages].reverse().find((m) => m.direction === 'in_');
           if (!last) return { ok: true, skipped: 'no inbound' };
 
-          // Profile extraction (agency-sourcing-matching M5, task 5.2): for
-          // agency_sourcing conversations (behind ENABLE_AGENCY_SOURCING) fan
-          // out a profile-extract job keyed to THIS inbound. Additive + fully
-          // separate from the CustDev reply pipeline below; failures there
-          // never touch the inbound flow. Enqueued early so it runs even if a
-          // later advisory step degrades the conversation.
+          // Profile extraction (harden-agency-sourcing-pipeline): for
+          // agency_sourcing conversations we now run `handleProfileExtract`
+          // SYNCHRONOUSLY before the DataCollectionPlanner so the planner
+          // sees facts present in THIS inbound (e.g. a price the blogger
+          // just sent) and does not re-ask for them on the same tick. The
+          // queue worker still exists for on-demand / manual re-runs, but
+          // the inbound hot path no longer fans out — fixes the "planner
+          // operates on pre-extraction snapshot" race.
+          //
+          // Failure mode: profile-extract throws only when both extractor
+          // LLM calls fail (transient). We catch, log, and continue — the
+          // planner reads the pre-failure profile snapshot; on the next
+          // inbound the queue (or the next sync run) gets another shot.
+          // Inbound itself never aborts.
           if (isAgencyConversation(conv.campaign)) {
-            await profileExtractQueue()
-              .add('extract', { conversationId: conv.id, sourceMessageId: last.id })
-              .catch((err: unknown) =>
-                logger.warn(
-                  { conversationId: conv.id, err: (err as Error).message },
-                  'failed to enqueue profile-extract job',
-                ),
+            try {
+              await handleProfileExtract({
+                conversationId: conv.id,
+                sourceMessageId: last.id,
+              });
+            } catch (err: unknown) {
+              logger.warn(
+                {
+                  event: 'profile_extract_sync_failed',
+                  conversationId: conv.id,
+                  err: (err as Error).message,
+                },
+                'sync profile-extract failed; planner reads pre-failure snapshot',
               );
+            }
           }
 
           // Both intent_classifier and handoff_decider expect history_tail as
@@ -560,26 +604,23 @@ export async function handleOnInbound(data: { conversationId?: string }): Promis
           let bestScore = 0;
           let bestText = '';
 
+          const campaignTypesEnabled = getFeatureFlags().get('campaign_types');
           for (const v of reply.variants) {
+            const safetyBundle = buildSafetyInput({
+              draft: v.text,
+              campaignTypesEnabled,
+              safetyProfile: conv.campaign?.type?.safetyProfile ?? null,
+              channelAnalysis: conv.contact.channel?.analysis ?? {},
+              contact: { id: conv.contact.id },
+              campaign: {},
+              ajtbdNonGoals: ajtbd?.non_goals ?? [],
+            });
             const safety = await runAgentSafe<SafetyOut>(
               'safety_filter',
-              {
-                draft: v.text,
-                channel_analysis: conv.contact.channel?.analysis ?? {},
-                contact: { id: conv.contact.id },
-                campaign: {},
-                ...(safetyExtras
-                  ? {
-                      forbidden_topics: safetyExtras.forbidden_topics,
-                      hard_block_patterns: safetyExtras.hard_block_patterns,
-                      allowed_topics: safetyExtras.allowed_topics,
-                    }
-                  : {}),
-                ajtbd_non_goals: ajtbd?.non_goals ?? [],
-              },
+              safetyBundle.input,
               {
                 conversationId: conv.id,
-                ...(safetyExtras ? { overrides: safetyExtras.overrides } : {}),
+                ...(safetyBundle.overrides ? { overrides: safetyBundle.overrides } : {}),
               },
             );
             // safety_filter null → skip this variant only; don't kill the
@@ -632,10 +673,33 @@ export async function handleOnInbound(data: { conversationId?: string }): Promis
             ajtbd
           ) {
             const previous = readPriorQualityDecision(conv.qualityDecision);
+            // Campaign-type framing for the gate: lets the evaluator pick
+            // CustDev non-goals vs agency non-goals (premature money/
+            // commitment) without a per-type agent split. Absent ⇒ CustDev
+            // back-compat in the agent itself. harden-agency-sourcing-
+            // pipeline.
+            const campaignTypeKey = conv.campaign?.type?.key ?? null;
+            const goalTargets =
+              campaignTypeKey === 'agency_sourcing'
+                ? agencyTargets(conv.campaign?.goal)
+                : undefined;
+            const campaignTypeForGate = campaignTypeKey
+              ? {
+                  key: campaignTypeKey,
+                  goalIntent:
+                    campaignTypeKey === 'custdev'
+                      ? 'research_interview'
+                      : campaignTypeKey === 'agency_sourcing'
+                        ? 'collect_commercial_data'
+                        : undefined,
+                  ...(goalTargets ? { target_data_points: goalTargets } : {}),
+                }
+              : undefined;
             gate = await runAgentSafe<GateOut>(
               'goal_fit_evaluator',
               {
                 ajtbd,
+                ...(campaignTypeForGate ? { campaign_type: campaignTypeForGate } : {}),
                 history_tail: historyTail.slice(-8),
                 intent: { intent: intent.intent, confidence: intent.confidence },
                 handoff: { action: handoff.action, reason: handoff.reason },
@@ -750,7 +814,7 @@ export async function handleOutreachFirstMessage(data: { conversationId?: string
           });
           if (!conv) throw new Error('conversation not found');
 
-          const safetyExtras = safetyExtrasForCampaign(conv.campaign);
+          warnIfAgencyTypeUnderFlagOff(conv.campaign, conv.id, 'outreach_first_message');
 
           await ensureContactTgProfile(conv.tgAccountId, conv.contact);
           const contact = await prisma.contact.findUnique({
@@ -786,19 +850,52 @@ export async function handleOutreachFirstMessage(data: { conversationId?: string
           // (observed_integrations + client_brief). CustDev / flag-off keeps
           // the literal `opening_composer` and its existing input verbatim.
           const openingAgent = resolveRoleAgent(conv.campaign, 'opening_composer', 'opening_composer');
+          // Agency opener: `observed_integrations` is sourced ONLY from
+          // `sponsored_integration_detector` (harden-agency-sourcing-
+          // pipeline). Mirrors the dispatcher path. Detector failure /
+          // no detections → empty list, and the composer's no-fabrication
+          // guard takes over.
+          let observedIntegrations: Array<{ snippet: string; brand?: string; date?: string }> = [];
+          if (openingAgent === 'agency_opening_composer' && recentPosts.length > 0) {
+            const detected = await runAgentSafe<{
+              integrations: Array<{ snippet: string; brand?: string; date?: string; confidence: number }>;
+            }>(
+              'sponsored_integration_detector',
+              {
+                posts: recentPosts.map((p) => ({
+                  ...(p.date ? { date: p.date } : {}),
+                  text: p.text,
+                })),
+                channel_title: contact.channel?.title ?? '',
+                language: contact.channel?.language ?? 'ru',
+              },
+              {
+                conversationId: conv.id,
+                ...(conv.campaignId ? { campaignId: conv.campaignId } : {}),
+                contactId: conv.contact.id,
+              },
+            );
+            observedIntegrations = (detected?.integrations ?? [])
+              .filter((i) => i.confidence >= MIN_SPONSORED_CONFIDENCE)
+              .map((i) => ({
+                snippet: i.snippet,
+                ...(i.brand ? { brand: i.brand } : {}),
+                ...(i.date ? { date: i.date } : {}),
+              }));
+          }
           const openerInput =
             openingAgent === 'agency_opening_composer'
               ? {
                   channel_analysis: contact.channel?.analysis ?? {},
                   contact: buildContactPromptInput(contact),
-                  campaign: { goal_text: goalText, client_brief: valueProp },
-                  // Recent posts are the only sponsored-integration evidence we
-                  // have here; pass them as candidate snippets. The composer's
-                  // deterministic no-fabrication guard decides eligibility.
-                  observed_integrations: recentPosts.map((p) => ({
-                    ...(p.date ? { date: p.date } : {}),
-                    snippet: p.text,
-                  })),
+                  campaign: {
+                    goal_text: goalText,
+                    // Structured `goal.client_brief` first, legacy
+                    // `valueProp` fallback — see helper. harden-agency-
+                    // sourcing-pipeline.
+                    client_brief: extractAgencyClientBrief(conv.campaign),
+                  },
+                  observed_integrations: observedIntegrations,
                 }
               : {
                   channel_analysis: contact.channel?.analysis ?? {},
@@ -824,25 +921,22 @@ export async function handleOutreachFirstMessage(data: { conversationId?: string
           let bestScore = 0;
           let bestText = '';
 
+          const campaignTypesEnabledFirstMsg = getFeatureFlags().get('campaign_types');
           for (const v of opener.variants) {
+            const safetyBundle = buildSafetyInput({
+              draft: v.text,
+              campaignTypesEnabled: campaignTypesEnabledFirstMsg,
+              safetyProfile: conv.campaign?.type?.safetyProfile ?? null,
+              channelAnalysis: contact.channel?.analysis ?? {},
+              contact: { id: contact.id },
+              campaign: { name: conv.campaign?.name ?? 'ad-hoc' },
+            });
             const safety = await runAgentSafe<SafetyOut>(
               'safety_filter',
-              {
-                draft: v.text,
-                channel_analysis: contact.channel?.analysis ?? {},
-                contact: { id: contact.id },
-                campaign: { name: conv.campaign?.name ?? 'ad-hoc' },
-                ...(safetyExtras
-                  ? {
-                      forbidden_topics: safetyExtras.forbidden_topics,
-                      hard_block_patterns: safetyExtras.hard_block_patterns,
-                      allowed_topics: safetyExtras.allowed_topics,
-                    }
-                  : {}),
-              },
+              safetyBundle.input,
               {
                 conversationId: conv.id,
-                ...(safetyExtras ? { overrides: safetyExtras.overrides } : {}),
+                ...(safetyBundle.overrides ? { overrides: safetyBundle.overrides } : {}),
               },
             );
             if (!safety) continue;
@@ -882,7 +976,14 @@ export async function handleOutreachFirstMessage(data: { conversationId?: string
                 createdAt: sug.createdAt.toISOString(),
               },
             });
-            if (score > bestScore) {
+            // Auto-send gate: a variant the composer marked NOT eligible
+            // (e.g. agency variant with no real sponsored integration to
+            // cite) is still saved as `pending` for operator review, but
+            // never auto-approved. `undefined ≡ true` keeps CustDev's
+            // composer behaviour byte-for-byte (it never emits the field).
+            // harden-agency-sourcing-pipeline.
+            const autoSendEligible = v.auto_send_eligible !== false;
+            if (autoSendEligible && score > bestScore) {
               bestScore = score;
               bestSuggestionId = sug.id;
               bestText = v.text;
@@ -933,7 +1034,6 @@ export async function handleFollowupCheck(data: { conversationId?: string }): Pr
   if (conv.status !== 'active') return { ok: true, skipped: 'not_active' };
 
   const ajtbd = resolveCampaignAjtbd(conv.campaign);
-  const safetyExtras = safetyExtrasForCampaign(conv.campaign);
   const messages = await prisma.message.findMany({
     where: { conversationId: conv.id },
     orderBy: { createdAt: 'asc' },
@@ -1040,26 +1140,23 @@ export async function handleFollowupCheck(data: { conversationId?: string }): Pr
   let bestSuggestionId: string | null = null;
   let bestScore = 0;
   let bestText = '';
+  const campaignTypesEnabledFollowup = getFeatureFlags().get('campaign_types');
   for (const v of reply.variants) {
+    const safetyBundle = buildSafetyInput({
+      draft: v.text,
+      campaignTypesEnabled: campaignTypesEnabledFollowup,
+      safetyProfile: conv.campaign?.type?.safetyProfile ?? null,
+      channelAnalysis: conv.contact.channel?.analysis ?? {},
+      contact: { id: conv.contact.id },
+      campaign: {},
+      ajtbdNonGoals: ajtbd?.non_goals ?? [],
+    });
     const safety = await runAgentSafe<SafetyOut>(
       'safety_filter',
-      {
-        draft: v.text,
-        channel_analysis: conv.contact.channel?.analysis ?? {},
-        contact: { id: conv.contact.id },
-        campaign: {},
-        ...(safetyExtras
-          ? {
-              forbidden_topics: safetyExtras.forbidden_topics,
-              hard_block_patterns: safetyExtras.hard_block_patterns,
-              allowed_topics: safetyExtras.allowed_topics,
-            }
-          : {}),
-        ajtbd_non_goals: ajtbd?.non_goals ?? [],
-      },
+      safetyBundle.input,
       {
         conversationId: conv.id,
-        ...(safetyExtras ? { overrides: safetyExtras.overrides } : {}),
+        ...(safetyBundle.overrides ? { overrides: safetyBundle.overrides } : {}),
       },
     );
     if (!safety?.allow) continue;

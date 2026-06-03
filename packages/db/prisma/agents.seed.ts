@@ -28,6 +28,9 @@ export interface AgentSeed {
    *      audience_stats_extractor profile extractor agents.
    * v11 — agency-sourcing-matching M7: adds blogger_matcher (optional LLM
    *      re-rank of the top-N matched candidates).
+   * v12 — harden-agency-sourcing-pipeline: adds sponsored_integration_detector,
+   *      the only valid source for observed_integrations fed into the agency
+   *      opener composer.
    */
   version: number;
 }
@@ -514,6 +517,26 @@ reasons[] — короткие конкретные причины оценки 
     userPromptTemplate:
       'Бриф клиента: {{brief}}\n\nКандидаты (предварительный score от алгоритма):\n{{candidates}}\n\nВерни JSON: переранжируй кандидатов. Только эти profile_id.',
     params: { temperature: 0.2, max_tokens: 800, enable_llm_rerank: false },
+    version: 1,
+  },
+  {
+    // Sponsored-integration detector (harden-agency-sourcing-pipeline). Cheap
+    // tier classifier — the ONLY valid source for `observed_integrations` of
+    // `agency_opening_composer`. Pure LLM (no regex/erid markers): the agent
+    // returns only posts it confidently reads as sponsored, with a verbatim
+    // snippet. An empty result is the correct answer when nothing is
+    // sponsored — the opener's no-fabrication guard then falls back to a
+    // generic hook.
+    name: 'sponsored_integration_detector',
+    role: 'sponsored-detection',
+    description:
+      'LLM-классификатор: какие из последних постов канала — рекламные интеграции (paid/partnership/sponsored). Источник истины для observed_integrations агентского opener.',
+    model: 'anthropic/claude-haiku-4.5',
+    systemPrompt:
+      'Ты классифицируешь посты канала: какие являются РЕКЛАМНЫМИ ИНТЕГРАЦИЯМИ (платная реклама, бренд-партнёрство, спонсорство), а какие — обычным контентом автора. Верни только подтверждённые рекламные посты. Признаки рекламы: явное упоминание бренда + CTA (купить/перейти/попробовать), промокод, маркеры «реклама»/«#реклама»/«erid»/«при поддержке»/«партнёр», структура «контекст→продукт→ссылка». НЕ реклама: личный пост, обзор без CTA, кросс-промо без коммерческой выгоды, анонс СОБСТВЕННОГО продукта/курса канала (самореклама). Формат: {integrations: [{snippet, brand?, date?, confidence, rationale}]}. snippet — ДОСЛОВНЫЙ фрагмент (5–20 слов), verbatim. brand — только если явно упомянут. confidence ≥ 0.6 (явная реклама 0.8+; вероятная 0.6–0.8). Посты с confidence < 0.6 НЕ возвращай. Никогда не выдумывай рекламу там, где её нет — если ни один пост не похож, верни integrations:[]. Возвращай только JSON.',
+    userPromptTemplate:
+      'Канал: {{channel_title}} (язык: {{language}})\n\nПоследние посты (свежий — последний):\n{{posts_text}}\n\nВерни JSON с integrations[] — только подтверждённые рекламные интеграции.',
+    params: { temperature: 0.1, max_tokens: 900 },
     version: 1,
   },
 ];

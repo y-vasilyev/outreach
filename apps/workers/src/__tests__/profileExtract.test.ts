@@ -11,17 +11,25 @@ const mocks = vi.hoisted(() => {
     conversation: { findUnique: vi.fn() },
     message: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn() },
     bloggerProfile: { upsert: vi.fn(), update: vi.fn() },
-    profileDataPoint: { create: vi.fn(), findMany: vi.fn() },
+    profileDataPoint: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn() },
+    // harden-agency-sourcing-pipeline: profile-extract backfills
+    // pre-profile media assets when the catalog profile appears.
+    mediaAsset: { updateMany: vi.fn() },
     $transaction: vi.fn(),
   };
   const runAgentSafe = vi.fn();
-  return { prisma, runAgentSafe };
+  // Feature flag mock — tests can flip object_storage etc. via this state.
+  const flagState: Record<string, boolean> = {};
+  return { prisma, runAgentSafe, flagState };
 });
 
 vi.mock('@nosquare/db', () => ({ getPrisma: () => mocks.prisma, Prisma: { JsonNull: null } }));
 vi.mock('bullmq', () => ({ Worker: class {} }));
 vi.mock('../redis.js', () => ({ getRedis: () => ({}) }));
 vi.mock('../services/run-agent-safe.js', () => ({ runAgentSafe: mocks.runAgentSafe }));
+vi.mock('../feature-flags.js', () => ({
+  getFeatureFlags: () => ({ get: (k: string) => mocks.flagState[k] ?? false }),
+}));
 
 import { handleProfileExtract } from '../queues/profile-extract.js';
 
@@ -50,6 +58,8 @@ beforeEach(() => {
   mocks.prisma.bloggerProfile.upsert.mockResolvedValue({ id: 'prof1', channelId: 'ch1' });
   mocks.prisma.bloggerProfile.update.mockResolvedValue({});
   mocks.prisma.profileDataPoint.create.mockResolvedValue({});
+  mocks.prisma.profileDataPoint.findFirst.mockResolvedValue(null);
+  mocks.prisma.mediaAsset.updateMany.mockResolvedValue({ count: 0 });
   mocks.prisma.$transaction.mockImplementation(
     async (fn: (tx: typeof mocks.prisma) => Promise<unknown>) => fn(mocks.prisma),
   );
@@ -130,5 +140,61 @@ describe('handleProfileExtract', () => {
     const result = await handleProfileExtract({ conversationId: 'conv1' });
     expect(result).toMatchObject({ skipped: 'no_channel' });
     expect(mocks.prisma.bloggerProfile.upsert).not.toHaveBeenCalled();
+  });
+
+  it('pre-gate skips inbound with no commercial signal (no LLM calls)', async () => {
+    // harden-agency-sourcing-pipeline: turns like "ок, в пятницу" must NOT
+    // burn the two extractor LLM calls.
+    mocks.prisma.message.findUnique.mockResolvedValue({
+      id: 'm1',
+      text: 'ок, договорились',
+      conversationId: 'conv1',
+      direction: 'in_',
+    });
+    const result = await handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1' });
+    expect(result).toMatchObject({ skipped: 'no_signal' });
+    expect(mocks.runAgentSafe).not.toHaveBeenCalled();
+  });
+
+  it('throws when BOTH extractors fail (so BullMQ retries / sync caller logs)', async () => {
+    // harden-agency-sourcing-pipeline: previously swallowed double-failure
+    // as a benign "ok, empty" outcome.
+    mocks.runAgentSafe.mockResolvedValue(null); // both calls fail
+    await expect(
+      handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1' }),
+    ).rejects.toThrow(/extractors failed/i);
+  });
+
+  it('returns success with zero data points when extractors returned cleanly but empty', async () => {
+    mocks.runAgentSafe.mockImplementation(async () => ({ data_points: [] }));
+    const result = await handleProfileExtract({
+      conversationId: 'conv1',
+      sourceMessageId: 'm1',
+    });
+    expect(result).toMatchObject({ ok: true, channelId: 'ch1', dataPoints: 0 });
+    expect(mocks.prisma.profileDataPoint.create).not.toHaveBeenCalled();
+  });
+
+  it('backfills mediaAsset.profileId for pre-profile assets on the same conversation', async () => {
+    mocks.runAgentSafe.mockImplementation(async (name: string) => {
+      if (name === 'rate_card_extractor') {
+        return {
+          data_points: [
+            { field: 'rate.post', value: 15000, unit: 'RUB', confidence: 0.9, rawSnippet: 'пост 15000' },
+          ],
+        };
+      }
+      return { data_points: [] };
+    });
+    mocks.prisma.profileDataPoint.findMany.mockResolvedValue([
+      { field: 'rate.post', value: 15000, unit: 'RUB', confidence: 0.9, capturedAt: new Date() },
+    ]);
+
+    await handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1' });
+
+    expect(mocks.prisma.mediaAsset.updateMany).toHaveBeenCalledWith({
+      where: { conversationId: 'conv1', profileId: null },
+      data: { profileId: 'prof1' },
+    });
   });
 });

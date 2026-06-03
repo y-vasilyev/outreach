@@ -31,28 +31,41 @@ describe('extractAjtbdView', () => {
     expect(view.forces.push).toEqual(['слишком дорого']);
   });
 
-  it('agency_sourcing goal ALWAYS falls back to scaffold (typeKey discriminator)', () => {
+  it('agency_sourcing goal scaffold surfaces target_data_points + agency non_goals', () => {
+    // harden-agency-sourcing-pipeline: the agency scaffold lifts
+    // `goal.target_data_points` into `desired_outcome` so downstream
+    // GoalFitEvaluator sees what's actually being collected, and seeds
+    // `non_goals` with the agency-specific anti-patterns the gate must
+    // flag as `handoff_silent` (premature monetary commitment, fabricated
+    // client details, guarantees). It does NOT pass the AJTBD shape from
+    // `goal` through verbatim — the agency `goal_schema` doesn't match
+    // CampaignAjtbdZ.
     const goal = {
       target_data_points: ['rate_card', 'audience_stats'],
       client_brief: 'fintech клиент',
     };
     const view = extractAjtbdView({ goal, goalText, valueProp, typeKey: 'agency_sourcing' });
     expect(view.job).toBe(goalText);
-    expect(view.desired_outcome).toBe(valueProp);
+    expect(view.desired_outcome).toContain('rate_card');
+    expect(view.desired_outcome).toContain('audience_stats');
     expect(view.when).toBe('');
-    expect(view.non_goals).toEqual([]);
+    expect(view.non_goals.length).toBeGreaterThan(0);
+    // Non-goals mention payment / guarantees / fabricated client details.
+    const nonGoalsBlob = view.non_goals.join(' ').toLowerCase();
+    expect(nonGoalsBlob).toMatch(/гаранти|оплат|выдум|комм/);
     expect(view.forces).toEqual({ push: [], pull: [], anxieties: [], habits: [] });
   });
 
-  it('agency goal with a stray `forces` field still falls back (typeKey wins)', () => {
+  it('agency goal with no target_data_points falls back to valueProp as desired_outcome', () => {
     const goal = {
-      target_data_points: ['rate_card'],
+      // No target_data_points → desired_outcome falls back to valueProp.
       forces: { push: ['anything'], pull: [], anxieties: [], habits: [] },
     };
     const view = extractAjtbdView({ goal, goalText, valueProp, typeKey: 'agency_sourcing' });
-    // Even though `forces` is present, type is not custdev → scaffold.
     expect(view.job).toBe(goalText);
     expect(view.desired_outcome).toBe(valueProp);
+    // Still seeded with agency non_goals (they don't depend on goal contents).
+    expect(view.non_goals.length).toBeGreaterThan(0);
   });
 
   it('unknown / missing typeKey falls back conservatively to scaffold', () => {

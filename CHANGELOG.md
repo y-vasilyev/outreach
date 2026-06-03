@@ -6,6 +6,75 @@ All operator-visible changes worth noting between releases.
 
 ### Added
 
+- **Agency sourcing — sponsored-integration detector** — a new
+  LLM-classifier agent (`sponsored_integration_detector`) is now the
+  ONLY source for `observed_integrations` fed into the agency opener
+  composer. Last-N posts are no longer passed through as candidate
+  integrations, so the opener cannot accidentally cite a non-sponsored
+  post as «вашу интеграцию с …». If the detector finds nothing (or
+  fails), the opener falls back to a generic-topic hook and the
+  composer's no-fabrication guard keeps the variant non-eligible for
+  auto-send. See openspec change `harden-agency-sourcing-pipeline`.
+
+### Changed
+
+- **Agency opener — `auto_send_eligible` is enforced** — variants the
+  composer marks as not eligible (typically agency variants without a
+  real sponsored integration to cite) are saved as `pending`
+  Suggestions for operator review but never auto-approved, regardless
+  of safety score. CustDev openers are unaffected (they don't emit
+  the field). See `harden-agency-sourcing-pipeline`.
+
+- **Full campaign-type safety profile on every outbound** —
+  dispatcher, on_inbound reply, first-message opener, operator
+  approve, and direct send now all go through a single
+  `buildSafetyInput` helper that feeds SafetyFilter the FULL profile
+  (allowed/forbidden topics, hard blocks, max_length, allow_links)
+  resolved from `campaign.type.safetyProfile`. Previously some sites
+  passed only `hard_block_patterns` and operator approve/direct send
+  passed no profile at all. See `harden-agency-sourcing-pipeline`.
+
+- **Agency inbound: synchronous profile extraction** — for
+  `agency_sourcing` conversations the inbound pipeline now runs
+  `handleProfileExtract` synchronously before invoking the
+  DataCollectionPlanner, so the planner sees facts in THIS inbound and
+  no longer re-asks for the price the blogger just shared. Cheap
+  deterministic pre-gate skips extractor calls on turns with no
+  commercial signal at all (e.g. "ок, в пятницу"). Media-kit assets
+  attached before the catalog profile existed are now back-filled with
+  `profileId` in the same transaction. Double-failure throws so the
+  BullMQ retry kicks in (was silently swallowed). See
+  `harden-agency-sourcing-pipeline`.
+
+- **Agency goal-fit gate is campaign-type aware** — `GoalFitEvaluator`
+  now branches its non-goals by campaign type: CustDev keeps the
+  research-interview framing, `agency_sourcing` flags premature money
+  commitments / fabricated client details / result guarantees. The
+  AJTBD scaffold built for agency campaigns lifts
+  `goal.target_data_points` into `desired_outcome`. See
+  `harden-agency-sourcing-pipeline`.
+
+- **Operator UX — agency campaign created with the flag off rejects
+  fast** — campaign create/update now responds 422
+  `AGENCY_SOURCING_DISABLED` instead of silently routing the campaign
+  through the CustDev opener. Existing agency campaigns under a
+  flag-off rollout emit a warn-log per dispatcher tick / inbound run
+  and skip the agency-specific branches. See
+  `harden-agency-sourcing-pipeline`.
+
+- **Smaller agency planner fixes**: `deals_contact` removed from the
+  default target set (no extractor yet — caused infinite re-asking);
+  `audience_demographics` and `geo` are now distinct collected
+  targets so capturing only geo no longer hides demographics from the
+  planner; `client_brief` is read from `goal.client_brief` (with
+  `valueProp` legacy fallback) and reaches the opener; opener
+  deduplication in `addContacts` recognises both `opening_composer`
+  and `agency_opening_composer`; `RateCardExtractor` no longer blindly
+  prepends `rate.` to whatever the LLM returns (`reach.story` is
+  dropped, not stored as `rate.reach.story`).
+
+### Added
+
 - **Inbox: per-campaign filter and friends** — the inbox now exposes a
   filter bar with campaign / status / mode dropdowns and a debounced
   contact/channel text search. State lives in the URL, so reloads and

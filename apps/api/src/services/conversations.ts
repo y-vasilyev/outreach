@@ -1,10 +1,11 @@
 import { getPrisma, Prisma } from '@nosquare/db';
-import { Errors, extractOpenerVariant } from '@nosquare/shared';
+import { buildSafetyInput, Errors, extractOpenerVariant } from '@nosquare/shared';
 import type { z } from 'zod';
 import type { ConversationFiltersZ } from '@nosquare/shared';
 import { getQueues } from '../queues.js';
 import { emitToRoom } from '../realtime/io.js';
 import { getAgentRunner } from './agents.js';
+import { getFeatureFlags } from '../feature-flags.js';
 import { getTgClient } from './tg-accounts.js';
 import { logger } from '../logger.js';
 
@@ -22,32 +23,39 @@ async function assertOutboundSafe(input: { conversationId: string; text: string 
     where: { id: input.conversationId },
     include: {
       contact: { include: { channel: true } },
-      campaign: true,
+      campaign: {
+        include: { type: { select: { key: true, safetyProfile: true } } },
+      },
     },
   });
   if (!conv) throw Errors.notFound('conversation', input.conversationId);
 
+  // Operator-approve and direct-send go through the SAME safety contract as
+  // the dispatcher / agent-run paths — full campaign-type safety profile
+  // (allowed/forbidden topics, hard blocks, max_length, allow_links). Built
+  // via the single shared `buildSafetyInput` so SafetyFilter input parity is
+  // testable across all sites. harden-agency-sourcing-pipeline.
+  const safetyBundle = buildSafetyInput({
+    draft: input.text,
+    campaignTypesEnabled: getFeatureFlags().get('campaign_types'),
+    safetyProfile: conv.campaign?.type?.safetyProfile ?? null,
+    channelAnalysis: conv.contact.channel?.analysis ?? {},
+    contact: { id: conv.contact.id, value: conv.contact.value, role: conv.contact.roleGuess },
+    campaign: conv.campaign
+      ? { name: conv.campaign.name, goal_text: conv.campaign.goalText, value_prop: conv.campaign.valueProp }
+      : {},
+  });
   const safety = await getAgentRunner().run<{
     allow: boolean;
     reasons: string[];
     risk_score: number;
     rewrite_hint?: string;
-  }>(
-    'safety_filter',
-    {
-      draft: input.text,
-      channel_analysis: conv.contact.channel?.analysis ?? {},
-      contact: { id: conv.contact.id, value: conv.contact.value, role: conv.contact.roleGuess },
-      campaign: conv.campaign
-        ? { name: conv.campaign.name, goal_text: conv.campaign.goalText, value_prop: conv.campaign.valueProp }
-        : {},
-    },
-    {
-      conversationId: conv.id,
-      contactId: conv.contactId,
-      ...(conv.campaignId ? { campaignId: conv.campaignId } : {}),
-    },
-  );
+  }>('safety_filter', safetyBundle.input, {
+    conversationId: conv.id,
+    contactId: conv.contactId,
+    ...(conv.campaignId ? { campaignId: conv.campaignId } : {}),
+    ...(safetyBundle.overrides ? { overrides: safetyBundle.overrides } : {}),
+  });
   if (!safety.allow) {
     throw Errors.badRequest('SafetyFilter blocked outbound message', {
       reasons: safety.reasons,

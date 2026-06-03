@@ -1,11 +1,13 @@
 import { getPrisma, type Prisma } from '@nosquare/db';
 import { getFeatureFlags } from '../feature-flags.js';
 import {
+  buildSafetyInput,
   type CampaignSchedule,
   effectiveDailyLimits,
+  extractAgencyClientBrief,
   isWithinSchedule,
+  MIN_SPONSORED_CONFIDENCE,
   resolveAgentName,
-  resolveSafetyContext,
 } from '@nosquare/shared';
 import { getRunner } from '../services/runner.js';
 import { logger } from '../logger.js';
@@ -19,11 +21,27 @@ interface OpenerOut {
   // (`assignVariantKeys`) — always non-empty (alphabetical fallback when the
   // LLM doesn't supply a semantic key). Used downstream to attribute the
   // outbound message to a specific opener variant (ab-opener-variants).
-  variants: Array<{ text: string; rationale: string; risk_score: number; variantKey: string }>;
+  //
+  // `auto_send_eligible` is emitted by `agency_opening_composer` and signals
+  // whether the variant truthfully cites a sponsored integration. CustDev's
+  // `opening_composer` does not emit it — `undefined ≡ true` (harden-agency-
+  // sourcing-pipeline change). When `false`, the variant is saved as pending
+  // but excluded from auto-approve regardless of safety score.
+  variants: Array<{
+    text: string;
+    rationale: string;
+    risk_score: number;
+    variantKey: string;
+    auto_send_eligible?: boolean;
+  }>;
 }
 interface SafetyOut {
   allow: boolean;
   risk_score: number;
+}
+
+interface SponsoredDetectorOut {
+  integrations: Array<{ snippet: string; brand?: string; date?: string; confidence: number; rationale?: string }>;
 }
 
 /**
@@ -81,6 +99,21 @@ export function startCampaignDispatcher() {
       });
 
       for (const c of campaigns) {
+        // Agency-typed campaign with the agency flag off: warn-log + skip
+        // rather than silently falling back to the CustDev opener path —
+        // operator who created this campaign almost certainly expected
+        // the agency behaviour. harden-agency-sourcing-pipeline.
+        if (
+          c.type?.key === 'agency_sourcing' &&
+          !getFeatureFlags().get('agency_sourcing')
+        ) {
+          logger.warn(
+            { campaignId: c.id, reason: 'agency_sourcing_disabled' },
+            'campaign type=agency_sourcing but agency_sourcing flag off; skipping dispatcher tick',
+          );
+          continue;
+        }
+
         const schedule = (c.schedule ?? {}) as CampaignSchedule;
         if (!isWithinSchedule(schedule)) {
           logger.debug({ campaignId: c.id }, 'campaign outside schedule window; skipping tick');
@@ -292,34 +325,61 @@ export function startCampaignDispatcher() {
           // agency_opening_composer (agency-shaped input below).
           const openingAgent = resolveRoleAgent(c, 'opening_composer', 'opening_composer');
           const safetyAgent = resolveRoleAgent(c, 'safety_filter', 'safety_filter');
-          // safety-filter-hard-block: serialize the type's deterministic
-          // hard-block regexes for the SafetyFilter input. Only attached
-          // when `campaign_types` is on AND the type has a profile; the
-          // legacy/CustDev path passes an empty array (no-op).
-          const safetyHardBlocks = getFeatureFlags().get('campaign_types')
-            ? resolveSafetyContext(c.type?.safetyProfile ?? null).hard_block_patterns.map(
-                (p) => ({
-                  id: p.id,
-                  pattern: p.regex.source,
-                  reason: p.reason,
-                  ...(p.regex.flags ? { flags: p.regex.flags } : {}),
-                }),
-              )
-            : [];
+          // Single source of truth for SafetyFilter input across dispatcher,
+          // agent-run, operator approve, direct send (harden-agency-sourcing-
+          // pipeline). When `campaign_types` is on and the campaign has a
+          // type-attached safety profile, we feed FULL profile (allowed/
+          // forbidden topics, hard blocks, max_length, allow_links). Flag off
+          // or typeless campaign → legacy shape (byte-for-byte pre-registry).
+          const campaignTypesEnabled = getFeatureFlags().get('campaign_types');
+          // Agency opener: feed `observed_integrations` from
+          // `sponsored_integration_detector` ONLY (harden-agency-sourcing-
+          // pipeline). The detector is the single LLM-driven source of
+          // truth for sponsored posts — `channel.rawData.posts` is never
+          // passed through directly. Detector failure / no detections →
+          // empty list, and the composer's no-fabrication guard takes over.
+          let observedIntegrations: Array<{ snippet: string; brand?: string; date?: string }> = [];
+          if (openingAgent === 'agency_opening_composer' && recentPosts.length > 0) {
+            try {
+              const detected = await runner.run<SponsoredDetectorOut>(
+                'sponsored_integration_detector',
+                {
+                  posts: recentPosts,
+                  channel_title: contactForPrompt.channel?.title ?? '',
+                  language: contactForPrompt.channel?.language ?? 'ru',
+                },
+                { conversationId: conv.id, campaignId: c.id, contactId: contact.id },
+              );
+              observedIntegrations = (detected?.integrations ?? [])
+                .filter((i) => i.confidence >= MIN_SPONSORED_CONFIDENCE)
+                .map((i) => ({
+                  snippet: i.snippet,
+                  ...(i.brand ? { brand: i.brand } : {}),
+                  ...(i.date ? { date: i.date } : {}),
+                }));
+            } catch (err: unknown) {
+              logger.warn(
+                { conversationId: conv.id, err: (err as Error).message },
+                'sponsored_integration_detector failed; agency opener gets empty observed_integrations',
+              );
+              observedIntegrations = [];
+            }
+          }
           const openerInput =
             openingAgent === 'agency_opening_composer'
               ? {
                   channel_analysis: contactForPrompt.channel?.analysis ?? {},
                   contact: buildContactPromptInput(contactForPrompt),
-                  campaign: { goal_text: c.goalText, client_brief: c.valueProp },
-                  // Recent posts are the only sponsored-integration evidence we
-                  // have at dispatch; pass as candidate snippets. The composer's
-                  // no-fabrication guard decides eligibility. Mirrors
-                  // handleOutreachFirstMessage in agent-run.ts.
-                  observed_integrations: recentPosts.map((p) => ({
-                    ...(p.date ? { date: p.date } : {}),
-                    snippet: p.text,
-                  })),
+                  campaign: {
+                    goal_text: c.goalText,
+                    // `client_brief` is read from the campaign's structured
+                    // goal (`campaign.goal.client_brief`) per the agency
+                    // editor; `valueProp` is a legacy fallback for older
+                    // campaigns that predate the goal field.
+                    // harden-agency-sourcing-pipeline.
+                    client_brief: extractAgencyClientBrief(c),
+                  },
+                  observed_integrations: observedIntegrations,
                 }
               : {
                   channel_analysis: contactForPrompt.channel?.analysis ?? {},
@@ -344,13 +404,18 @@ export function startCampaignDispatcher() {
             let bestText = '';
 
             for (const v of opener.variants) {
-              const safety = await runner.run<SafetyOut>(safetyAgent, {
+              const safetyBundle = buildSafetyInput({
                 draft: v.text,
-                channel_analysis: contactForPrompt.channel?.analysis ?? {},
+                campaignTypesEnabled,
+                safetyProfile: c.type?.safetyProfile ?? null,
+                channelAnalysis: contactForPrompt.channel?.analysis ?? {},
                 contact: { id: contact.id },
                 campaign: { name: c.name },
-                hard_block_patterns: safetyHardBlocks,
-              }, { conversationId: conv.id });
+              });
+              const safety = await runner.run<SafetyOut>(safetyAgent, safetyBundle.input, {
+                conversationId: conv.id,
+                ...(safetyBundle.overrides ? { overrides: safetyBundle.overrides } : {}),
+              });
               if (!safety.allow) continue;
               const score = 1 - safety.risk_score;
               const sug = await prisma.suggestion.create({
@@ -374,7 +439,14 @@ export function startCampaignDispatcher() {
                   meta: { openerVariant: v.variantKey },
                 },
               });
-              if (score > bestScore) {
+              // Variants that the composer marked NOT auto-send-eligible
+              // (e.g. agency variant without a real sponsored integration to
+              // cite) are saved as `pending` so the operator can review them,
+              // but never auto-approved — regardless of safety score.
+              // `undefined ≡ true` keeps CustDev opener auto-approve byte-for-
+              // byte the pre-change behaviour. harden-agency-sourcing-pipeline.
+              const autoSendEligible = v.auto_send_eligible !== false;
+              if (autoSendEligible && score > bestScore) {
                 bestScore = score;
                 bestSuggestionId = sug.id;
                 bestText = v.text;

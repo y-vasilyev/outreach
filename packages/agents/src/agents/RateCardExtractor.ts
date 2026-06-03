@@ -99,16 +99,52 @@ export const rateCardExtractor: Agent<RateCardExtractorInput, RateCardExtractorO
       fallbackUserPromptTemplate: FALLBACK_USER,
     });
 
-    // Deterministic guard: keep ALL points (incl. low-confidence). We only
-    // backfill rawSnippet from the source when the model forgot it, so we
-    // never lose provenance — never threshold-drop here (the spec requires
-    // ambiguous points reach the operator).
+    // Deterministic guards (harden-agency-sourcing-pipeline):
+    // 1. Field MUST match `rate.<format>` where format is a plain
+    //    `[a-z][a-z0-9_]*` token. The previous implementation blindly
+    //    prepended `rate.` to anything (so `reach.story` accidentally
+    //    becomes `rate.reach.story` and the roll-up reads it as a "format"
+    //    with no price). Now:
+    //      - bare `post` + numeric value → `rate.post`
+    //      - `rate.post` → kept
+    //      - `rate.reach.story` (multi-dot) → bucketed to `rate.other`
+    //      - `reach.story` (other category) → DROPPED (it's not our scope)
+    // 2. Preserve verbatim rawSnippet, backfilling from source text only
+    //    when the model omitted it (provenance never lost).
+    // 3. Keep low-confidence points (the spec wants the operator to see
+    //    ambiguous facts; never threshold-drop here).
+    const RATE_FORMAT_RE = /^rate\.[a-z][a-z0-9_]*$/;
+    const PLAIN_FORMAT_RE = /^[a-z][a-z0-9_]*$/;
+    const isNumeric = (v: unknown): boolean => {
+      if (typeof v === 'number') return Number.isFinite(v);
+      if (typeof v === 'string') return Number.isFinite(Number(v.replace(/[\s,]/g, '')));
+      return false;
+    };
     const sourceText = replies.join('\n');
-    const data_points = out.data_points.map((dp) => ({
-      ...dp,
-      field: dp.field.startsWith('rate.') ? dp.field : `rate.${dp.field}`,
-      rawSnippet: dp.rawSnippet && dp.rawSnippet.trim().length > 0 ? dp.rawSnippet : sourceText,
-    }));
+    const data_points: typeof out.data_points = [];
+    for (const dp of out.data_points) {
+      const f = (dp.field ?? '').trim().toLowerCase();
+      let normalized: string | null = null;
+      if (RATE_FORMAT_RE.test(f)) {
+        normalized = f;
+      } else if (PLAIN_FORMAT_RE.test(f) && isNumeric(dp.value)) {
+        normalized = `rate.${f}`;
+      } else if (f.startsWith('rate.') && isNumeric(dp.value)) {
+        // multi-segment like `rate.zoom.lecture` or `rate.reach.story` —
+        // we have a price, just don't know the canonical format. Bucket.
+        normalized = 'rate.other';
+      } else {
+        // Not a rate field and not a numeric price — drop. Audience/reach
+        // belongs to AudienceStatsExtractor.
+        continue;
+      }
+      data_points.push({
+        ...dp,
+        field: normalized,
+        rawSnippet:
+          dp.rawSnippet && dp.rawSnippet.trim().length > 0 ? dp.rawSnippet : sourceText,
+      });
+    }
 
     return { data_points, ...(out.note !== undefined ? { note: out.note } : {}) };
   },

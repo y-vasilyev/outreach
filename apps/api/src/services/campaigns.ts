@@ -1,5 +1,10 @@
 import { getPrisma } from '@nosquare/db';
-import { buildAjtbdScaffold, Errors } from '@nosquare/shared';
+import {
+  AppError,
+  buildAjtbdScaffold,
+  Errors,
+  OPENER_AGENT_NAMES,
+} from '@nosquare/shared';
 import type { z } from 'zod';
 import type { CreateCampaignInputZ } from '@nosquare/shared';
 
@@ -37,6 +42,17 @@ async function resolveTypeAndGoal(opts: {
   // type) until ENABLE_CAMPAIGN_TYPES is on.
   if (!getFeatureFlags().get('campaign_types') && type.key !== DEFAULT_CAMPAIGN_TYPE_KEY) {
     throw Errors.badRequest('campaign types are not enabled', { typeKey: type.key });
+  }
+  // Fail-fast for agency campaigns when the flag is off — otherwise the
+  // worker would silently fall back to the CustDev opener path for an
+  // agency-typed campaign, which is a confusing footgun for operators.
+  // harden-agency-sourcing-pipeline.
+  if (type.key === 'agency_sourcing' && !getFeatureFlags().get('agency_sourcing')) {
+    throw new AppError(
+      'AGENCY_SOURCING_DISABLED',
+      'agency_sourcing campaigns require the agency_sourcing feature flag to be on',
+      422,
+    );
   }
   const candidateGoal =
     opts.goal ??
@@ -332,7 +348,7 @@ export const campaignsService = {
             prisma.suggestion.count({
               where: {
                 conversationId: convId,
-                agentName: 'opening_composer',
+                agentName: { in: [...OPENER_AGENT_NAMES] },
                 status: { in: ['pending', 'approved', 'sent'] },
               },
             }),

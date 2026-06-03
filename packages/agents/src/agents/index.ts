@@ -26,6 +26,7 @@ import { dataCollectionPlanner } from './DataCollectionPlanner.js';
 import { rateCardExtractor } from './RateCardExtractor.js';
 import { audienceStatsExtractor } from './AudienceStatsExtractor.js';
 import { bloggerMatcher } from './BloggerMatcher.js';
+import { sponsoredIntegrationDetector } from './SponsoredIntegrationDetector.js';
 
 agentRegistry.register(channelAnalyzer);
 agentRegistry.register(contactExtractor);
@@ -46,6 +47,7 @@ agentRegistry.register(dataCollectionPlanner);
 agentRegistry.register(rateCardExtractor);
 agentRegistry.register(audienceStatsExtractor);
 agentRegistry.register(bloggerMatcher);
+agentRegistry.register(sponsoredIntegrationDetector);
 
 export {
   channelAnalyzer,
@@ -67,6 +69,7 @@ export {
   rateCardExtractor,
   audienceStatsExtractor,
   bloggerMatcher,
+  sponsoredIntegrationDetector,
 };
 
 export * from './ChannelAnalyzer.js';
@@ -88,3 +91,4 @@ export * from './DataCollectionPlanner.js';
 export * from './RateCardExtractor.js';
 export * from './AudienceStatsExtractor.js';
 export * from './BloggerMatcher.js';
+export * from './SponsoredIntegrationDetector.js';

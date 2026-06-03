@@ -633,8 +633,20 @@ advertising/business contact. Сообщение должно прямо обо�
 - **RateCardExtractor / AudienceStatsExtractor.** Парсят свободный текст
   блогера в `profile_data_point` (`rate.*`, `reach.*`, `audience.*`) с
   confidence и сырым `raw_snippet`; низкая уверенность не выкидывается.
+  `RateCardExtractor` имеет детерминированный field-guard:
+  поля вне `rate.<format>` дропаются (не префиксуются слепо `rate.`);
+  нераспознанные числовые форматы бакетируются в `rate.other`.
 - **BloggerMatcher — `blogger_matcher`.** Опциональный LLM-реранк топ-N
   кандидатов под бриф; по умолчанию off (детерминированный скоринг без LLM).
+- **SponsoredIntegrationDetector — `sponsored_integration_detector`.**
+  LLM-классификатор: какие из последних постов канала являются рекламными
+  интеграциями (платная реклама, бренд-партнёрство, спонсорство). Возвращает
+  ТОЛЬКО подтверждённые посты с verbatim `snippet`, опциональным `brand` и
+  confidence ≥ 0.6. ЭТО ЕДИНСТВЕННЫЙ ВАЛИДНЫЙ ИСТОЧНИК для
+  `observed_integrations` в `agency_opening_composer` — дисптчер и agent-run
+  больше не передают `channel.rawData.posts` напрямую. Пустой выход (или
+  fallback при ошибке) → no-fabrication guard композитора отключает
+  auto-send-eligible на всех вариантах. За `ENABLE_AGENCY_SOURCING`.
 
 ### Интенты и режимы
 
@@ -649,10 +661,27 @@ advertising/business contact. Сообщение должно прямо обо�
 ### Пайплайн агентского inbound (поверх `on_inbound`)
 
 Для `agency_sourcing`-конверсаций (за флагом): опенер резолвится из
-`agent_set` (`agency_opening_composer`); на inbound вместо `reply_composer`
-работает `data_collection_planner` (следующий недостающий пункт / закрытие).
-После inbound в очередь `profile-extract` уходит извлечение прайсов/охватов в
-`profile_data_point` + детерминированный roll-up в `blogger_profile`; входящие
-файлы оседают в S3 (`media_asset`). Интенты `discusses_price`/`sends_quote`
-форсят `operator_now`. Всё за `ENABLE_AGENCY_SOURCING`; при выключенном флаге
-путь CustDev байт-в-байт.
+`agent_set` (`agency_opening_composer`); перед опенером запускается
+`sponsored_integration_detector` — только его вывод (с порогом
+`MIN_SPONSORED_CONFIDENCE=0.6`) подаётся как `observed_integrations`. На
+inbound вместо `reply_composer` работает `data_collection_planner` (следующий
+недостающий пункт / закрытие); ПЕРЕД ним синхронно (а не через очередь)
+вызывается `handleProfileExtract({sourceMessageId: last.id})`, чтобы планнер
+видел факты текущего inbound и не переспрашивал то, что блогер только что
+прислал. Cheap pre-gate (`hasCommercialSignal`) экономит экстракторы на
+turn'ах без цифр/коммерческих ключей.
+`handleProfileExtract` атрибутирует точки к ОДНОМУ `sourceMessageId`, в той
+же транзакции бэкфилит `media_asset.profileId` для ассетов, пришедших до
+появления профиля, и при двойном падении экстракторов бросает (BullMQ
+retry; sync-вызывающий ловит и логгирует, не валя inbound).
+Auto-send-eligible на opener-вариантах уважают и dispatcher, и first-message:
+неэлигибельный вариант сохраняется как pending Suggestion, но не участвует в
+auto-approve. `SafetyFilter` теперь во всех точках исходящего
+(`buildSafetyInput`) получает полный профиль типа (allowed/forbidden topics,
+hard blocks, max_length, allow_links). `GoalFitEvaluator` принимает
+`campaign_type` и переключает non-goals на агентские
+(гарантии/предоплата/выдуманные детали клиента). Интенты
+`discusses_price`/`sends_quote` форсят `operator_now`. Всё за
+`ENABLE_AGENCY_SOURCING`; при выключенном флаге кампания типа
+`agency_sourcing` отбивается на create (422 `AGENCY_SOURCING_DISABLED`), а
+существующие конверсации этого типа дают warn-лог + skip — без silent fallback.

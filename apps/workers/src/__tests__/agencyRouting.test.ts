@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * B2 worker wiring (agency-sourcing-matching): on_inbound resolves the
- * reply-role agent via the campaign type's agentSet for agency_sourcing
- * conversations (gated by the runtime `agency_sourcing` flag), and fans out a
- * profile-extract job. CustDev / flag-off stays on the literal agent names
- * and never enqueues profile extraction. Feature flags are now read via the
- * runtime accessor, so we mock it (runtime-feature-flags).
+ * B2 worker wiring (agency-sourcing-matching) + harden-agency-sourcing-
+ * pipeline: on_inbound resolves the reply-role agent via the campaign
+ * type's agentSet for agency_sourcing conversations (gated by the runtime
+ * `agency_sourcing` flag), and SYNCHRONOUSLY runs `handleProfileExtract`
+ * for the triggering inbound before the planner sees it. CustDev / flag-
+ * off stays on the literal agent names and never extracts.
+ *
+ * `handleProfileExtract` is mocked here so we only assert it's INVOKED
+ * with the right arguments — its own behaviour is covered in
+ * profileExtract.test.ts.
  */
 
 const mocks = vi.hoisted(() => {
@@ -20,10 +24,17 @@ const mocks = vi.hoisted(() => {
   const runAgentSafe = vi.fn();
   const publishRealtime = vi.fn();
   const tryAutoApprove = vi.fn();
-  const queueAdd = vi.fn();
+  const handleProfileExtract = vi.fn();
   // Mutable runtime-flag state driving getFeatureFlags().get(key).
   const flagState: Record<string, boolean> = {};
-  return { prisma, runAgentSafe, publishRealtime, tryAutoApprove, queueAdd, flagState };
+  return {
+    prisma,
+    runAgentSafe,
+    publishRealtime,
+    tryAutoApprove,
+    handleProfileExtract,
+    flagState,
+  };
 });
 
 vi.mock('../feature-flags.js', () => ({
@@ -32,9 +43,6 @@ vi.mock('../feature-flags.js', () => ({
 vi.mock('@nosquare/db', () => ({ getPrisma: () => mocks.prisma }));
 vi.mock('bullmq', () => ({
   Worker: class {},
-  Queue: class {
-    add = mocks.queueAdd;
-  },
 }));
 vi.mock('../redis.js', () => ({ getRedis: () => ({}) }));
 vi.mock('../services/run-agent-safe.js', () => ({ runAgentSafe: mocks.runAgentSafe }));
@@ -42,6 +50,9 @@ vi.mock('../services/realtime-emit.js', () => ({ publishRealtime: mocks.publishR
 vi.mock('../services/auto-approve.js', () => ({ tryAutoApprove: mocks.tryAutoApprove }));
 vi.mock('../services/agent-input.js', () => ({ buildContactPromptInput: () => ({}) }));
 vi.mock('../services/contact-profile.js', () => ({ ensureContactTgProfile: vi.fn() }));
+vi.mock('../queues/profile-extract.js', () => ({
+  handleProfileExtract: mocks.handleProfileExtract,
+}));
 
 import { handleOnInbound } from '../queues/agent-run.js';
 
@@ -132,7 +143,7 @@ beforeEach(() => {
   );
   mocks.publishRealtime.mockResolvedValue(undefined);
   mocks.tryAutoApprove.mockResolvedValue(false);
-  mocks.queueAdd.mockResolvedValue({});
+  mocks.handleProfileExtract.mockResolvedValue({ ok: true });
   mocks.prisma.bloggerProfile.findUnique.mockResolvedValue(null);
   setAgentResponses();
 });
@@ -142,17 +153,30 @@ afterEach(() => {
   mocks.flagState.campaign_types = false;
 });
 
-describe('handleOnInbound — agency routing (B2)', () => {
-  it('enqueues profile-extract for an agency_sourcing conversation when the flag is on', async () => {
+describe('handleOnInbound — agency routing (B2 + harden)', () => {
+  it('runs profile-extract synchronously for an agency_sourcing conversation when the flag is on', async () => {
+    // harden-agency-sourcing-pipeline: previously the inbound fanned out a
+    // BullMQ job; now it invokes `handleProfileExtract` directly BEFORE
+    // the DataCollectionPlanner so the planner sees facts in this inbound.
     mocks.flagState.agency_sourcing = true;
     setupConversation({ typeKey: 'agency_sourcing', agentSet: AGENCY_AGENT_SET });
 
     await handleOnInbound({ conversationId: 'conv1' });
 
-    expect(mocks.queueAdd).toHaveBeenCalledWith(
-      'extract',
+    expect(mocks.handleProfileExtract).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv1', sourceMessageId: 'm1' }),
     );
+    // It ran BEFORE the planner (sync ordering).
+    const callOrder = mocks.handleProfileExtract.mock.invocationCallOrder[0] ?? 0;
+    const plannerOrder =
+      mocks.runAgentSafe.mock.calls
+        .map((c, i) =>
+          c[0] === 'data_collection_planner'
+            ? mocks.runAgentSafe.mock.invocationCallOrder[i] ?? 0
+            : 0,
+        )
+        .find((n) => n > 0) ?? Number.POSITIVE_INFINITY;
+    expect(callOrder).toBeLessThan(plannerOrder);
   });
 
   it('drives the agency reply with data_collection_planner (not reply_composer)', async () => {
@@ -198,22 +222,22 @@ describe('handleOnInbound — agency routing (B2)', () => {
     });
   });
 
-  it('does NOT enqueue profile-extract for CustDev (flag on, custdev type)', async () => {
+  it('does NOT run profile-extract for CustDev (flag on, custdev type)', async () => {
     mocks.flagState.agency_sourcing = true;
     setupConversation({ typeKey: 'custdev', agentSet: {} });
 
     await handleOnInbound({ conversationId: 'conv1' });
 
-    expect(mocks.queueAdd).not.toHaveBeenCalled();
+    expect(mocks.handleProfileExtract).not.toHaveBeenCalled();
   });
 
-  it('does NOT enqueue profile-extract when the flag is off (even for agency type)', async () => {
+  it('does NOT run profile-extract when the flag is off (even for agency type)', async () => {
     mocks.flagState.agency_sourcing = false;
     setupConversation({ typeKey: 'agency_sourcing', agentSet: AGENCY_AGENT_SET });
 
     await handleOnInbound({ conversationId: 'conv1' });
 
-    expect(mocks.queueAdd).not.toHaveBeenCalled();
+    expect(mocks.handleProfileExtract).not.toHaveBeenCalled();
     // Reply path stays on the literal reply_composer.
     const replyCall = mocks.runAgentSafe.mock.calls.find((c) => c[0] === 'reply_composer');
     expect(replyCall).toBeDefined();
