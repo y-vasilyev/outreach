@@ -1,7 +1,7 @@
 import { Worker } from 'bullmq';
 import { getRedis } from '../redis.js';
 import {
-  hasCommercialSignal,
+  preGateExtraction,
   ProfileExtractJobZ,
   QueueNames,
   rollUpProfileFields,
@@ -91,14 +91,33 @@ export async function handleProfileExtract(data: {
   const replies = sourceMessage.text ? [sourceMessage.text] : [];
   if (replies.length === 0) return { ok: true, skipped: 'empty_inbound' };
 
-  // Cheap deterministic pre-gate (harden-agency-sourcing-pipeline): skip the
-  // two extractor LLM calls when the inbound contains no commercial signal at
-  // all (no digits AND no commercial keyword). This is not a content
-  // classifier — only a cost filter. False positives are fine; the extractors
-  // return empty data_points gracefully.
-  if (!hasCommercialSignal(sourceMessage.text)) {
-    return { ok: true, skipped: 'no_signal' };
+  // Deterministic pre-gate: skip the two extractor LLM calls on
+  // obviously empty service-talk turns ("ок", "напишу в 5"). The classifier
+  // returns a structured `{pass, reason}` so we can track passed_by /
+  // skipped_by counters in logs and tune the predicate from real data.
+  // See `packages/shared/src/agency-detection.ts` for the policy.
+  const gate = preGateExtraction(sourceMessage.text);
+  if (!gate.pass) {
+    logger.info(
+      {
+        event: 'profile_extract.pregate_skip',
+        conversationId: conv.id,
+        sourceMessageId,
+        skipped_by: gate.reason,
+      },
+      'profile-extract pre-gate skipped: no extraction signal',
+    );
+    return { ok: true, skipped: 'no_signal', reason: gate.reason };
   }
+  logger.info(
+    {
+      event: 'profile_extract.pregate_pass',
+      conversationId: conv.id,
+      sourceMessageId,
+      passed_by: gate.reason,
+    },
+    'profile-extract pre-gate passed; invoking extractors',
+  );
 
   const channelTitle = conv.contact.channel?.title ?? '';
   const language = conv.contact.channel?.language ?? 'ru';
