@@ -28,6 +28,14 @@ PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$ROOT_DIR/../.." && pwd)}"
 # `cr.yandex/<id>/outreach-api`.
 CR_REGISTRY="${CR_REGISTRY:-__paste-cr-registry-id__}"
 CR_REPOSITORY="${CR_REPOSITORY:-outreach}"
+# Be lenient about CR_REGISTRY: users routinely copy the full path from the
+# YC console ("cr.yandex/crp...") or paste just the id ("crp..."). Strip a
+# leading "cr.yandex/" so both forms produce the right IMAGE_REGISTRY, and
+# warn so the next paste matches the documented form.
+if [[ "$CR_REGISTRY" == cr.yandex/* ]]; then
+  echo "Note: stripping 'cr.yandex/' from CR_REGISTRY=$CR_REGISTRY (id is the part after the slash)." >&2
+  CR_REGISTRY="${CR_REGISTRY#cr.yandex/}"
+fi
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-cr.yandex/$CR_REGISTRY}"
 API_IMAGE_NAME="${API_IMAGE_NAME:-$CR_REPOSITORY-api}"
 WEB_IMAGE_NAME="${WEB_IMAGE_NAME:-$CR_REPOSITORY-web}"
