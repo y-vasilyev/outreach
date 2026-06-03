@@ -62,12 +62,22 @@ export interface ConversationDetail extends ConversationListItem {
   lastSyncedAt?: string | null;
 }
 
+export interface MessageAttachment {
+  kind: 'image' | 'video' | 'document' | 'other';
+  mime?: string;
+  fileName?: string;
+  bytes?: number;
+  /** MediaAsset.id when bytes landed in S3 — fetch a presigned GET via API. */
+  assetId?: string;
+}
+
 export interface ChatMessage {
   id: string;
   /** Prisma enum keys (`in_` / `out_` because `in`/`out` are reserved). */
   direction: 'in_' | 'out_';
   sender: 'contact' | 'ai' | 'operator' | 'system';
   text: string;
+  attachments?: MessageAttachment[];
   status?: 'pending' | 'sending' | 'sent' | 'failed' | 'received';
   createdAt: string;
   sentAt?: string | null;

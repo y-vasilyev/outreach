@@ -426,6 +426,7 @@ model Message {
   // `opening_composer` or `agency_opening_composer`; drives per-variant
   // sent/replied/replyRate aggregates served by /campaigns/:id/opener-stats.
   openerVariant  String?          @map("opener_variant")
+  mediaAssets    MediaAsset[]
 
   @@index([conversationId, createdAt])
   @@index([conversationId, openerVariant])
@@ -686,6 +687,10 @@ model MediaAsset {
   id             String          @id @default(cuid())
   // Plain indexed reference to Conversation.id.
   conversationId String?         @map("conversation_id")
+  // Owning chat Message, when this asset was attached to an inbound message.
+  // SetNull on Message delete keeps the asset row queryable for backfill/audit.
+  messageId      String?         @map("message_id")
+  message        Message?        @relation(fields: [messageId], references: [id], onDelete: SetNull)
   profileId      String?         @map("profile_id")
   profile        BloggerProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
   kind           MediaAssetKind  @default(other)
@@ -698,6 +703,7 @@ model MediaAsset {
   createdAt      DateTime        @default(now()) @map("created_at")
 
   @@index([conversationId])
+  @@index([messageId])
   @@index([profileId])
   @@map("media_asset")
 }

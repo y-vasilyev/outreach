@@ -34,6 +34,11 @@ export async function conversationsRoutes(app: FastifyInstance) {
     return conversationsService.getSuggestions(params.id);
   });
 
+  app.post('/conversations/:id/read', { preHandler: [app.requireRole(['admin', 'operator'])] }, async (req) => {
+    const params = z.object({ id: z.string() }).parse(req.params);
+    return conversationsService.markRead(params.id);
+  });
+
   app.post('/conversations/:id/messages', { preHandler: [app.requireRole(['admin', 'operator'])] }, async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
     const body = SendMessageInputZ.parse({ conversationId: params.id, ...(req.body as object) });

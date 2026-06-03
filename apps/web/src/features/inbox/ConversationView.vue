@@ -53,10 +53,27 @@ const draft = ref('');
 const scheduledLocal = ref('');
 const scrollRef = ref<HTMLElement | null>(null);
 
+// Ack inbound messages to Telegram so the contact sees the blue
+// double-check. Fire on conversation open AND on each new inbound while
+// this conversation is open. Server is idempotent + degrades safely if
+// the entity can't be resolved.
+const markReadOnServer = () => {
+  const id = cId.value;
+  if (!id) return;
+  api.post(`/conversations/${id}/read`).catch(() => undefined);
+};
+
 useRoom(() => room.value, 'message.new', () => {
   qc.invalidateQueries({ queryKey: ['conversation-messages', cId.value] });
   qc.invalidateQueries({ queryKey: ['conversations'] });
+  markReadOnServer();
 });
+
+watch(
+  cId,
+  () => markReadOnServer(),
+  { immediate: true },
+);
 useRoom(() => room.value, 'suggestion.new', () => {
   qc.invalidateQueries({ queryKey: ['conversation-suggestions', cId.value] });
 });

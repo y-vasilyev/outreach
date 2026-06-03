@@ -159,21 +159,11 @@ export function startTgListenWorker() {
         });
       }
 
-      // B2 parity (agency-sourcing-matching M6): tg-client now lets media-only
-      // inbounds (empty text) through so they can be recorded as media_asset
-      // rows. That is a NEW behavior — before M6, an empty-text inbound never
-      // produced a Message + on_inbound run. Keep the legacy CustDev path
-      // byte-for-byte when ENABLE_OBJECT_STORAGE is off: an inbound with no text
-      // is dropped here exactly as it was pre-M6 (mapIncomingEvent used to
-      // return null for it). Only when object storage is on do we persist the
-      // empty-text inbound + run the pipeline so its media is captured.
-      if (!data.text && !getFeatureFlags().get('object_storage')) {
-        logger.info(
-          { tgMsgId: data.tgMsgId, tgAccountId: data.tgAccountId },
-          'tg-listen: media-only inbound dropped (object storage disabled; legacy parity)',
-        );
-        return { ok: true, skipped: 'media_only_storage_off' };
-      }
+      // Surface media-only inbounds (no caption) to the operator even when
+      // ENABLE_OBJECT_STORAGE is off: we persist the Message + attachments
+      // metadata so the chat shows a media placeholder bubble. Only the
+      // S3 byte upload (persistInboundMedia below) stays gated behind the
+      // flag — dropping silently is worse than a placeholder.
 
       // 3. Idempotency: skip if we already stored this tgMsgId for this conv.
       if (data.tgMsgId) {
@@ -184,12 +174,24 @@ export function startTgListenWorker() {
         if (dup) return { ok: true, skipped: 'duplicate' };
       }
 
+      const attachments = data.media
+        ? [
+            {
+              kind: data.media.kind,
+              ...(data.media.mime ? { mime: data.media.mime } : {}),
+              ...(data.media.fileName ? { fileName: data.media.fileName } : {}),
+              ...(typeof data.media.bytes === 'number' ? { bytes: data.media.bytes } : {}),
+            },
+          ]
+        : [];
+
       const message = await prisma.message.create({
         data: {
           conversationId: conv.id,
           direction: 'in_',
           sender: 'contact',
           text: data.text,
+          attachments,
           status: 'received',
           tgMsgId: data.tgMsgId || null,
         },
@@ -203,6 +205,7 @@ export function startTgListenWorker() {
           conversationId: conv.id,
           channelId: contact.channelId ?? null,
           sourceTgMsgId: data.tgMsgId || null,
+          messageId: message.id,
           media: data.media,
           // B3: download the actual bytes via tg-client (GramJS downloadMedia)
           // so the media_asset gets a real s3Key. The thunk resolves to null on
@@ -256,6 +259,7 @@ export function startTgListenWorker() {
           direction: 'in',
           sender: 'contact',
           text: message.text,
+          attachments,
           createdAt: message.createdAt.toISOString(),
         },
       });

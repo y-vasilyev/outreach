@@ -45,6 +45,7 @@ type GramJSClient = {
   disconnect: () => Promise<void>;
   getMe: () => Promise<unknown>;
   getEntity: (target: unknown) => Promise<unknown>;
+  getInputEntity: (target: unknown) => Promise<unknown>;
   getMessages: (target: unknown, opts: { limit: number }) => Promise<unknown>;
   sendMessage: (
     target: unknown,
@@ -725,6 +726,29 @@ export class SessionManager {
         });
       },
 
+      async markRead(opts: { peerKey: string; maxTgMsgId?: string }): Promise<boolean> {
+        requireAuth();
+        // Best-effort: a stale username or missing access_hash should NOT
+        // surface as an exception to the operator — the read-ack is a
+        // courtesy, not a transactional op. Returns false on any failure.
+        try {
+          return await wrap(async () => {
+            const tg = await loadGramJS();
+            const inputPeer = (await client.getInputEntity(opts.peerKey)) as never;
+            const maxId =
+              opts.maxTgMsgId && Number.isFinite(Number(opts.maxTgMsgId))
+                ? Number(opts.maxTgMsgId)
+                : 0;
+            await client.invoke(
+              new tg.Api.messages.ReadHistory({ peer: inputPeer, maxId }),
+            );
+            return true;
+          });
+        } catch {
+          return false;
+        }
+      },
+
       async downloadInboundMedia(opts: { peerKey: string; tgMsgId: string }) {
         requireAuth();
         // Best-effort: any failure resolves to null. The handle delegates to
@@ -1078,6 +1102,9 @@ interface GramJSModule {
     };
     account: {
       GetPassword: new (params: Record<string, never>) => unknown;
+    };
+    messages: {
+      ReadHistory: new (params: { peer: unknown; maxId: number }) => unknown;
     };
     MessageEntityUrl: new (...args: unknown[]) => unknown;
     MessageEntityTextUrl: new (...args: unknown[]) => unknown;

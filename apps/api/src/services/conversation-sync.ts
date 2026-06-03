@@ -90,17 +90,22 @@ export async function syncOne(conversationId: string): Promise<SyncResult> {
     return { persisted: 0, triggeredOnInbound: false, cached: false, skipped: 'no_conversation' };
   }
 
-  // Resolve the peer key. tgUserId is most reliable; fall back to
-  // tgUsername (which the listener back-fills); finally to `value` for
-  // legacy `tg_username` rows. Without ANY of these we can't address
-  // the peer — log and bail.
-  const peerKey =
-    conv.contact.tgUserId ||
+  // Resolve peer keys. We prefer `@username` because GramJS can resolve it
+  // via `contacts.ResolveUsername` even when the entity isn't in the local
+  // cache — that path warms the access_hash. Numeric `tgUserId` works only
+  // when the entity is already cached (otherwise GramJS throws "Could not
+  // find the input entity"). Numeric ID stays as a fallback for contacts
+  // where we don't have a username. The list is ordered by preference; the
+  // sync loop below tries each until one succeeds.
+  const usernameKey =
     (conv.contact.tgUsername ? `@${conv.contact.tgUsername}` : '') ||
     (conv.contact.type === 'tg_username' && conv.contact.value
       ? `@${conv.contact.value.replace(/^@/, '')}`
       : '');
-  if (!peerKey) {
+  const peerKeys: string[] = [];
+  if (usernameKey) peerKeys.push(usernameKey);
+  if (conv.contact.tgUserId) peerKeys.push(conv.contact.tgUserId);
+  if (peerKeys.length === 0) {
     return { persisted: 0, triggeredOnInbound: false, cached: false, skipped: 'no_peer_key' };
   }
 
@@ -124,11 +129,28 @@ export async function syncOne(conversationId: string): Promise<SyncResult> {
         skipped: 'tg_account_not_authorized',
       };
     }
-    history = await handle.fetchHistorySince({
-      peerKey,
-      ...(lastMsg?.tgMsgId ? { sinceTgMsgId: lastMsg.tgMsgId } : {}),
-      limit: HISTORY_LIMIT,
-    });
+    // Try each peer key in preference order. If the first one fails with the
+    // GramJS "could not find the input entity" error (uncached access_hash),
+    // we fall through to the next candidate — typically `@username` →
+    // numeric `tgUserId` or vice versa.
+    let lastErr: unknown;
+    history = undefined;
+    for (const peerKey of peerKeys) {
+      try {
+        history = await handle.fetchHistorySince({
+          peerKey,
+          ...(lastMsg?.tgMsgId ? { sinceTgMsgId: lastMsg.tgMsgId } : {}),
+          limit: HISTORY_LIMIT,
+        });
+        break;
+      } catch (err) {
+        const msg = (err as Error).message ?? '';
+        const isEntityErr = /could not find the input entity/i.test(msg);
+        lastErr = err;
+        if (!isEntityErr) throw err;
+      }
+    }
+    if (history === undefined) throw lastErr ?? new Error('peer entity resolution failed');
   } catch (err) {
     // FloodWait is RATE_LIMITED in our taxonomy. We do NOT retry inline
     // — the operator's GET should still respond fast. Log + count, the

@@ -5,6 +5,8 @@ import type { ConversationFiltersZ } from '@nosquare/shared';
 import { getQueues } from '../queues.js';
 import { emitToRoom } from '../realtime/io.js';
 import { getAgentRunner } from './agents.js';
+import { getTgClient } from './tg-accounts.js';
+import { logger } from '../logger.js';
 
 type Filters = z.infer<typeof ConversationFiltersZ>;
 
@@ -133,11 +135,88 @@ export const conversationsService = {
 
   async getMessages(id: string, limit = 200) {
     const prisma = getPrisma();
-    return prisma.message.findMany({
+    const rows = await prisma.message.findMany({
       where: { conversationId: id },
       orderBy: { createdAt: 'asc' },
       take: limit,
+      include: {
+        // Only stored objects yield a presigned URL; honest-pending rows
+        // (empty s3Key) are filtered so the UI doesn't render broken images.
+        mediaAssets: {
+          where: { NOT: { s3Key: '' } },
+          select: { id: true, kind: true, mime: true, bytes: true },
+          orderBy: { createdAt: 'asc' },
+        },
+      },
     });
+    // Decorate each Message's `attachments` JSON with the resolved `assetId`
+    // so the inbox can call `/media-assets/:id/download-url` for inline
+    // previews. We persist the lightweight metadata on Message.attachments
+    // synchronously when the inbound is recorded; the MediaAsset row arrives
+    // later (S3 upload is async + behind ENABLE_OBJECT_STORAGE), so the join
+    // happens on read. 1:1 in practice — a TG inbound carries one media.
+    return rows.map((m) => {
+      const att = Array.isArray(m.attachments) ? (m.attachments as Array<Record<string, unknown>>) : [];
+      const assets = m.mediaAssets;
+      const enriched = att.map((a, i) => {
+        const asset = assets[i];
+        return asset ? { ...a, assetId: asset.id } : a;
+      });
+      const { mediaAssets: _omit, ...rest } = m;
+      return { ...rest, attachments: enriched };
+    });
+  },
+
+  /**
+   * Ack inbound messages from the contact's side: sends `messages.ReadHistory`
+   * to Telegram (blue double-check on the contact's client). Best-effort —
+   * read receipts are a courtesy, never a transactional op, so any TG failure
+   * is logged and swallowed. Returns the maxTgMsgId we attempted to ack so
+   * the caller can short-circuit no-op acks (UI re-opens of the same convo).
+   */
+  async markRead(id: string): Promise<{ acked: boolean; maxTgMsgId: string | null }> {
+    const prisma = getPrisma();
+    const conv = await prisma.conversation.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        tgAccountId: true,
+        contact: { select: { tgUserId: true, tgUsername: true, value: true, type: true } },
+      },
+    });
+    if (!conv) throw Errors.notFound('conversation', id);
+
+    const lastInbound = await prisma.message.findFirst({
+      where: { conversationId: id, direction: 'in_', tgMsgId: { not: null } },
+      orderBy: { createdAt: 'desc' },
+      select: { tgMsgId: true },
+    });
+    if (!lastInbound?.tgMsgId) return { acked: false, maxTgMsgId: null };
+
+    const usernameKey =
+      (conv.contact.tgUsername ? `@${conv.contact.tgUsername}` : '') ||
+      (conv.contact.type === 'tg_username' && conv.contact.value
+        ? `@${conv.contact.value.replace(/^@/, '')}`
+        : '');
+    const peerKeys: string[] = [];
+    if (usernameKey) peerKeys.push(usernameKey);
+    if (conv.contact.tgUserId) peerKeys.push(conv.contact.tgUserId);
+
+    try {
+      const handle = await getTgClient().for(conv.tgAccountId);
+      if (!handle.isAuthorized) return { acked: false, maxTgMsgId: lastInbound.tgMsgId };
+      for (const peerKey of peerKeys) {
+        const ok = await handle.markRead({ peerKey, maxTgMsgId: lastInbound.tgMsgId });
+        if (ok) return { acked: true, maxTgMsgId: lastInbound.tgMsgId };
+      }
+      return { acked: false, maxTgMsgId: lastInbound.tgMsgId };
+    } catch (err) {
+      logger.warn(
+        { conversationId: id, err: (err as Error).message },
+        'markRead: tg call failed; ignoring',
+      );
+      return { acked: false, maxTgMsgId: lastInbound.tgMsgId };
+    }
   },
 
   async getSuggestions(id: string) {

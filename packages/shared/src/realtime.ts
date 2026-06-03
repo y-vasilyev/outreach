@@ -13,6 +13,19 @@ export type RealtimeRoom =
   | `operator:${string}`
   | 'admin:dashboard';
 
+export interface MessageAttachment {
+  kind: 'image' | 'video' | 'document' | 'other';
+  mime?: string;
+  fileName?: string;
+  bytes?: number;
+  /**
+   * MediaAsset.id resolved on the read side once the byte upload landed in S3.
+   * UI fetches a short-lived presigned GET URL via `/media-assets/:id/download-url`.
+   * Absent for media that wasn't uploaded (flag off or honest-pending row).
+   */
+  assetId?: string;
+}
+
 export interface MessageEvent {
   type: 'message.new';
   conversationId: string;
@@ -21,6 +34,7 @@ export interface MessageEvent {
     direction: MessageDirection;
     sender: MessageSender;
     text: string;
+    attachments?: MessageAttachment[];
     createdAt: string;
   };
 }

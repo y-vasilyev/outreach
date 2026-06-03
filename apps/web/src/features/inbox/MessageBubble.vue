@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import Icon from '../../components/Icon.vue';
+import AttachmentImage from './AttachmentImage.vue';
 import { formatTime } from '../../lib/format';
-import type { ChatMessage } from './types';
+import type { ChatMessage, MessageAttachment } from './types';
 
 const props = defineProps<{ msg: ChatMessage }>();
 
@@ -16,6 +17,34 @@ const senderLabel = computed(() => {
   }
 });
 
+const attachments = computed<MessageAttachment[]>(() => props.msg.attachments ?? []);
+const hasAttachments = computed(() => attachments.value.length > 0);
+const hasText = computed(() => !!props.msg.text && props.msg.text.length > 0);
+
+function attachmentLabel(a: MessageAttachment): string {
+  if (a.fileName) return a.fileName;
+  switch (a.kind) {
+    case 'image': return 'Image';
+    case 'video': return 'Video';
+    case 'document': return 'File';
+    default: return 'Attachment';
+  }
+}
+
+function attachmentMeta(a: MessageAttachment): string {
+  const parts: string[] = [];
+  if (a.mime) parts.push(a.mime);
+  if (typeof a.bytes === 'number' && a.bytes > 0) parts.push(formatBytes(a.bytes));
+  return parts.join(' · ');
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 const bubbleStyle = computed(() => ({
   background: isOut.value ? 'var(--ink)' : 'var(--paper-2)',
   color: isOut.value ? 'var(--paper)' : 'var(--ink)',
@@ -27,12 +56,48 @@ const bubbleStyle = computed(() => ({
   whiteSpace: 'pre-wrap' as const,
   wordBreak: 'break-word' as const,
 }));
+
+const attachmentBorder = computed(() =>
+  isOut.value ? '1px solid var(--paper-3, rgba(255,255,255,0.18))' : '1px solid var(--line)',
+);
+const attachmentMetaColor = computed(() => (isOut.value ? 'var(--paper-3, rgba(255,255,255,0.65))' : 'var(--ink-4)'));
 </script>
 
 <template>
   <div :style="{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start', marginBottom: '14px' }">
     <div style="max-width: 520px; min-width: 0;">
-      <div :style="bubbleStyle">{{ msg.text }}</div>
+      <div :style="bubbleStyle">
+        <div
+          v-if="hasAttachments"
+          :style="{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: hasText ? '8px' : '0' }"
+        >
+          <template v-for="(a, i) in attachments" :key="i">
+            <AttachmentImage
+              v-if="a.kind === 'image' && a.assetId"
+              :asset-id="a.assetId"
+              :alt="a.fileName"
+            />
+            <div
+              v-else
+              :style="{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '6px 8px',
+                borderRadius: '6px',
+                border: attachmentBorder,
+              }"
+            >
+              <Icon name="paperclip" :size="14" />
+              <div :style="{ display: 'flex', flexDirection: 'column', minWidth: 0 }">
+                <span :style="{ fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">{{ attachmentLabel(a) }}</span>
+                <span v-if="attachmentMeta(a)" :style="{ fontSize: '10.5px', color: attachmentMetaColor, fontFamily: 'var(--font-mono)' }">{{ attachmentMeta(a) }}</span>
+              </div>
+            </div>
+          </template>
+        </div>
+        <span v-if="hasText">{{ msg.text }}</span>
+      </div>
       <div
         :style="{
           fontSize: '10.5px',

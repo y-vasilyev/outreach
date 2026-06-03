@@ -220,6 +220,15 @@ export interface TelegramClientHandle {
   }): Promise<HistoryMessage[]>;
 
   /**
+   * Mark the 1-1 chat with `peerKey` as read up to (and including) `maxTgMsgId`
+   * — i.e. send the blue-double-check read receipt to the contact. Omit
+   * `maxTgMsgId` to ack everything currently visible. Wraps
+   * `messages.ReadHistory`. Best-effort: returns `false` if the entity can't
+   * be resolved or the call fails (never throws to the caller).
+   */
+  markRead(opts: { peerKey: string; maxTgMsgId?: string }): Promise<boolean>;
+
+  /**
    * Download the media bytes of an inbound 1-1 message by its tg message id.
    * Returns the raw bytes, or `null` when the message / its media can't be
    * resolved (e.g. the message scrolled out of the access window, or it had no

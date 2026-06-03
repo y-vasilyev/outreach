@@ -52,6 +52,8 @@ export async function persistInboundMedia(opts: {
   conversationId: string;
   channelId?: string | null;
   sourceTgMsgId?: string | null;
+  /** Owning chat Message so the inbox can join MediaAsset → Message for previews. */
+  messageId?: string | null;
   media: InboundMediaMeta;
   /** Already-downloaded bytes, when the caller has them. */
   bytes?: Uint8Array;
@@ -91,6 +93,7 @@ export async function persistInboundMedia(opts: {
     const created = await prisma.mediaAsset.create({
       data: {
         conversationId: opts.conversationId,
+        messageId: opts.messageId ?? null,
         profileId,
         kind: assetKind,
         s3Key: '',
