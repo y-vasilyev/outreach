@@ -308,61 +308,123 @@ export function startTgListenWorker() {
  * event into a queue job, so a flaky GramJS connection can't lose data
  * (BullMQ retries on failure) and the listener stays light.
  */
+const RECONCILE_INTERVAL_MS = 30_000;
+
+/**
+ * Bind GramJS `NewMessage` listeners for every healthy outreach/both
+ * account, AND keep that set in sync over time. Without the periodic
+ * reconcile, accounts added or logged-in after worker boot never get a
+ * listener — the symptom is "outbound works but no inbound ever arrives"
+ * because tg-send creates sessions on demand while tg-listen only ran
+ * the snapshot taken at boot.
+ *
+ * Reconcile semantics:
+ *   - desired = (role outreach/both) ∧ (status active|idle) ∧ cooldown
+ *     null/past.
+ *   - subscribe any desired account not yet in the registry.
+ *   - unsubscribe any registered account no longer in desired (status
+ *     flipped to need_auth/banned, deleted, etc.).
+ *
+ * Initial bind runs in parallel — sequential `tg.for(a.id)` takes ~N
+ * seconds for N accounts because GramJS connect is async.
+ */
 export async function startTgListenSubscribers(): Promise<{ stop: () => Promise<void> }> {
   const prisma = getPrisma();
-  const tg = getTgClient();
-  if (!tg) {
+  const tgClient = getTgClient();
+  if (!tgClient) {
     logger.warn('TG client not configured; tg-listen subscribers are disabled');
     return { stop: async () => undefined };
   }
-
-  // Same healthy-status logic as channel-scrape: `idle` is the post-login
-  // resting state, `cooldown` is OK so long as cooldownUntil has passed
-  // (the healer flips those rows back to `idle` on a 30s loop).
-  const accounts = await prisma.tgAccount.findMany({
-    where: {
-      role: { in: ['outreach', 'both'] },
-      status: { in: ['active', 'idle'] },
-      OR: [{ cooldownUntil: null }, { cooldownUntil: { lte: new Date() } }],
-    },
-    select: { id: true, label: true },
-  });
+  // Pin into a non-null local so the closures below don't need narrowing.
+  const tg = tgClient;
 
   const queue = new Queue(QueueNames.tgListen, { connection: getRedis() });
-  const unsubs: Array<() => void> = [];
+  const registry = new Map<string, () => void>();
+  // Avoid stacking concurrent bind attempts for the same account when a
+  // session is slow to open (>RECONCILE_INTERVAL_MS).
+  const inFlight = new Set<string>();
+  let stopped = false;
 
-  for (const a of accounts) {
+  async function bindOne(a: { id: string; label: string }) {
+    if (registry.has(a.id) || inFlight.has(a.id)) return;
+    inFlight.add(a.id);
     try {
       const handle = await tg.for(a.id);
       if (!handle.isAuthorized) {
-        logger.warn({ tgAccountId: a.id, label: a.label }, 'account not authorized; skipping');
-        continue;
+        logger.warn({ tgAccountId: a.id, label: a.label }, 'tg-listen: account not authorized; skipping');
+        return;
       }
+      if (stopped || registry.has(a.id)) return;
       const unsub = handle.subscribeIncoming(async (msg) => {
         try {
           await queue.add('inbound', msg);
         } catch (err) {
           logger.warn(
             { tgAccountId: a.id, err: (err as Error).message },
-            'failed to enqueue tg-listen job',
+            'tg-listen: failed to enqueue job',
           );
         }
       });
-      unsubs.push(unsub);
-      logger.info({ tgAccountId: a.id, label: a.label }, 'tg-listen subscribed');
+      registry.set(a.id, unsub);
+      logger.info({ tgAccountId: a.id, label: a.label }, 'tg-listen: subscribed');
     } catch (err) {
       logger.warn(
         { tgAccountId: a.id, err: (err as Error).message },
-        'tg-listen subscribe failed',
+        'tg-listen: subscribe failed',
       );
+    } finally {
+      inFlight.delete(a.id);
     }
   }
 
+  async function reconcile() {
+    if (stopped) return;
+    const accounts = await prisma.tgAccount.findMany({
+      where: {
+        role: { in: ['outreach', 'both'] },
+        status: { in: ['active', 'idle'] },
+        OR: [{ cooldownUntil: null }, { cooldownUntil: { lte: new Date() } }],
+      },
+      select: { id: true, label: true },
+    });
+    const desired = new Set(accounts.map((a) => a.id));
+
+    // Drop subscriptions for accounts that left the desired set.
+    for (const [id, unsub] of registry) {
+      if (!desired.has(id)) {
+        try { unsub(); } catch { /* ignore */ }
+        registry.delete(id);
+        logger.info({ tgAccountId: id }, 'tg-listen: unsubscribed (no longer desired)');
+      }
+    }
+
+    // Bind new ones in parallel — 200 sequential awaits would take
+    // minutes; parallel completes in seconds.
+    const fresh = accounts.filter((a) => !registry.has(a.id) && !inFlight.has(a.id));
+    if (fresh.length === 0) return;
+    await Promise.all(fresh.map(bindOne));
+  }
+
+  // Initial bind. Failures are logged inside bindOne; never block boot
+  // on a slow account.
+  await reconcile().catch((err) => {
+    logger.warn({ err: (err as Error).message }, 'tg-listen: initial reconcile failed');
+  });
+
+  const timer = setInterval(() => {
+    reconcile().catch((err) => {
+      logger.warn({ err: (err as Error).message }, 'tg-listen: reconcile tick failed');
+    });
+  }, RECONCILE_INTERVAL_MS);
+
   return {
     stop: async () => {
-      for (const u of unsubs) {
-        try { u(); } catch { /* ignore */ }
+      stopped = true;
+      clearInterval(timer);
+      for (const unsub of registry.values()) {
+        try { unsub(); } catch { /* ignore */ }
       }
+      registry.clear();
       try { await queue.close(); } catch { /* ignore */ }
     },
   };
