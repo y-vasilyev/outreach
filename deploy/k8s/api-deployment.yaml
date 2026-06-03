@@ -52,6 +52,37 @@ spec:
             limits:
               memory: "512Mi"
               cpu: "1000m"
+        # Seed admin user, default endpoints (Yandex / OpenRouter when
+        # their keys are present), campaign types, agent configs and the
+        # feature_flag registry. Runs AFTER `migrate` (initContainers are
+        # sequential). The seed script (`packages/db/prisma/seed.ts`)
+        # uses upsert + versioned-bump everywhere, so re-running it on
+        # every pod restart is a no-op once the desired state is in place.
+        # SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD must be set in the Secret
+        # — otherwise the script falls back to admin@nosquare.local / admin
+        # which is unsafe for any reachable deployment.
+        - name: seed
+          image: cr.yandex/__paste-cr-registry-id__/outreach-api:latest
+          imagePullPolicy: Always
+          command:
+            - pnpm
+            - --filter
+            - "@nosquare/db"
+            - exec
+            - tsx
+            - prisma/seed.ts
+          envFrom:
+            - configMapRef:
+                name: outreach-config
+            - secretRef:
+                name: outreach-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
       containers:
         - name: api
           image: cr.yandex/__paste-cr-registry-id__/outreach-api:latest

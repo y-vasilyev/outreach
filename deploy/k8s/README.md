@@ -119,14 +119,21 @@ scenarios — your hand-edited Secret values are gone after this.
 
 ## Architecture notes
 
-- Prisma migrations run automatically on every api pod start via an
-  `initContainer` (`migrate`) on the api Deployment that executes
-  `prisma migrate deploy` against `DATABASE_URL`. The init runs to
-  completion before the main `api` container is created, and the same
-  image is pinned for both via `deploy.sh` (`set image deployment/api
-  api=<tag> migrate=<tag>`) so code and migrations always ship together.
-  `prisma migrate deploy` is idempotent — re-running it against an
-  up-to-date DB is a no-op.
+- The api Deployment has two `initContainers` that run on every pod start
+  before the main `api` container is created:
+  - `migrate` → `prisma migrate deploy` against `DATABASE_URL`.
+    Idempotent (only applies migrations not in `_prisma_migrations`).
+  - `seed` → `tsx prisma/seed.ts`. Idempotent (upsert + version-bump
+    everywhere): admin user, default endpoints (Yandex / OpenRouter when
+    their keys are present), ScrapeCreators / Yandex Search integrations,
+    every built-in agent config (prompts versioned — `seed.ts` bumps
+    when the in-source version is newer than the DB row, otherwise it
+    leaves operator edits alone), the campaign-type registry, and the
+    feature_flag rows.
+  `deploy.sh` pins all three containers — `api`, `migrate`, `seed` — to
+  the same tag on every rollout, so code, migrations, and prompts always
+  ship together. SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD live in the Secret
+  (placeholders) and must be set before first deploy.
 - DB tables, columns and enum types are **snake_case** in Postgres (e.g.
   `public.user`, `public.tg_account`, `feature_flag.updated_at`), via
   `@@map`/`@map` directives in `schema.prisma`. The Prisma client API
