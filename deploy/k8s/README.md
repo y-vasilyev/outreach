@@ -35,7 +35,11 @@ strings/keys live in the cluster (see `secrets.yaml`).
    - `DATABASE_URL` — external Postgres connection string
    - `REDIS_URL` — external Redis URL
    - `JWT_SECRET` — ≥ 16 bytes (recommend 32+); `openssl rand -base64 48`
-   - `ENCRYPTION_KEY` — ≥ 10 bytes (recommend 32 hex); `openssl rand -hex 32`
+   - `ENCRYPTION_KEY` — **base64 of exactly 32 random bytes**; the AES-256-GCM
+     keying in `packages/db/src/crypto.ts` decodes the value as base64
+     and asserts `Buffer.length === 32`. Generate with `openssl rand
+     -base64 32` (~44 chars incl. `=` padding). Hex won't work — it
+     decodes to 48 bytes and the seed crashes.
 
    Optional (features fail closed when missing):
    - `TG_API_ID` / `TG_API_HASH` — Telegram MTProto creds
