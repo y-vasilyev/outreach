@@ -22,4 +22,7 @@ COPY packages packages
 COPY apps/workers apps/workers
 RUN pnpm --filter @nosquare/db prisma:generate
 
-CMD ["pnpm", "--filter", "@nosquare/workers", "start"]
+# See Dockerfile.api for why we bypass `pnpm start` (start script's
+# --env-file=../../.env errors when the file is missing; in k8s env
+# comes from envFrom, not a baked-in dotfile).
+CMD ["pnpm", "--filter", "@nosquare/workers", "exec", "tsx", "src/index.ts"]

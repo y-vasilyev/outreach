@@ -23,4 +23,10 @@ COPY apps/api apps/api
 RUN pnpm --filter @nosquare/db prisma:generate
 
 EXPOSE 4000
-CMD ["pnpm", "--filter", "@nosquare/api", "start"]
+# Bypass `pnpm start` because the npm script runs
+# `tsx --env-file=../../.env src/index.ts` and Node's --env-file errors on
+# a missing file. In k8s the env is injected via `envFrom` (ConfigMap +
+# Secret), so we don't bake .env into the image — just run tsx directly.
+# `pnpm --filter @nosquare/api exec` cd's into apps/api before exec, so
+# `src/index.ts` resolves correctly.
+CMD ["pnpm", "--filter", "@nosquare/api", "exec", "tsx", "src/index.ts"]
