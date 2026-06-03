@@ -1,0 +1,43 @@
+# Without this file, `COPY apps/<svc> apps/<svc>` and `COPY packages packages`
+# in infra/Dockerfile.* would copy the host's pnpm-installed node_modules
+# directly over the layer that `pnpm install` just created inside the image
+# — clobbering Linux symlinks with macOS symlinks (or with version-skewed
+# .pnpm paths). That breaks `vue-tsc` for the web build with errors like
+#   "Cannot find type definition file for 'vite/client'"
+# even though the same install works locally.
+
+# Dependencies — must be installed fresh inside the image for the target
+# platform (linux/amd64), never copied from the host.
+**/node_modules
+**/.pnpm-store
+
+# Build outputs
+**/dist
+**/build
+**/.turbo
+**/.vite
+**/.next
+**/.cache
+**/tsconfig.tsbuildinfo
+
+# VCS + editor
+.git
+.gitignore
+.github
+.idea
+.vscode
+.DS_Store
+
+# Local config / secrets — never bake these into images
+.env
+.env.*
+!.env.example
+
+# Test artifacts
+**/coverage
+**/.nyc_output
+**/playwright-report
+**/test-results
+
+# k8s deploy bundle — not needed in any of the three runtime images
+deploy
