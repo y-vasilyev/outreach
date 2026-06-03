@@ -118,12 +118,17 @@ export function startTgSendWorker() {
       // small randomized delay
       await new Promise((r) => setTimeout(r, Math.min(5000, jitterMs())));
 
-      // Per-account outreach RPM (TG_OUTREACH_RPM). Unset → unlimited. When
-      // capped, throw so BullMQ retries the send — the message stays
-      // status=sending so the operator UI doesn't lose it. Worth noting:
-      // FloodGuard.isCoolingDown is the late-stage TG-side guard; this is
-      // our proactive early-stage one.
-      const rpm = roleRateLimiter.acquire(tgAccountId, 'outreach');
+      // Per-account outreach RPM. The per-account `outreachRpm` (operator
+      // sets it from the inbox UI) wins; env TG_OUTREACH_RPM is the
+      // fallback default; both null → unlimited. When capped, throw so
+      // BullMQ retries the send — the message stays status=pending so the
+      // operator UI doesn't lose it. FloodGuard.isCoolingDown is the
+      // late-stage TG-side guard; this is the proactive early-stage one.
+      const accountForRpm = await prisma.tgAccount.findUnique({
+        where: { id: tgAccountId },
+        select: { outreachRpm: true },
+      });
+      const rpm = roleRateLimiter.acquire(tgAccountId, 'outreach', accountForRpm?.outreachRpm);
       if (!rpm.ok) {
         await prisma.message.update({ where: { id: messageId }, data: { status: 'pending' } });
         throw new Error(

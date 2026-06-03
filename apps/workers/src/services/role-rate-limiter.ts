@@ -48,7 +48,11 @@ class RoleRateLimiter {
     );
   }
 
-  private cap(role: 'parser' | 'outreach'): number | null {
+  private cap(role: 'parser' | 'outreach', accountCap?: number | null): number | null {
+    // Per-account override wins over the env default. `accountCap = 0` is
+    // treated as "unset" (it's nonsensical as a cap and `Int?` in the DB
+    // already lets us model unset as NULL, but defensive nonetheless).
+    if (typeof accountCap === 'number' && accountCap > 0) return accountCap;
     this.load();
     return role === 'parser' ? this.parserCap : this.outreachCap;
   }
@@ -78,8 +82,9 @@ class RoleRateLimiter {
   acquire(
     accountId: string,
     role: 'parser' | 'outreach',
+    accountCap?: number | null,
   ): { ok: true } | { ok: false; retryAfterMs: number } {
-    const cap = this.cap(role);
+    const cap = this.cap(role, accountCap);
     if (cap === null) return { ok: true };
     const now = Date.now();
     const arr = this.trim(accountId, now);
@@ -97,8 +102,12 @@ class RoleRateLimiter {
    * picker to choose the account that's free soonest among multiple candidates.
    * Returns 0 when free now, >0 when ms-until-free.
    */
-  nextFreeInMs(accountId: string, role: 'parser' | 'outreach'): number {
-    const cap = this.cap(role);
+  nextFreeInMs(
+    accountId: string,
+    role: 'parser' | 'outreach',
+    accountCap?: number | null,
+  ): number {
+    const cap = this.cap(role, accountCap);
     if (cap === null) return 0;
     const now = Date.now();
     const arr = this.trim(accountId, now);

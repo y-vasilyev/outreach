@@ -18,6 +18,10 @@ const phone = ref('');
 const role = ref<'parser' | 'outreach' | 'both'>('outreach');
 const dailyMsgLimit = ref(40);
 const dailyNewLimit = ref(15);
+// Empty string = "unset" (UI sends null → falls back to TG_PARSER_RPM /
+// TG_OUTREACH_RPM env defaults, or unlimited when env is also unset).
+const parserRpm = ref<number | ''>('');
+const outreachRpm = ref<number | ''>('');
 const tags = ref('');
 const notes = ref('');
 
@@ -31,6 +35,8 @@ watch(
       role.value = a.role;
       dailyMsgLimit.value = a.dailyMsgLimit;
       dailyNewLimit.value = a.dailyNewContactLimit;
+      parserRpm.value = typeof a.parserRpm === 'number' ? a.parserRpm : '';
+      outreachRpm.value = typeof a.outreachRpm === 'number' ? a.outreachRpm : '';
       tags.value = (a.tags ?? []).join(', ');
       notes.value = a.notes ?? '';
     } else {
@@ -39,6 +45,8 @@ watch(
       role.value = 'outreach';
       dailyMsgLimit.value = 40;
       dailyNewLimit.value = 15;
+      parserRpm.value = '';
+      outreachRpm.value = '';
       tags.value = '';
       notes.value = '';
     }
@@ -54,6 +62,8 @@ const mut = useMutation({
       role: role.value,
       dailyMsgLimit: dailyMsgLimit.value,
       dailyNewContactLimit: dailyNewLimit.value,
+      parserRpm: parserRpm.value === '' ? null : parserRpm.value,
+      outreachRpm: outreachRpm.value === '' ? null : outreachRpm.value,
       tags: tags.value.split(',').map((t) => t.trim()).filter(Boolean),
       notes: notes.value || undefined,
     };
@@ -95,6 +105,28 @@ const mut = useMutation({
       </Field>
       <Field label="Лимит новых контактов в день">
         <input class="input" type="number" :value="dailyNewLimit" @input="dailyNewLimit = Number(($event.target as HTMLInputElement).value) || 0" />
+      </Field>
+      <Field label="Парсер: запросов в минуту" help="Пусто = по умолчанию (TG_PARSER_RPM env или без лимита)">
+        <input
+          class="input"
+          type="number"
+          min="1"
+          max="1000"
+          placeholder="без лимита"
+          :value="parserRpm"
+          @input="parserRpm = ($event.target as HTMLInputElement).value === '' ? '' : Number(($event.target as HTMLInputElement).value)"
+        />
+      </Field>
+      <Field label="Outreach: запросов в минуту" help="Пусто = по умолчанию (TG_OUTREACH_RPM env или без лимита)">
+        <input
+          class="input"
+          type="number"
+          min="1"
+          max="1000"
+          placeholder="без лимита"
+          :value="outreachRpm"
+          @input="outreachRpm = ($event.target as HTMLInputElement).value === '' ? '' : Number(($event.target as HTMLInputElement).value)"
+        />
       </Field>
     </div>
     <Field label="Заметки" style="margin-top: 12px;">

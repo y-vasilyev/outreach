@@ -63,7 +63,7 @@ export function startChannelScrapeWorker() {
               { cooldownUntil: { lte: new Date() } },
             ],
           },
-          select: { id: true },
+          select: { id: true, parserRpm: true },
         });
         if (candidates.length > 0) {
           // Shuffle once so equal-priority accounts (RPM unset / all free
@@ -74,16 +74,16 @@ export function startChannelScrapeWorker() {
           }
           candidates.sort(
             (a, b) =>
-              roleRateLimiter.nextFreeInMs(a.id, 'parser') -
-              roleRateLimiter.nextFreeInMs(b.id, 'parser'),
+              roleRateLimiter.nextFreeInMs(a.id, 'parser', a.parserRpm) -
+              roleRateLimiter.nextFreeInMs(b.id, 'parser', b.parserRpm),
           );
           const picked = candidates[0]!;
-          const acq = roleRateLimiter.acquire(picked.id, 'parser');
+          const acq = roleRateLimiter.acquire(picked.id, 'parser', picked.parserRpm);
           if (!acq.ok) {
             // All candidates are over the per-account RPM cap. Tell BullMQ
             // to retry — the healer/window will free a slot soon.
             throw new Error(
-              `tg parser pool throttled (TG_PARSER_RPM); retry in ${acq.retryAfterMs}ms`,
+              `tg parser pool throttled (per-account parserRpm); retry in ${acq.retryAfterMs}ms`,
             );
           }
           tgAccountId = picked.id;

@@ -221,6 +221,11 @@ model User {
   @@map("user")
 }
 
+// Per-account RPM caps live in `parserRpm` / `outreachRpm` (see TgAccount).
+// They model the proactive worker-side throttle that keeps a single account
+// from hammering TG fast enough to trip FloodWait — separate from the daily
+// counters which are about long-window outreach quotas.
+
 model TgAccount {
   id                   String          @id @default(cuid())
   label                String
@@ -230,6 +235,12 @@ model TgAccount {
   role                 TgAccountRole   @default(both)
   dailyMsgLimit        Int             @default(30) @map("daily_msg_limit")
   dailyNewContactLimit Int             @default(15) @map("daily_new_contact_limit")
+  // Per-account requests-per-minute caps used by the worker-side role rate
+  // limiter. Nullable = unlimited (env defaults TG_PARSER_RPM /
+  // TG_OUTREACH_RPM still apply as the global fallback when these are null).
+  // Operator sets these per account in the inbox UI.
+  parserRpm            Int?            @map("parser_rpm")
+  outreachRpm          Int?            @map("outreach_rpm")
   sentTodayMsg         Int             @default(0) @map("sent_today_msg")
   sentTodayNew         Int             @default(0) @map("sent_today_new")
   dayRolledAt          DateTime?       @map("day_rolled_at")

@@ -110,6 +110,8 @@ export const tgAccountsService = {
     role: 'parser' | 'outreach' | 'both';
     dailyMsgLimit?: number;
     dailyNewContactLimit?: number;
+    parserRpm?: number | null;
+    outreachRpm?: number | null;
     tags?: string[];
     notes?: string;
   }) {
@@ -121,13 +123,27 @@ export const tgAccountsService = {
         role: input.role,
         dailyMsgLimit: input.dailyMsgLimit ?? 30,
         dailyNewContactLimit: input.dailyNewContactLimit ?? 15,
+        parserRpm: input.parserRpm ?? null,
+        outreachRpm: input.outreachRpm ?? null,
         tags: input.tags ?? [],
         notes: input.notes ?? null,
       },
     });
   },
 
-  async update(id: string, patch: Partial<{ label: string; tags: string[]; notes: string; dailyMsgLimit: number; dailyNewContactLimit: number; role: 'parser' | 'outreach' | 'both' }>) {
+  async update(
+    id: string,
+    patch: Partial<{
+      label: string;
+      tags: string[];
+      notes: string;
+      dailyMsgLimit: number;
+      dailyNewContactLimit: number;
+      parserRpm: number | null;
+      outreachRpm: number | null;
+      role: 'parser' | 'outreach' | 'both';
+    }>,
+  ) {
     const prisma = getPrisma();
     return prisma.tgAccount.update({ where: { id }, data: patch });
   },

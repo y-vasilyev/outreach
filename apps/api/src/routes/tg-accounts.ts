@@ -17,6 +17,8 @@ export async function tgAccountsRoutes(app: FastifyInstance) {
       role: a.role,
       dailyMsgLimit: a.dailyMsgLimit,
       dailyNewContactLimit: a.dailyNewContactLimit,
+      parserRpm: a.parserRpm,
+      outreachRpm: a.outreachRpm,
       sentTodayMsg: a.sentTodayMsg,
       sentTodayNew: a.sentTodayNew,
       cooldownUntil: a.cooldownUntil?.toISOString() ?? null,
@@ -47,6 +49,8 @@ export async function tgAccountsRoutes(app: FastifyInstance) {
         notes: z.string().optional(),
         dailyMsgLimit: z.number().int().optional(),
         dailyNewContactLimit: z.number().int().optional(),
+        parserRpm: z.number().int().min(1).max(1000).nullable().optional(),
+        outreachRpm: z.number().int().min(1).max(1000).nullable().optional(),
         role: z.enum(['parser', 'outreach', 'both']).optional(),
       })
       .parse(req.body);
