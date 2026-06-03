@@ -65,6 +65,11 @@ export async function tgAccountsRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  app.post('/tg-accounts/:id/clear-cooldown', { preHandler: [app.requireRole(['admin'])] }, async (req) => {
+    const params = z.object({ id: z.string() }).parse(req.params);
+    return tgAccountsService.clearCooldown(params.id);
+  });
+
   app.post('/tg-accounts/:id/login/start', { preHandler: [app.requireRole(['admin'])] }, async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
     return tgAccountsService.startLogin(params.id);

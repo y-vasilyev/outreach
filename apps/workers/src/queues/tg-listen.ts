@@ -316,8 +316,15 @@ export async function startTgListenSubscribers(): Promise<{ stop: () => Promise<
     return { stop: async () => undefined };
   }
 
+  // Same healthy-status logic as channel-scrape: `idle` is the post-login
+  // resting state, `cooldown` is OK so long as cooldownUntil has passed
+  // (the healer flips those rows back to `idle` on a 30s loop).
   const accounts = await prisma.tgAccount.findMany({
-    where: { status: 'active', role: { in: ['outreach', 'both'] } },
+    where: {
+      role: { in: ['outreach', 'both'] },
+      status: { in: ['active', 'idle'] },
+      OR: [{ cooldownUntil: null }, { cooldownUntil: { lte: new Date() } }],
+    },
     select: { id: true, label: true },
   });
 

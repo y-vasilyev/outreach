@@ -10,6 +10,7 @@ import {
 } from '@nosquare/platforms';
 import { getTgClient } from '../services/tg-client.js';
 import { getScrapeCreators } from '../services/scrape-creators.js';
+import { roleRateLimiter } from '../services/role-rate-limiter.js';
 import { logger } from '../logger.js';
 import { publishRealtime } from '../services/realtime-emit.js';
 
@@ -44,17 +45,51 @@ export function startChannelScrapeWorker() {
         const sc = await getScrapeCreators();
         const handle = adapter.parseHandle(ch.handle)?.handle ?? ch.handle;
 
-        // Pick the first authorized parser/both account from the DB. Falls
-        // back to the env-supplied bootstrap account id only when no DB rows
-        // exist (useful for first-time integration tests with TG_SESSION_STRING).
+        // Pick a healthy parser/both account, rotating across the pool so a
+        // single account doesn't take all the load (the historical findFirst
+        // path concentrated traffic on one row and tripped FloodWait fast).
+        // Healthy = role in (parser, both) AND status NOT IN (need_auth,
+        // banned) AND (cooldownUntil IS NULL OR cooldownUntil <= NOW()).
+        // Among healthy candidates we prefer the one whose role-RPM window
+        // has the soonest free slot — that's effective least-recently-used
+        // when TG_PARSER_RPM is set, and uniform random when it isn't.
         let tgAccountId: string | null = null;
-        const parser = await prisma.tgAccount.findFirst({
-          where: { status: 'active', role: { in: ['parser', 'both'] } },
-          orderBy: { updatedAt: 'desc' },
+        const candidates = await prisma.tgAccount.findMany({
+          where: {
+            role: { in: ['parser', 'both'] },
+            status: { in: ['active', 'idle'] },
+            OR: [
+              { cooldownUntil: null },
+              { cooldownUntil: { lte: new Date() } },
+            ],
+          },
           select: { id: true },
         });
-        if (parser) tgAccountId = parser.id;
-        else if (process.env.TG_BOOTSTRAP_ACCOUNT_ID) tgAccountId = process.env.TG_BOOTSTRAP_ACCOUNT_ID;
+        if (candidates.length > 0) {
+          // Shuffle once so equal-priority accounts (RPM unset / all free
+          // now) rotate uniformly across jobs.
+          for (let i = candidates.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [candidates[i], candidates[j]] = [candidates[j]!, candidates[i]!];
+          }
+          candidates.sort(
+            (a, b) =>
+              roleRateLimiter.nextFreeInMs(a.id, 'parser') -
+              roleRateLimiter.nextFreeInMs(b.id, 'parser'),
+          );
+          const picked = candidates[0]!;
+          const acq = roleRateLimiter.acquire(picked.id, 'parser');
+          if (!acq.ok) {
+            // All candidates are over the per-account RPM cap. Tell BullMQ
+            // to retry — the healer/window will free a slot soon.
+            throw new Error(
+              `tg parser pool throttled (TG_PARSER_RPM); retry in ${acq.retryAfterMs}ms`,
+            );
+          }
+          tgAccountId = picked.id;
+        } else if (process.env.TG_BOOTSTRAP_ACCOUNT_ID) {
+          tgAccountId = process.env.TG_BOOTSTRAP_ACCOUNT_ID;
+        }
 
         const tgHandle =
           tgClient && tgAccountId

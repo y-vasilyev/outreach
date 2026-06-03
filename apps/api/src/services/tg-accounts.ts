@@ -137,6 +137,24 @@ export const tgAccountsService = {
     await prisma.tgAccount.delete({ where: { id } });
   },
 
+  /**
+   * Force-clear a FloodWait cooldown on an account. Sets `status='idle'` +
+   * `cooldownUntil=null`. Use sparingly: the wall-clock TG-side cooldown
+   * is unchanged by this call — if the operator clears too early, the
+   * next MTProto call will just re-trip FloodWait. Intended for accounts
+   * whose DB row drifted out of sync with the live session or for an
+   * operator who knows the actual cooldown has passed.
+   */
+  async clearCooldown(id: string) {
+    const prisma = getPrisma();
+    const a = await prisma.tgAccount.findUnique({ where: { id }, select: { id: true } });
+    if (!a) throw Errors.notFound('tg-account', id);
+    return prisma.tgAccount.update({
+      where: { id },
+      data: { status: 'idle', cooldownUntil: null },
+    });
+  },
+
   async startLogin(id: string) {
     const prisma = getPrisma();
     const a = await prisma.tgAccount.findUnique({ where: { id } });
