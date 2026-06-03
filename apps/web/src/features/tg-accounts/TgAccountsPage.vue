@@ -17,7 +17,7 @@ import TgAccountForm from './TgAccountForm.vue';
 import TgLoginDialog from './TgLoginDialog.vue';
 import { api } from '../../lib/api';
 import { toast } from '../../lib/toast';
-import { initials, formatRelative, formatNumber } from '../../lib/format';
+import { initials, formatRelative, formatUntil, formatNumber, formatDateTime } from '../../lib/format';
 import { avatarColor } from '../../lib/state';
 import type { TgAccount } from './types';
 
@@ -43,6 +43,9 @@ const deleteFor = ref<TgAccount | null>(null);
 const { data, isLoading } = useQuery({
   queryKey: ['tg-accounts'],
   queryFn: () => api.get<TgAccount[]>('/tg-accounts'),
+  // Refresh so cooldown countdowns tick down and the healer flipping
+  // cooldown→idle on the worker is reflected without a page reload.
+  refetchInterval: 15_000,
 });
 
 const list = computed<TgAccount[]>(() => data.value ?? []);
@@ -81,34 +84,55 @@ const pauseMut = useMutation({
   onSuccess: () => { qc.invalidateQueries({ queryKey: ['tg-accounts'] }); toast.info('Аккаунт на паузе'); },
 });
 
+const clearCooldownMut = useMutation({
+  mutationFn: (id: string) => api.post<void>(`/tg-accounts/${id}/clear-cooldown`),
+  onSuccess: () => {
+    qc.invalidateQueries({ queryKey: ['tg-accounts'] });
+    toast.success('Cooldown сброшен');
+  },
+  onError: (e: Error) => toast.error('Не удалось сбросить cooldown', e.message),
+});
+
 function openEdit(a: TgAccount): void { editing.value = a; formOpen.value = true; }
 function openNew(): void { editing.value = null; formOpen.value = true; }
 
 function dropdownItems(a: TgAccount) {
-  return [
+  const showClearCooldown = a.status === 'cooldown' || !!a.cooldownUntil;
+  const items: Array<
+    | { divider: true; label: string }
+    | { label: string; icon: 'key' | 'edit' | 'pause_circle' | 'refresh' | 'trash'; variant?: 'danger'; onClick: () => void }
+  > = [
     {
       label: a.status === 'need_auth' ? 'Войти заново' : 'Релогин',
-      icon: 'key' as const,
+      icon: 'key',
       onClick: () => (loginFor.value = a),
     },
     {
       label: 'Редактировать',
-      icon: 'edit' as const,
+      icon: 'edit',
       onClick: () => openEdit(a),
     },
     {
       label: 'Поставить на паузу',
-      icon: 'pause_circle' as const,
+      icon: 'pause_circle',
       onClick: () => pauseMut.mutate(a.id),
     },
-    { divider: true, label: '' },
-    {
-      label: 'Удалить',
-      icon: 'trash' as const,
-      variant: 'danger' as const,
-      onClick: () => (deleteFor.value = a),
-    },
   ];
+  if (showClearCooldown) {
+    items.push({
+      label: 'Сбросить cooldown',
+      icon: 'refresh',
+      onClick: () => clearCooldownMut.mutate(a.id),
+    });
+  }
+  items.push({ divider: true, label: '' });
+  items.push({
+    label: 'Удалить',
+    icon: 'trash',
+    variant: 'danger',
+    onClick: () => (deleteFor.value = a),
+  });
+  return items;
 }
 </script>
 
@@ -171,7 +195,12 @@ function dropdownItems(a: TgAccount) {
           <td>
             <div style="display: flex; align-items: center; gap: 6px;">
               <Pill :state="a.status" />
-              <span v-if="a.status === 'cooldown' && a.cooldownUntil" class="muted-2 mono" style="font-size: 10.5px;">до {{ formatRelative(a.cooldownUntil) }}</span>
+              <span
+                v-if="a.status === 'cooldown' && a.cooldownUntil"
+                class="muted-2 mono"
+                style="font-size: 10.5px;"
+                :title="formatDateTime(a.cooldownUntil)"
+              >{{ formatUntil(a.cooldownUntil) }}</span>
             </div>
           </td>
           <td>
@@ -187,7 +216,12 @@ function dropdownItems(a: TgAccount) {
             </div>
           </td>
           <td>
-            <span v-if="a.cooldownUntil" class="mono" style="color: var(--bad);">{{ formatRelative(a.cooldownUntil) }}</span>
+            <span
+              v-if="a.cooldownUntil"
+              class="mono"
+              style="color: var(--bad);"
+              :title="formatDateTime(a.cooldownUntil)"
+            >{{ formatUntil(a.cooldownUntil) }}</span>
             <span v-else class="muted-2">—</span>
           </td>
           <td class="muted-2 mono" style="font-size: 10.5px;">{{ formatRelative(a.createdAt) }}</td>

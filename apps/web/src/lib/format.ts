@@ -56,6 +56,27 @@ export function formatRelative(input: string | Date | null | undefined): string 
 }
 
 /**
+ * Render a FUTURE timestamp as "через Xс / Xмин / Xч" or absolute when far
+ * out. `formatRelative` is wrong for this — it treats negative diffs as
+ * "только что" (cooldownUntil is in the future, so diff < 0 always returns
+ * "только что"). Use this for cooldownUntil, scheduled-at, etc.
+ */
+export function formatUntil(input: string | Date | null | undefined): string {
+  if (!input) return '—';
+  const d = typeof input === 'string' ? new Date(input) : input;
+  if (Number.isNaN(d.getTime())) return '—';
+  const remainingMs = d.getTime() - Date.now();
+  if (remainingMs <= 0) return 'истёк';
+  const sec = Math.round(remainingMs / 1000);
+  if (sec < 60) return `через ${sec} с`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `через ${min} мин`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `через ${hr} ч`;
+  return dateTimeFmt.format(d);
+}
+
+/**
  * Coerce wire-format numbers to a JS number.
  *
  * Prisma's `Decimal` columns serialise to JSON as **strings** by default
