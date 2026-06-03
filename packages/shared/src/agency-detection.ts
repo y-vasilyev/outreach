@@ -20,16 +20,19 @@ export const MIN_SPONSORED_CONFIDENCE = 0.6;
  * don't burn LLM calls on turns like "ок, давай в пятницу". NOT a content
  * classifier — only a filter. False positives are fine (extractors
  * gracefully return empty data_points); false negatives are what we
- * actively avoid here, so the regex is generous on currency/format/
- * audience keywords.
+ * actively avoid here, so the predicate is generous: ANY digit OR ANY
+ * commercial keyword counts as signal. We only skip when neither is
+ * present.
  *
- * Returns true iff the text contains AT LEAST ONE digit AND AT LEAST ONE
- * commercial keyword.
+ * The "or" matters: bloggers routinely write replies like "прайс отправлю"
+ * (keyword only — no digit yet), "стоимость пятнадцать тысяч" (keyword
+ * only — number is spelled out), or "медиакит во вложении" (keyword,
+ * no digit). Requiring both would silently drop those.
  */
-const COMMERCIAL_KEYWORD_RE = /(пост|сторис|reels|клип|видео|охват|просмотр|подписчик|рекламн|интеграц|прайс|цена|стоит|стоимост|руб|₽|тыс|млн|\bk\b|usd|eur|долл|евро|медиа\s*кит|audience|аудитор)/i;
+const COMMERCIAL_KEYWORD_RE = /(пост|сторис|reels|клип|видео|охват|просмотр|подписчик|рекламн|интеграц|прайс|цена|стоит|стоимост|руб|₽|тыс|млн|\bk\b|usd|eur|долл|евро|медиа\s*кит|audience|аудитор|формат|размещ|интеграция|интеграции)/i;
 const DIGIT_RE = /\d/;
 
 export function hasCommercialSignal(text: string): boolean {
   if (!text || typeof text !== 'string') return false;
-  return DIGIT_RE.test(text) && COMMERCIAL_KEYWORD_RE.test(text);
+  return DIGIT_RE.test(text) || COMMERCIAL_KEYWORD_RE.test(text);
 }

@@ -231,15 +231,31 @@ describe('handleOnInbound — agency routing (B2 + harden)', () => {
     expect(mocks.handleProfileExtract).not.toHaveBeenCalled();
   });
 
-  it('does NOT run profile-extract when the flag is off (even for agency type)', async () => {
+  it('skips the pipeline AND hands off to operator when agency type meets flag-off', async () => {
+    // harden-agency-sourcing-pipeline review fix: previously the worker
+    // logged a warning and ran the CustDev pipeline anyway — silent
+    // degradation. Now the run aborts with `skipped:agency_sourcing_disabled`
+    // and the conversation is flipped to `assisted` so the operator sees
+    // the inbound and can decide what to do.
     mocks.flagState.agency_sourcing = false;
     setupConversation({ typeKey: 'agency_sourcing', agentSet: AGENCY_AGENT_SET });
 
-    await handleOnInbound({ conversationId: 'conv1' });
+    const result = await handleOnInbound({ conversationId: 'conv1' });
 
+    expect(result).toMatchObject({ ok: true, skipped: 'agency_sourcing_disabled' });
     expect(mocks.handleProfileExtract).not.toHaveBeenCalled();
-    // Reply path stays on the literal reply_composer.
-    const replyCall = mocks.runAgentSafe.mock.calls.find((c) => c[0] === 'reply_composer');
-    expect(replyCall).toBeDefined();
+    // No reply pipeline ran — neither CustDev `reply_composer` nor the
+    // agency planner.
+    expect(mocks.runAgentSafe.mock.calls.find((c) => c[0] === 'reply_composer')).toBeUndefined();
+    expect(
+      mocks.runAgentSafe.mock.calls.find((c) => c[0] === 'data_collection_planner'),
+    ).toBeUndefined();
+    // The conversation was flipped to assisted so the operator sees it.
+    expect(mocks.prisma.conversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'conv1' },
+        data: expect.objectContaining({ mode: 'assisted' }),
+      }),
+    );
   });
 });

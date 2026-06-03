@@ -213,32 +213,59 @@ function isAgencyConversation(
 }
 
 /**
- * Diagnostic: campaign is type=agency_sourcing but the `agency_sourcing`
- * flag is off. In that case `isAgencyConversation` returns false and the
- * inbound pipeline silently degrades to the CustDev path — which is the
- * exact footgun we want operators to NOT hit unannounced. Emits a single
- * warn-line per tick; doesn't change behaviour. harden-agency-sourcing-
- * pipeline.
+ * Hard gate: campaign is type=agency_sourcing but the `agency_sourcing`
+ * runtime flag is off. The pipeline MUST NOT silently degrade to the
+ * CustDev path in that case — operators who set type=agency_sourcing
+ * expect the agency behaviour, not a CustDev opener/safety profile on
+ * their commercial conversation. We flip the conversation to `assisted`
+ * (so the operator sees the inbound) and skip the rest of the run. Idempo-
+ * tent: re-entering an already-assisted conversation just no-ops the
+ * update. harden-agency-sourcing-pipeline.
+ *
+ * Returns true when the run should stop. Callers must `return { ok:true,
+ * skipped:'agency_sourcing_disabled' }` immediately after a true response.
  */
-function warnIfAgencyTypeUnderFlagOff(
-  campaign: { id?: string | null; type?: { key?: string | null } | null } | null | undefined,
+async function handoffOnAgencyDisabled(
+  prisma: ReturnType<typeof getPrisma>,
+  campaign:
+    | { id?: string | null; type?: { key?: string | null } | null }
+    | null
+    | undefined,
   conversationId: string,
-  pipeline: 'on_inbound' | 'outreach_first_message',
-): void {
+  pipeline: 'on_inbound' | 'outreach_first_message' | 'followup_check',
+): Promise<boolean> {
   if (
-    campaign?.type?.key === 'agency_sourcing' &&
-    !getFeatureFlags().get('agency_sourcing')
+    campaign?.type?.key !== 'agency_sourcing' ||
+    getFeatureFlags().get('agency_sourcing')
   ) {
-    logger.warn(
-      {
-        event: 'agency_sourcing_disabled',
-        conversationId,
-        pipeline,
-        campaignId: campaign.id ?? null,
-      },
-      'campaign type=agency_sourcing but agency_sourcing flag off; degrading to CustDev path',
-    );
+    return false;
   }
+  logger.warn(
+    {
+      event: 'agency_sourcing_disabled',
+      conversationId,
+      pipeline,
+      campaignId: campaign.id ?? null,
+    },
+    'campaign type=agency_sourcing but agency_sourcing flag off; skipping pipeline + handing conversation to operator',
+  );
+  // Inbound flow: flip to assisted so the operator sees the message in
+  // their queue. First-message / followup flows have no inbound to surface
+  // — just skip, the dispatcher's earlier guard already filters new ticks.
+  if (pipeline === 'on_inbound') {
+    await prisma.conversation
+      .update({
+        where: { id: conversationId },
+        data: { mode: 'assisted' },
+      })
+      .catch((err: unknown) =>
+        logger.warn(
+          { conversationId, err: (err as Error).message },
+          'failed to flip conversation to assisted on agency_sourcing_disabled',
+        ),
+      );
+  }
+  return true;
 }
 
 interface DataCollectionPlannerOut {
@@ -256,6 +283,40 @@ interface DataCollectionPlannerOut {
 // it explicitly via `goal.target_data_points`; the planner then asks the
 // question (documented limitation: no automated capture path yet).
 const AGENCY_DEFAULT_TARGETS = ['rate_card', 'reach', 'audience_demographics', 'geo'];
+
+/**
+ * Build the `campaign_type` block fed into `GoalFitEvaluator`. Returns
+ * `undefined` for typeless campaigns / when no key is set — the gate then
+ * uses its CustDev default framing. Same shape used by both `on_inbound`
+ * and `followup_check` paths so an agency followup is judged with the
+ * agency non-goals (premature money commitment, fabricated client
+ * details), not with the CustDev "ad-sales drift" anti-pattern.
+ */
+function buildGoalFitCampaignType(
+  campaign: { goal?: unknown; type?: { key?: string | null } | null } | null | undefined,
+):
+  | {
+      key: string;
+      goalIntent?: string;
+      target_data_points?: string[];
+    }
+  | undefined {
+  const key = campaign?.type?.key ?? null;
+  if (!key) return undefined;
+  const goalIntent =
+    key === 'custdev'
+      ? 'research_interview'
+      : key === 'agency_sourcing'
+        ? 'collect_commercial_data'
+        : undefined;
+  const targetDataPoints =
+    key === 'agency_sourcing' ? agencyTargets(campaign?.goal) : undefined;
+  return {
+    key,
+    ...(goalIntent ? { goalIntent } : {}),
+    ...(targetDataPoints ? { target_data_points: targetDataPoints } : {}),
+  };
+}
 
 /** Read `target_data_points` from an agency campaign's goal, else the default set. */
 function agencyTargets(goal: unknown): string[] {
@@ -358,7 +419,9 @@ export async function handleOnInbound(data: { conversationId?: string }): Promis
           });
           if (!conv) throw new Error('conversation not found');
 
-          warnIfAgencyTypeUnderFlagOff(conv.campaign, conv.id, 'on_inbound');
+          if (await handoffOnAgencyDisabled(prisma, conv.campaign, conv.id, 'on_inbound')) {
+            return { ok: true, skipped: 'agency_sourcing_disabled' };
+          }
 
           // Load AJTBD up-front so every agent in this run sees the same
           // framing. Throws (caught by BullMQ → retried/failed) when a
@@ -678,23 +741,7 @@ export async function handleOnInbound(data: { conversationId?: string }): Promis
             // commitment) without a per-type agent split. Absent ⇒ CustDev
             // back-compat in the agent itself. harden-agency-sourcing-
             // pipeline.
-            const campaignTypeKey = conv.campaign?.type?.key ?? null;
-            const goalTargets =
-              campaignTypeKey === 'agency_sourcing'
-                ? agencyTargets(conv.campaign?.goal)
-                : undefined;
-            const campaignTypeForGate = campaignTypeKey
-              ? {
-                  key: campaignTypeKey,
-                  goalIntent:
-                    campaignTypeKey === 'custdev'
-                      ? 'research_interview'
-                      : campaignTypeKey === 'agency_sourcing'
-                        ? 'collect_commercial_data'
-                        : undefined,
-                  ...(goalTargets ? { target_data_points: goalTargets } : {}),
-                }
-              : undefined;
+            const campaignTypeForGate = buildGoalFitCampaignType(conv.campaign);
             gate = await runAgentSafe<GateOut>(
               'goal_fit_evaluator',
               {
@@ -814,7 +861,11 @@ export async function handleOutreachFirstMessage(data: { conversationId?: string
           });
           if (!conv) throw new Error('conversation not found');
 
-          warnIfAgencyTypeUnderFlagOff(conv.campaign, conv.id, 'outreach_first_message');
+          if (
+            await handoffOnAgencyDisabled(prisma, conv.campaign, conv.id, 'outreach_first_message')
+          ) {
+            return { ok: true, skipped: 'agency_sourcing_disabled' };
+          }
 
           await ensureContactTgProfile(conv.tgAccountId, conv.contact);
           const contact = await prisma.contact.findUnique({
@@ -1033,6 +1084,10 @@ export async function handleFollowupCheck(data: { conversationId?: string }): Pr
   if (!conv) throw new Error('conversation not found');
   if (conv.status !== 'active') return { ok: true, skipped: 'not_active' };
 
+  if (await handoffOnAgencyDisabled(prisma, conv.campaign, conv.id, 'followup_check')) {
+    return { ok: true, skipped: 'agency_sourcing_disabled' };
+  }
+
   const ajtbd = resolveCampaignAjtbd(conv.campaign);
   const messages = await prisma.message.findMany({
     where: { conversationId: conv.id },
@@ -1194,10 +1249,16 @@ export async function handleFollowupCheck(data: { conversationId?: string }): Pr
   let gate: GateOut | null = null;
   if (bestSuggestionId && (conv.mode === 'semi_auto' || conv.mode === 'auto') && ajtbd) {
     const previous = readPriorQualityDecision(conv.qualityDecision);
+    // Same campaign-type framing as `on_inbound` — without it the followup
+    // gate would judge an agency conversation by CustDev non-goals (so any
+    // turn that talks price/format would look like drift). harden-agency-
+    // sourcing-pipeline.
+    const campaignTypeForGate = buildGoalFitCampaignType(conv.campaign);
     gate = await runAgentSafe<GateOut>(
       'goal_fit_evaluator',
       {
         ajtbd,
+        ...(campaignTypeForGate ? { campaign_type: campaignTypeForGate } : {}),
         history_tail: historyTail.slice(-8),
         intent: { intent: 'silence_likely', confidence: 0.6 },
         handoff: { action: 'ai_continue', reason: 'followup_check' },

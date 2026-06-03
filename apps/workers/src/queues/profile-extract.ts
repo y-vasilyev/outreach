@@ -120,13 +120,19 @@ export async function handleProfileExtract(data: {
     }),
   ]);
 
-  // Distinguish "both extractor calls failed" (BullMQ should retry) from
-  // "calls returned empty data_points" (legitimate success). The previous
-  // behaviour swallowed both as `{ ok:true }`; now a double-failure throws so
-  // the queue's retry/backoff kicks in. Sync callers (handleOnInbound) catch
-  // and log without aborting the inbound pipeline.
-  if (!rate && !audience) {
-    throw new Error('profile-extract: both extractors failed');
+  // Distinguish "extractor call failed" (BullMQ should retry the whole job)
+  // from "call returned empty data_points" (legitimate success — the inbound
+  // just didn't carry that kind of fact). The previous behaviour swallowed
+  // any failure as `{ ok:true }`; now ANY null from `runAgentSafe` throws so
+  // the queue retries. A successful rate extractor whose audience companion
+  // returned null is still a partial loss (audience facts are lost on this
+  // tick) — better to redo both than to silently drop one. Sync callers
+  // (`handleOnInbound`) catch and log without aborting the inbound pipeline.
+  if (!rate || !audience) {
+    const failed: string[] = [];
+    if (!rate) failed.push('rate_card_extractor');
+    if (!audience) failed.push('audience_stats_extractor');
+    throw new Error(`profile-extract: extractors failed: ${failed.join(', ')}`);
   }
 
   const drafts: Array<{ extractedBy: string; draft: ProfileDataPointDraft }> = [];

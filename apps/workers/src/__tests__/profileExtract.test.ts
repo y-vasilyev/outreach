@@ -156,13 +156,41 @@ describe('handleProfileExtract', () => {
     expect(mocks.runAgentSafe).not.toHaveBeenCalled();
   });
 
-  it('throws when BOTH extractors fail (so BullMQ retries / sync caller logs)', async () => {
-    // harden-agency-sourcing-pipeline: previously swallowed double-failure
-    // as a benign "ok, empty" outcome.
-    mocks.runAgentSafe.mockResolvedValue(null); // both calls fail
+  it('pre-gate passes inbounds with a keyword but no digit (review fix: OR not AND)', async () => {
+    // Bloggers routinely write "прайс отправлю", "медиакит во вложении",
+    // "стоимость пятнадцать тысяч". Pre-gate must let those through; the
+    // earlier `digit AND keyword` predicate dropped them silently.
+    mocks.prisma.message.findUnique.mockResolvedValue({
+      id: 'm1',
+      text: 'прайс отправлю в личку',
+      conversationId: 'conv1',
+      direction: 'in_',
+    });
+    mocks.runAgentSafe.mockImplementation(async () => ({ data_points: [] }));
+    const result = await handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1' });
+    expect(result).not.toMatchObject({ skipped: 'no_signal' });
+    expect(mocks.runAgentSafe).toHaveBeenCalled();
+  });
+
+  it('throws when ANY extractor fails (so BullMQ retries / sync caller logs)', async () => {
+    // harden-agency-sourcing-pipeline review fix: previously throw was gated
+    // on BOTH extractors failing — meaning a successful audience extractor
+    // would mask a failed rate_card_extractor and silently lose the price.
+    // Now any null from `runAgentSafe` throws and the whole job is retried.
+    mocks.runAgentSafe.mockResolvedValue(null);
     await expect(
       handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1' }),
     ).rejects.toThrow(/extractors failed/i);
+  });
+
+  it('throws even when one extractor succeeded but the other failed', async () => {
+    mocks.runAgentSafe.mockImplementation(async (name: string) => {
+      if (name === 'rate_card_extractor') return null;
+      return { data_points: [] };
+    });
+    await expect(
+      handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1' }),
+    ).rejects.toThrow(/rate_card_extractor/);
   });
 
   it('returns success with zero data points when extractors returned cleanly but empty', async () => {
