@@ -605,18 +605,36 @@ export class SessionManager {
 
       async fetchHistorySince(opts: {
         peerKey: string;
+        inputPeer?: { tgUserId: string; accessHash: string };
         sinceTgMsgId?: string;
         limit?: number;
       }): Promise<HistoryMessage[]> {
         requireAuth();
-        return wrap(async () =>
-          fetchHistorySinceImpl(client, {
+        return wrap(async () => {
+          // When the caller supplied an explicit (userId, accessHash) pair we
+          // construct an Api.InputPeerUser ourselves. This skips the GramJS
+          // session entity cache entirely — the cache is what blows up with
+          // "Could not find the input entity" on cold sessions.
+          let target: unknown = opts.peerKey;
+          if (opts.inputPeer) {
+            try {
+              const tg = await loadGramJS();
+              target = new tg.Api.InputPeerUser({
+                userId: BigInt(opts.inputPeer.tgUserId) as never,
+                accessHash: BigInt(opts.inputPeer.accessHash) as never,
+              });
+            } catch {
+              // Bad BigInt or GramJS load issue → fall back to the string key.
+              target = opts.peerKey;
+            }
+          }
+          return fetchHistorySinceImpl(client, {
             tgAccountId,
-            peerKey: opts.peerKey,
+            peerKey: target as string,
             ...(opts.sinceTgMsgId !== undefined && { sinceTgMsgId: opts.sinceTgMsgId }),
             ...(opts.limit !== undefined && { limit: opts.limit }),
-          }),
-        );
+          });
+        });
       },
 
       async sendMessage(toUsernameOrId: string, text: string) {
@@ -726,7 +744,11 @@ export class SessionManager {
         });
       },
 
-      async markRead(opts: { peerKey: string; maxTgMsgId?: string }): Promise<boolean> {
+      async markRead(opts: {
+        peerKey: string;
+        inputPeer?: { tgUserId: string; accessHash: string };
+        maxTgMsgId?: string;
+      }): Promise<boolean> {
         requireAuth();
         // Best-effort: a stale username or missing access_hash should NOT
         // surface as an exception to the operator — the read-ack is a
@@ -734,13 +756,21 @@ export class SessionManager {
         try {
           return await wrap(async () => {
             const tg = await loadGramJS();
-            const inputPeer = (await client.getInputEntity(opts.peerKey)) as never;
+            let peer: unknown;
+            if (opts.inputPeer) {
+              peer = new tg.Api.InputPeerUser({
+                userId: BigInt(opts.inputPeer.tgUserId) as never,
+                accessHash: BigInt(opts.inputPeer.accessHash) as never,
+              });
+            } else {
+              peer = (await client.getInputEntity(opts.peerKey)) as never;
+            }
             const maxId =
               opts.maxTgMsgId && Number.isFinite(Number(opts.maxTgMsgId))
                 ? Number(opts.maxTgMsgId)
                 : 0;
             await client.invoke(
-              new tg.Api.messages.ReadHistory({ peer: inputPeer, maxId }),
+              new tg.Api.messages.ReadHistory({ peer: peer as never, maxId }),
             );
             return true;
           });
@@ -882,6 +912,7 @@ interface SenderEntity {
   username?: string;
   firstName?: string;
   lastName?: string;
+  accessHash?: unknown;
 }
 
 /**
@@ -1013,6 +1044,10 @@ function mapIncomingEvent(event: unknown, tgAccountId: string): IncomingMessage 
     typeof sender?.firstName === 'string' && sender.firstName ? sender.firstName : undefined;
   const fromLastName =
     typeof sender?.lastName === 'string' && sender.lastName ? sender.lastName : undefined;
+  const fromAccessHash =
+    sender && sender.accessHash !== undefined && sender.accessHash !== null
+      ? stringifyBigInt(sender.accessHash) || undefined
+      : undefined;
   return {
     tgAccountId,
     fromTgUserId,
@@ -1022,6 +1057,7 @@ function mapIncomingEvent(event: unknown, tgAccountId: string): IncomingMessage 
     ...(fromUsername !== undefined && { fromUsername }),
     ...(fromFirstName !== undefined && { fromFirstName }),
     ...(fromLastName !== undefined && { fromLastName }),
+    ...(fromAccessHash !== undefined && { fromAccessHash }),
     ...(media !== undefined && { media }),
   };
 }
@@ -1106,6 +1142,7 @@ interface GramJSModule {
     messages: {
       ReadHistory: new (params: { peer: unknown; maxId: number }) => unknown;
     };
+    InputPeerUser: new (params: { userId: unknown; accessHash: unknown }) => unknown;
     MessageEntityUrl: new (...args: unknown[]) => unknown;
     MessageEntityTextUrl: new (...args: unknown[]) => unknown;
   };

@@ -106,6 +106,7 @@ export function startTgListenWorker() {
               tgUsername: data.fromUsername,
               tgFirstName: data.fromFirstName ?? null,
               tgLastName: data.fromLastName ?? null,
+              ...(data.fromAccessHash ? { tgAccessHash: data.fromAccessHash } : {}),
             },
           });
           logger.info(
@@ -113,6 +114,17 @@ export function startTgListenWorker() {
             'tg-listen: back-filled tgUserId from inline sender username',
           );
         }
+      }
+
+      // Refresh tgAccessHash on every inbound when present — the value is
+      // stable per (account_pair) but the local row may be empty (legacy
+      // contacts) or stale (rare account migrations). Cheap upsert keeps the
+      // explicit-InputPeerUser path on the latest hash.
+      if (contact && data.fromAccessHash && contact.tgAccessHash !== data.fromAccessHash) {
+        contact = await prisma.contact.update({
+          where: { id: contact.id },
+          data: { tgAccessHash: data.fromAccessHash },
+        });
       }
 
       if (!contact) {

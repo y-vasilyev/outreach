@@ -329,6 +329,11 @@ model Contact {
   status       ContactStatus @default(new)
   tags         String[]      @default([])
   tgUserId     String?       @map("tg_user_id")
+  // GramJS access_hash captured off the inline sender entity on each inbound,
+  // or off the resolved user on outbound. Lets us build an explicit
+  // InputPeerUser when the session-level entity cache doesn't have it (the
+  // "Could not find the input entity" failure mode on cold sync / read-ack).
+  tgAccessHash String?       @map("tg_access_hash")
   // Resolved on the first outbound send (via TgClient.resolveUser). Stored
   // so the opener / reply pipelines can address the recipient by name and
   // so the tg-listen worker can match incoming messages back to the contact.
@@ -387,6 +392,10 @@ model Conversation {
   assignedOperator   User?              @relation("ConversationOperator", fields: [assignedOperatorId], references: [id], onDelete: SetNull)
   lastInboundAt      DateTime?          @map("last_inbound_at")
   lastOutboundAt     DateTime?          @map("last_outbound_at")
+  // When the operator last acked this conversation (UI open or new-inbound).
+  // Same timestamp drives the TG `messages.ReadHistory` call AND the local
+  // "you read at HH:MM" indicator in the inbox.
+  lastReadAt         DateTime?          @map("last_read_at")
   // Latest GoalFitEvaluator gate snapshot for `semi_auto`/`auto` mode.
   qualityDecision    Json?              @map("quality_decision")
   // Updated whenever the API on-open sync successfully fetches history.

@@ -12,7 +12,7 @@ import SuggestionStrip from './SuggestionStrip.vue';
 import { useRoom } from '../../lib/socket';
 import { api } from '../../lib/api';
 import { toast } from '../../lib/toast';
-import { initials, formatRelative } from '../../lib/format';
+import { initials, formatRelative, formatTime } from '../../lib/format';
 import { avatarColor } from '../../lib/state';
 import type { ChatMessage, ConversationDetail, ConversationListItem, ConversationMode, QualityDecision, Suggestion } from './types';
 
@@ -60,7 +60,10 @@ const scrollRef = ref<HTMLElement | null>(null);
 const markReadOnServer = () => {
   const id = cId.value;
   if (!id) return;
-  api.post(`/conversations/${id}/read`).catch(() => undefined);
+  api
+    .post(`/conversations/${id}/read`)
+    .then(() => qc.invalidateQueries({ queryKey: ['conversation', id] }))
+    .catch(() => undefined);
 };
 
 useRoom(() => room.value, 'message.new', () => {
@@ -332,6 +335,14 @@ useRoom(() => room.value, 'suggestion.approved', () => {
             <span style="font-size: 10.5px; color: var(--ink-4); font-family: var(--font-mono); padding: 2px 9px; background: var(--paper-3); border: 1px solid var(--line); border-radius: 999px;">{{ g.day }}</span>
           </div>
           <MessageBubble v-for="m in g.items" :key="m.id" :msg="m" />
+        </div>
+        <div
+          v-if="c.lastReadAt"
+          style="display: flex; justify-content: flex-end; margin-top: 4px; font-size: 10.5px; color: var(--ink-4); font-family: var(--font-mono); gap: 4px; align-items: center;"
+          :title="`Last read at ${c.lastReadAt}`"
+        >
+          <Icon name="check" :size="10" />
+          <span>Прочитано {{ formatTime(c.lastReadAt) }}</span>
         </div>
       </template>
     </div>

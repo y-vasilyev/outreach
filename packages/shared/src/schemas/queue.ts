@@ -42,6 +42,9 @@ export const TgListenJobZ = z.object({
   fromUsername: z.string().optional(),
   fromFirstName: z.string().optional(),
   fromLastName: z.string().optional(),
+  // GramJS access_hash off the inline sender entity — persisted on the
+  // Contact so we can build InputPeerUser explicitly later (sync/read-ack).
+  fromAccessHash: z.string().optional(),
   // Lightweight media metadata when the inbound carried a photo/document
   // (agency-sourcing-matching M6). The listener does NOT download bytes; the
   // worker records a media_asset row from this (behind ENABLE_OBJECT_STORAGE).

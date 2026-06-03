@@ -174,24 +174,46 @@ export const conversationsService = {
    * is logged and swallowed. Returns the maxTgMsgId we attempted to ack so
    * the caller can short-circuit no-op acks (UI re-opens of the same convo).
    */
-  async markRead(id: string): Promise<{ acked: boolean; maxTgMsgId: string | null }> {
+  async markRead(
+    id: string,
+  ): Promise<{ acked: boolean; maxTgMsgId: string | null; lastReadAt: string }> {
     const prisma = getPrisma();
     const conv = await prisma.conversation.findUnique({
       where: { id },
       select: {
         id: true,
         tgAccountId: true,
-        contact: { select: { tgUserId: true, tgUsername: true, value: true, type: true } },
+        contact: {
+          select: {
+            tgUserId: true,
+            tgUsername: true,
+            tgAccessHash: true,
+            value: true,
+            type: true,
+          },
+        },
       },
     });
     if (!conv) throw Errors.notFound('conversation', id);
+
+    // Persist the local read marker first, independent of whether the TG
+    // ack succeeds. This drives the inbox "you read at HH:MM" indicator and
+    // the unread-count derivation, and must always be up-to-date when the
+    // operator opens the conversation.
+    const lastReadAt = new Date();
+    await prisma.conversation.update({
+      where: { id },
+      data: { lastReadAt },
+    });
 
     const lastInbound = await prisma.message.findFirst({
       where: { conversationId: id, direction: 'in_', tgMsgId: { not: null } },
       orderBy: { createdAt: 'desc' },
       select: { tgMsgId: true },
     });
-    if (!lastInbound?.tgMsgId) return { acked: false, maxTgMsgId: null };
+    if (!lastInbound?.tgMsgId) {
+      return { acked: false, maxTgMsgId: null, lastReadAt: lastReadAt.toISOString() };
+    }
 
     const usernameKey =
       (conv.contact.tgUsername ? `@${conv.contact.tgUsername}` : '') ||
@@ -202,20 +224,41 @@ export const conversationsService = {
     if (usernameKey) peerKeys.push(usernameKey);
     if (conv.contact.tgUserId) peerKeys.push(conv.contact.tgUserId);
 
+    const explicitInputPeer =
+      conv.contact.tgUserId && conv.contact.tgAccessHash
+        ? { tgUserId: conv.contact.tgUserId, accessHash: conv.contact.tgAccessHash }
+        : undefined;
+
     try {
       const handle = await getTgClient().for(conv.tgAccountId);
-      if (!handle.isAuthorized) return { acked: false, maxTgMsgId: lastInbound.tgMsgId };
+      if (!handle.isAuthorized) {
+        return { acked: false, maxTgMsgId: lastInbound.tgMsgId, lastReadAt: lastReadAt.toISOString() };
+      }
+      // explicitInputPeer bypasses entity resolution entirely; if it isn't
+      // set, fall back to the username/userId string keys.
+      if (explicitInputPeer) {
+        const ok = await handle.markRead({
+          peerKey: conv.contact.tgUserId ?? '',
+          inputPeer: explicitInputPeer,
+          maxTgMsgId: lastInbound.tgMsgId,
+        });
+        if (ok) {
+          return { acked: true, maxTgMsgId: lastInbound.tgMsgId, lastReadAt: lastReadAt.toISOString() };
+        }
+      }
       for (const peerKey of peerKeys) {
         const ok = await handle.markRead({ peerKey, maxTgMsgId: lastInbound.tgMsgId });
-        if (ok) return { acked: true, maxTgMsgId: lastInbound.tgMsgId };
+        if (ok) {
+          return { acked: true, maxTgMsgId: lastInbound.tgMsgId, lastReadAt: lastReadAt.toISOString() };
+        }
       }
-      return { acked: false, maxTgMsgId: lastInbound.tgMsgId };
+      return { acked: false, maxTgMsgId: lastInbound.tgMsgId, lastReadAt: lastReadAt.toISOString() };
     } catch (err) {
       logger.warn(
         { conversationId: id, err: (err as Error).message },
         'markRead: tg call failed; ignoring',
       );
-      return { acked: false, maxTgMsgId: lastInbound.tgMsgId };
+      return { acked: false, maxTgMsgId: lastInbound.tgMsgId, lastReadAt: lastReadAt.toISOString() };
     }
   },
 

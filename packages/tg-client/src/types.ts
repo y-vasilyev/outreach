@@ -123,6 +123,13 @@ export interface IncomingMessage {
   fromFirstName?: string;
   fromLastName?: string;
   /**
+   * GramJS access_hash lifted off the inline sender entity. Persisting it on
+   * the Contact lets us build an explicit InputPeerUser later (sync, read-ack)
+   * without depending on the session-level entity cache, which is the root
+   * cause of the "Could not find the input entity" failure mode.
+   */
+  fromAccessHash?: string;
+  /**
    * Lightweight media metadata lifted off the GramJS message when the inbound
    * carries a photo/document. We deliberately do NOT download the bytes here
    * (the listener stays sync + light, and GramJS byte-download needs an async
@@ -215,6 +222,13 @@ export interface TelegramClientHandle {
    */
   fetchHistorySince(opts: {
     peerKey: string;
+    /**
+     * When supplied, the client builds an `Api.InputPeerUser` from this pair
+     * and uses it instead of resolving `peerKey` against the session entity
+     * cache. Bypasses the "Could not find the input entity" failure on cold
+     * sessions.
+     */
+    inputPeer?: { tgUserId: string; accessHash: string };
     sinceTgMsgId?: string;
     limit?: number;
   }): Promise<HistoryMessage[]>;
@@ -226,7 +240,11 @@ export interface TelegramClientHandle {
    * `messages.ReadHistory`. Best-effort: returns `false` if the entity can't
    * be resolved or the call fails (never throws to the caller).
    */
-  markRead(opts: { peerKey: string; maxTgMsgId?: string }): Promise<boolean>;
+  markRead(opts: {
+    peerKey: string;
+    inputPeer?: { tgUserId: string; accessHash: string };
+    maxTgMsgId?: string;
+  }): Promise<boolean>;
 
   /**
    * Download the media bytes of an inbound 1-1 message by its tg message id.

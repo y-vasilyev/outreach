@@ -82,7 +82,14 @@ export async function syncOne(conversationId: string): Promise<SyncResult> {
       tgAccountId: true,
       contactId: true,
       contact: {
-        select: { id: true, tgUserId: true, tgUsername: true, value: true, type: true },
+        select: {
+          id: true,
+          tgUserId: true,
+          tgUsername: true,
+          tgAccessHash: true,
+          value: true,
+          type: true,
+        },
       },
     },
   });
@@ -129,16 +136,26 @@ export async function syncOne(conversationId: string): Promise<SyncResult> {
         skipped: 'tg_account_not_authorized',
       };
     }
-    // Try each peer key in preference order. If the first one fails with the
-    // GramJS "could not find the input entity" error (uncached access_hash),
-    // we fall through to the next candidate — typically `@username` →
-    // numeric `tgUserId` or vice versa.
+    // Fast path: when we cached the access_hash (lifted off the inbound
+    // sender entity), build an explicit InputPeerUser and skip the GramJS
+    // entity cache entirely. That's the bulletproof fix for the "Could not
+    // find the input entity" failure — no resolve, no flaky cache lookup.
+    const explicitInputPeer =
+      conv.contact.tgUserId && conv.contact.tgAccessHash
+        ? { tgUserId: conv.contact.tgUserId, accessHash: conv.contact.tgAccessHash }
+        : undefined;
+
+    // Try each peer key in preference order as a fallback. If the first one
+    // fails with the GramJS "could not find the input entity" error
+    // (uncached access_hash), we fall through to the next candidate —
+    // typically `@username` → numeric `tgUserId` or vice versa.
     let lastErr: unknown;
     history = undefined;
     for (const peerKey of peerKeys) {
       try {
         history = await handle.fetchHistorySince({
           peerKey,
+          ...(explicitInputPeer ? { inputPeer: explicitInputPeer } : {}),
           ...(lastMsg?.tgMsgId ? { sinceTgMsgId: lastMsg.tgMsgId } : {}),
           limit: HISTORY_LIMIT,
         });
