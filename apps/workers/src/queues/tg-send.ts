@@ -217,6 +217,15 @@ export function startTgSendWorker() {
         data: { sentTodayMsg: { increment: 1 } },
       });
 
+      // Start the warmup clock on the first ever outbound from this
+      // account. `updateMany` with `warmupStartedAt: null` makes this
+      // idempotent — subsequent sends no-op. The promoter loop reads
+      // `warmupStartedAt` to compute dwell time for stage transitions.
+      await prisma.tgAccount.updateMany({
+        where: { id: tgAccountId, warmupStartedAt: null },
+        data: { warmupStartedAt: new Date() },
+      });
+
       await publishRealtime(`conversation:${conversationId}`, {
         type: 'message.new',
         conversationId,

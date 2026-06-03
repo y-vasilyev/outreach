@@ -23,6 +23,7 @@ export const TgAccountZ = z.object({
   sentTodayNew: z.number().int(),
   cooldownUntil: z.string().nullable(),
   warmupStage: z.number().int(),
+  warmupStartedAt: z.string().nullable(),
   tags: z.array(z.string()),
   notes: z.string().nullable(),
 });

@@ -23,6 +23,7 @@ export async function tgAccountsRoutes(app: FastifyInstance) {
       sentTodayNew: a.sentTodayNew,
       cooldownUntil: a.cooldownUntil?.toISOString() ?? null,
       warmupStage: a.warmupStage,
+      warmupStartedAt: a.warmupStartedAt?.toISOString() ?? null,
       tags: a.tags,
       notes: a.notes,
     }));
@@ -51,6 +52,9 @@ export async function tgAccountsRoutes(app: FastifyInstance) {
         dailyNewContactLimit: z.number().int().optional(),
         parserRpm: z.number().int().min(1).max(1000).nullable().optional(),
         outreachRpm: z.number().int().min(1).max(1000).nullable().optional(),
+        // Admin override for warmup. 0..4. Use 4 to skip warmup entirely
+        // on a known-aged account; use a lower value to redo warmup.
+        warmupStage: z.number().int().min(0).max(4).optional(),
         role: z.enum(['parser', 'outreach', 'both']).optional(),
       })
       .parse(req.body);

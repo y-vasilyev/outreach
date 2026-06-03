@@ -2,6 +2,7 @@ import { getPrisma, type Prisma } from '@nosquare/db';
 import { getFeatureFlags } from '../feature-flags.js';
 import {
   type CampaignSchedule,
+  effectiveDailyLimits,
   isWithinSchedule,
   resolveAgentName,
   resolveSafetyContext,
@@ -221,9 +222,12 @@ export function startCampaignDispatcher() {
           if (!contact) continue;
           const acct = accounts[i % accounts.length];
           if (!acct) continue;
-          const cap = campaignCap
-            ? Math.min(acct.dailyMsgLimit, campaignCap)
-            : acct.dailyMsgLimit;
+          // Warmup-capped daily ceiling. Stage 0 means a fresh account
+          // can only do ~5/day even if operator set dailyMsgLimit=40 —
+          // the cap is the stricter of (warmup stage cap, per-account
+          // operator number, per-campaign schedule.maxPerDayPerAccount).
+          const warmupCap = effectiveDailyLimits(acct).msgPerDay;
+          const cap = campaignCap ? Math.min(warmupCap, campaignCap) : warmupCap;
           if (acct.sentTodayMsg >= cap) continue;
 
           const conv = await prisma.conversation.upsert({

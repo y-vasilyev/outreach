@@ -18,6 +18,14 @@ import TgLoginDialog from './TgLoginDialog.vue';
 import { api } from '../../lib/api';
 import { toast } from '../../lib/toast';
 import { initials, formatRelative, formatUntil, formatNumber, formatDateTime } from '../../lib/format';
+import {
+  WARMUP_STAGES,
+  WARMUP_TOP_STAGE,
+  WARMUP_UNCAPPED,
+  daysSince,
+  effectiveDailyLimits,
+  getWarmupStage,
+} from './warmup';
 import { avatarColor } from '../../lib/state';
 import type { TgAccount } from './types';
 
@@ -95,6 +103,62 @@ const clearCooldownMut = useMutation({
 
 function openEdit(a: TgAccount): void { editing.value = a; formOpen.value = true; }
 function openNew(): void { editing.value = null; formOpen.value = true; }
+
+function warmupSummary(a: TgAccount): {
+  stage: number;
+  msgCap: number;
+  effectiveMsgCap: number;
+  isTopStage: boolean;
+  daysUntilNext: number | null;
+  daysSinceStart: number | null;
+} {
+  const stage = getWarmupStage(a.warmupStage);
+  const isTopStage = a.warmupStage >= WARMUP_TOP_STAGE;
+  const eff = effectiveDailyLimits({
+    dailyMsgLimit: a.dailyMsgLimit,
+    dailyNewContactLimit: a.dailyNewContactLimit,
+    warmupStage: a.warmupStage,
+  });
+  let daysUntilNext: number | null = null;
+  let daysSinceStart: number | null = null;
+  if (a.warmupStartedAt) {
+    const ds = daysSince(a.warmupStartedAt);
+    daysSinceStart = ds;
+    if (!isTopStage) {
+      const target = WARMUP_STAGES[a.warmupStage + 1];
+      if (target) daysUntilNext = Math.max(0, target.minDaysSinceStart - ds);
+    }
+  }
+  return {
+    stage: a.warmupStage,
+    msgCap: stage.msgPerDay,
+    effectiveMsgCap: eff.msgPerDay,
+    isTopStage,
+    daysUntilNext,
+    daysSinceStart,
+  };
+}
+
+function warmupTooltip(a: TgAccount): string {
+  const s = warmupSummary(a);
+  const cap = s.msgCap >= WARMUP_UNCAPPED ? 'без warmup-лимита' : `до ${s.msgCap} сообщений/день`;
+  const effective = s.effectiveMsgCap >= WARMUP_UNCAPPED ? '∞' : String(s.effectiveMsgCap);
+  const parts = [
+    `Стадия ${s.stage}/${WARMUP_TOP_STAGE}: ${cap}`,
+    `Эффективный лимит: ${effective} (с учётом operator-set dailyMsgLimit=${a.dailyMsgLimit})`,
+  ];
+  if (s.daysSinceStart !== null) parts.push(`Дней с начала warmup: ${s.daysSinceStart}`);
+  if (s.daysUntilNext !== null && !s.isTopStage) {
+    parts.push(s.daysUntilNext === 0 ? 'Готов к промоушену (ждёт reply-rate gate)' : `До следующей стадии: ${s.daysUntilNext} д`);
+  }
+  if (!a.warmupStartedAt) parts.push('Warmup ещё не стартовал (нет ни одного outbound)');
+  return parts.join('\n');
+}
+
+function effectiveCapLabel(a: TgAccount): string {
+  const eff = warmupSummary(a).effectiveMsgCap;
+  return eff >= WARMUP_UNCAPPED ? String(a.dailyMsgLimit) : String(eff);
+}
 
 function dropdownItems(a: TgAccount) {
   const showClearCooldown = a.status === 'cooldown' || !!a.cooldownUntil;
@@ -203,15 +267,28 @@ function dropdownItems(a: TgAccount) {
               >{{ formatUntil(a.cooldownUntil) }}</span>
             </div>
           </td>
-          <td>
+          <td :title="warmupTooltip(a)">
             <div style="display: flex; align-items: center; gap: 6px;">
               <Bar :value="a.warmupStage / 4" :width="60" />
               <span class="mono muted-2" style="font-size: 10.5px;">{{ a.warmupStage }}/4</span>
             </div>
+            <div
+              v-if="warmupSummary(a).daysUntilNext !== null && !warmupSummary(a).isTopStage"
+              class="mono muted-2"
+              style="font-size: 10px; margin-top: 2px;"
+            >
+              <template v-if="warmupSummary(a).daysUntilNext === 0">готов к промоушену</template>
+              <template v-else>до next: {{ warmupSummary(a).daysUntilNext }} д</template>
+            </div>
+            <div
+              v-else-if="!a.warmupStartedAt"
+              class="mono muted-2"
+              style="font-size: 10px; margin-top: 2px;"
+            >не стартовал</div>
           </td>
           <td>
-            <div style="font-size: 11px; color: var(--ink-3);">
-              <div>msg <span class="mono cell-strong">{{ formatNumber(a.sentTodayMsg) }}</span> / {{ formatNumber(a.dailyMsgLimit) }}</div>
+            <div style="font-size: 11px; color: var(--ink-3);" :title="warmupTooltip(a)">
+              <div>msg <span class="mono cell-strong">{{ formatNumber(a.sentTodayMsg) }}</span> / {{ effectiveCapLabel(a) }}</div>
               <div>new <span class="mono cell-strong">{{ formatNumber(a.sentTodayNew) }}</span> / {{ formatNumber(a.dailyNewContactLimit) }}</div>
             </div>
           </td>

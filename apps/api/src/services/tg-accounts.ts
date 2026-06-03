@@ -141,6 +141,7 @@ export const tgAccountsService = {
       dailyNewContactLimit: number;
       parserRpm: number | null;
       outreachRpm: number | null;
+      warmupStage: number;
       role: 'parser' | 'outreach' | 'both';
     }>,
   ) {

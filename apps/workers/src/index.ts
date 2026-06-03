@@ -13,6 +13,7 @@ import { startProfileExtractWorker } from './queues/profile-extract.js';
 import { startDiscoveryBatchWorker } from './queues/discovery-batch.js';
 import { initFeatureFlags } from './feature-flags.js';
 import { startCooldownHealer } from './services/cooldown-healer.js';
+import { startWarmupPromoter } from './services/warmup-promoter.js';
 import { logger } from './logger.js';
 
 async function main() {
@@ -36,6 +37,7 @@ async function main() {
   const followups = startFollowupScheduler();
   const qualityReviews = startQualityReviewScheduler();
   const cooldownHealer = startCooldownHealer();
+  const warmupPromoter = startWarmupPromoter();
   // TG inbound subscribers connect to live sessions. Failures are logged
   // but don't prevent boot — the queue worker still drains anything that
   // was already enqueued by a previous run.
@@ -53,6 +55,7 @@ async function main() {
     logger.info('Shutting down workers…');
     dispatcher.stop();
     cooldownHealer.stop();
+    warmupPromoter.stop();
     await followups.stop();
     await qualityReviews.stop();
     await subscribers.stop().catch(() => undefined);

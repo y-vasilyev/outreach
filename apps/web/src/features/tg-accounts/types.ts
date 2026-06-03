@@ -11,7 +11,9 @@ export interface TgAccount {
   outreachRpm?: number | null;
   sentTodayMsg: number;
   sentTodayNew: number;
+  /** 0..4. 4 = warmup complete, operator's dailyMsgLimit is the only ceiling. */
   warmupStage: number;
+  /** Set on first outbound; null = warmup clock hasn't started yet. */
   warmupStartedAt?: string | null;
   cooldownUntil: string | null;
   tags: string[];
