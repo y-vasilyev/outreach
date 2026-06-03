@@ -119,6 +119,20 @@ scenarios — your hand-edited Secret values are gone after this.
 
 ## Architecture notes
 
+- Prisma migrations run automatically on every api pod start via an
+  `initContainer` (`migrate`) on the api Deployment that executes
+  `prisma migrate deploy` against `DATABASE_URL`. The init runs to
+  completion before the main `api` container is created, and the same
+  image is pinned for both via `deploy.sh` (`set image deployment/api
+  api=<tag> migrate=<tag>`) so code and migrations always ship together.
+  `prisma migrate deploy` is idempotent — re-running it against an
+  up-to-date DB is a no-op.
+- DB tables, columns and enum types are **snake_case** in Postgres (e.g.
+  `public.user`, `public.tg_account`, `feature_flag.updated_at`), via
+  `@@map`/`@map` directives in `schema.prisma`. The Prisma client API
+  stays camelCase (`prisma.tgAccount.findUnique({ where: { id }})`) — so
+  TS code is unchanged, but ad-hoc SQL doesn't need double-quote
+  ceremony.
 - The web bundle is built **without** baking `VITE_PUBLIC_API_URL`, so it
   defaults to same-origin `/api` (see `apps/web/src/lib/api.ts`
   `getBaseUrl()`). That matches the single-host ingress and means a

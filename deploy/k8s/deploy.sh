@@ -194,7 +194,12 @@ echo "Applying manifests..."
 kubectl apply -k "$K8S_DIR"
 
 echo "Updating deployment images..."
-kubectl -n "$NAMESPACE" set image deployment/api     api="$API_IMAGE_WITH_TAG"
+# The api Deployment has both a main container (`api`) and an initContainer
+# (`migrate`) that runs `prisma migrate deploy`. Both must be pinned to the
+# same fresh image so a rollout never mixes new code with old migrations.
+kubectl -n "$NAMESPACE" set image deployment/api \
+  api="$API_IMAGE_WITH_TAG" \
+  migrate="$API_IMAGE_WITH_TAG"
 kubectl -n "$NAMESPACE" set image deployment/web     web="$WEB_IMAGE_WITH_TAG"
 kubectl -n "$NAMESPACE" set image deployment/workers workers="$WORKERS_IMAGE_WITH_TAG"
 

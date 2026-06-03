@@ -1,4 +1,11 @@
 // Prisma schema for Nosquare Outreach
+//
+// Naming convention: Prisma model + field identifiers stay PascalCase /
+// camelCase (so the generated TS client reads naturally), but every
+// model/enum has @@map and every camelCase field has @map so that the
+// actual Postgres tables, columns, and enum types are snake_case. That
+// keeps hand-written SQL (psql, dbeaver, ad-hoc queries) free of the
+// double-quote ceremony Postgres requires for mixed-case identifiers.
 generator client {
   provider      = "prisma-client-js"
   binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
@@ -15,12 +22,16 @@ enum UserRole {
   admin
   operator
   viewer
+
+  @@map("user_role")
 }
 
 enum Platform {
   telegram
   instagram
   youtube
+
+  @@map("platform")
 }
 
 enum TgAccountStatus {
@@ -29,18 +40,24 @@ enum TgAccountStatus {
   cooldown
   banned
   need_auth
+
+  @@map("tg_account_status")
 }
 
 enum TgAccountRole {
   parser
   outreach
   both
+
+  @@map("tg_account_role")
 }
 
 enum LLMProviderKind {
   yandex
   openrouter
   openai_compat
+
+  @@map("llm_provider_kind")
 }
 
 enum ChannelStatus {
@@ -52,6 +69,8 @@ enum ChannelStatus {
   ready
   done
   failed
+
+  @@map("channel_status")
 }
 
 enum ContactType {
@@ -62,6 +81,8 @@ enum ContactType {
   website
   web_form
   other
+
+  @@map("contact_type")
 }
 
 enum RoleGuess {
@@ -70,12 +91,16 @@ enum RoleGuess {
   generic
   bot
   unknown
+
+  @@map("role_guess")
 }
 
 enum Reachability {
   reachable_tg
   manual
   unreachable
+
+  @@map("reachability")
 }
 
 enum ContactStatus {
@@ -87,6 +112,8 @@ enum ContactStatus {
   finished
   invalid
   blocked
+
+  @@map("contact_status")
 }
 
 enum ExtractedBy {
@@ -96,6 +123,8 @@ enum ExtractedBy {
   // Operator hand-edited the contact (role / confidence / value).
   // The contact-extract worker checks this and skips overwriting on re-run.
   manual
+
+  @@map("extracted_by")
 }
 
 enum CampaignStatus {
@@ -103,6 +132,8 @@ enum CampaignStatus {
   running
   paused
   finished
+
+  @@map("campaign_status")
 }
 
 enum ConversationMode {
@@ -110,6 +141,8 @@ enum ConversationMode {
   semi_auto
   assisted
   manual
+
+  @@map("conversation_mode")
 }
 
 enum ConversationStatus {
@@ -117,11 +150,15 @@ enum ConversationStatus {
   paused
   done
   failed
+
+  @@map("conversation_status")
 }
 
 enum MessageDirection {
   in_
   out_
+
+  @@map("message_direction")
 }
 
 enum MessageSender {
@@ -129,6 +166,8 @@ enum MessageSender {
   ai
   operator
   system
+
+  @@map("message_sender")
 }
 
 enum MessageStatus {
@@ -137,6 +176,8 @@ enum MessageStatus {
   sent
   failed
   received
+
+  @@map("message_status")
 }
 
 enum SuggestionStatus {
@@ -146,12 +187,16 @@ enum SuggestionStatus {
   rejected
   sent
   expired
+
+  @@map("suggestion_status")
 }
 
 enum AgentRunStatus {
   ok
   fallback
   failed
+
+  @@map("agent_run_status")
 }
 
 // =============== MODELS ===============
@@ -159,11 +204,11 @@ enum AgentRunStatus {
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
-  passwordHash String
+  passwordHash String   @map("password_hash")
   role         UserRole @default(operator)
   settings     Json     @default("{}")
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
   channelsAdded         Channel[]            @relation("ChannelAddedBy")
   conversationsAssigned Conversation[]       @relation("ConversationOperator")
@@ -172,82 +217,90 @@ model User {
   agentConfigsUpdated   AgentConfig[]        @relation("AgentConfigUpdatedBy")
   agentConfigHistories  AgentConfigHistory[] @relation("AgentConfigHistoryChangedBy")
   auditLogs             AuditLog[]
+
+  @@map("user")
 }
 
 model TgAccount {
   id                   String          @id @default(cuid())
   label                String
   phone                String          @unique
-  sessionEncrypted     String?
+  sessionEncrypted     String?         @map("session_encrypted")
   status               TgAccountStatus @default(need_auth)
   role                 TgAccountRole   @default(both)
-  dailyMsgLimit        Int             @default(30)
-  dailyNewContactLimit Int             @default(15)
-  sentTodayMsg         Int             @default(0)
-  sentTodayNew         Int             @default(0)
-  dayRolledAt          DateTime?
-  cooldownUntil        DateTime?
-  warmupStartedAt      DateTime?
-  warmupStage          Int             @default(0)
+  dailyMsgLimit        Int             @default(30) @map("daily_msg_limit")
+  dailyNewContactLimit Int             @default(15) @map("daily_new_contact_limit")
+  sentTodayMsg         Int             @default(0) @map("sent_today_msg")
+  sentTodayNew         Int             @default(0) @map("sent_today_new")
+  dayRolledAt          DateTime?       @map("day_rolled_at")
+  cooldownUntil        DateTime?       @map("cooldown_until")
+  warmupStartedAt      DateTime?       @map("warmup_started_at")
+  warmupStage          Int             @default(0) @map("warmup_stage")
   tags                 String[]        @default([])
   notes                String?
-  loginPhoneCodeHash   String?
-  deviceFingerprint    Json?
-  createdAt            DateTime        @default(now())
-  updatedAt            DateTime        @updatedAt
+  loginPhoneCodeHash   String?         @map("login_phone_code_hash")
+  deviceFingerprint    Json?           @map("device_fingerprint")
+  createdAt            DateTime        @default(now()) @map("created_at")
+  updatedAt            DateTime        @updatedAt @map("updated_at")
 
   conversations Conversation[]
   opLogs        TgOpLog[]
+
+  @@map("tg_account")
 }
 
 model Integration {
   id              String    @id @default(cuid())
   kind            String    @unique
-  configEncrypted String
+  configEncrypted String    @map("config_encrypted")
   enabled         Boolean   @default(true)
   status          String?
-  lastCheckAt     DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  lastCheckAt     DateTime? @map("last_check_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@map("integration")
 }
 
 model Endpoint {
   id             String          @id @default(cuid())
   name           String          @unique
   provider       LLMProviderKind
-  baseUrl        String
-  authEncrypted  String
-  defaultHeaders Json            @default("{}")
-  rateLimitRpm   Int?
+  baseUrl        String          @map("base_url")
+  authEncrypted  String          @map("auth_encrypted")
+  defaultHeaders Json            @default("{}") @map("default_headers")
+  rateLimitRpm   Int?            @map("rate_limit_rpm")
   enabled        Boolean         @default(true)
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
 
   agentConfigsPrimary  AgentConfig[] @relation("AgentEndpointPrimary")
   agentConfigsFallback AgentConfig[] @relation("AgentEndpointFallback")
   agentRuns            AgentRun[]
+
+  @@map("endpoint")
 }
 
 model Channel {
   id          String        @id @default(cuid())
   platform    Platform
-  externalId  String?
+  externalId  String?       @map("external_id")
   handle      String
   title       String?
   description String?
   links       String[]      @default([])
   followers   Int?
   language    String?
-  rawData     Json?
+  rawData     Json?         @map("raw_data")
   analysis    Json?
   status      ChannelStatus @default(new)
   source      String        @default("manual")
-  addedById   String?
+  addedById   String?       @map("added_by_id")
   addedBy     User?         @relation("ChannelAddedBy", fields: [addedById], references: [id], onDelete: SetNull)
-  scrapedAt   DateTime?
-  lastError   String?
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  scrapedAt   DateTime?     @map("scraped_at")
+  lastError   String?       @map("last_error")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
 
   contacts  Contact[]
   agentRuns AgentRun[]
@@ -255,103 +308,93 @@ model Channel {
   @@unique([platform, externalId])
   @@unique([platform, handle])
   @@index([status])
+  @@map("channel")
 }
 
 model Contact {
   id           String        @id @default(cuid())
   // Optional so the operator can paste cold leads that don't belong to a
   // tracked channel. Cold-lead dedupe is handled by a partial unique index
-  // `(type, value) WHERE channelId IS NULL` defined in migration 2.
-  channelId    String?
+  // `(type, value) WHERE channel_id IS NULL` recreated below.
+  channelId    String?       @map("channel_id")
   channel      Channel?      @relation(fields: [channelId], references: [id], onDelete: Cascade)
   type         ContactType
   value        String
-  rawValue     String
+  rawValue     String        @map("raw_value")
   label        String?
-  roleGuess    RoleGuess     @default(unknown)
+  roleGuess    RoleGuess     @default(unknown) @map("role_guess")
   confidence   Decimal       @default(0)
-  extractedBy  ExtractedBy   @default(regex)
+  extractedBy  ExtractedBy   @default(regex) @map("extracted_by")
   reachability Reachability  @default(manual)
   status       ContactStatus @default(new)
   tags         String[]      @default([])
-  tgUserId     String?
+  tgUserId     String?       @map("tg_user_id")
   // Resolved on the first outbound send (via TgClient.resolveUser). Stored
   // so the opener / reply pipelines can address the recipient by name and
   // so the tg-listen worker can match incoming messages back to the contact.
-  tgUsername   String?
-  tgFirstName  String?
-  tgLastName   String?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  tgUsername   String?       @map("tg_username")
+  tgFirstName  String?       @map("tg_first_name")
+  tgLastName   String?       @map("tg_last_name")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
 
   conversations Conversation[]
   agentRuns     AgentRun[]
 
   @@unique([channelId, type, value])
   @@index([status, reachability])
+  @@map("contact")
 }
 
 model Campaign {
   id                  String           @id @default(cuid())
   name                String
-  goalText            String
-  valueProp           String
+  goalText            String           @map("goal_text")
+  valueProp           String           @map("value_prop")
   // Campaign type from the registry (agency-sourcing-matching change).
-  // Required as of migration 7 (backfill in migration 6 set every existing
-  // campaign to `custdev`). RESTRICT: a campaign type in use can't be deleted.
-  // The legacy `ajtbd` JSON column was removed by migration
-  // `9c_drop_campaign_ajtbd` — the AJTBD shape for CustDev now lives
-  // inside `goal`, mediated by `extractAjtbdView` for the agents that
-  // still consume `CampaignAjtbd` as input.
-  typeId              String
+  typeId              String           @map("type_id")
   type                CampaignType     @relation(fields: [typeId], references: [id], onDelete: Restrict)
-  // Structured goal validated against the type's `goalSchema`. For
-  // `custdev` this mirrors the legacy `ajtbd` shape; for `agency_sourcing`
-  // it carries the data-collection objective. The runtime fails explicitly
-  // if it is null when an agent needs it (no hardcoded fallback).
+  // Structured goal validated against the type's `goalSchema`.
   goal                Json?
-  targetFilter        Json             @default("{}")
-  agentOverrides      Json             @default("{}")
-  outreachAccountPool String[]         @default([])
+  targetFilter        Json             @default("{}") @map("target_filter")
+  agentOverrides      Json             @default("{}") @map("agent_overrides")
+  outreachAccountPool String[]         @default([]) @map("outreach_account_pool")
   schedule            Json             @default("{}")
-  defaultMode         ConversationMode @default(assisted)
+  defaultMode         ConversationMode @default(assisted) @map("default_mode")
   status              CampaignStatus   @default(draft)
-  createdById         String?
+  createdById         String?          @map("created_by_id")
   createdBy           User?            @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt           DateTime         @default(now())
-  updatedAt           DateTime         @updatedAt
+  createdAt           DateTime         @default(now()) @map("created_at")
+  updatedAt           DateTime         @updatedAt @map("updated_at")
 
   conversations Conversation[]
 
   @@index([typeId])
+  @@map("campaign")
 }
 
 model Conversation {
   id                 String             @id @default(cuid())
-  tgAccountId        String
+  tgAccountId        String             @map("tg_account_id")
   tgAccount          TgAccount          @relation(fields: [tgAccountId], references: [id])
-  contactId          String
+  contactId          String             @map("contact_id")
   contact            Contact            @relation(fields: [contactId], references: [id])
-  campaignId         String?
+  campaignId         String?            @map("campaign_id")
   campaign           Campaign?          @relation(fields: [campaignId], references: [id], onDelete: SetNull)
   status             ConversationStatus @default(active)
   mode               ConversationMode   @default(assisted)
-  assignedOperatorId String?
+  assignedOperatorId String?            @map("assigned_operator_id")
   assignedOperator   User?              @relation("ConversationOperator", fields: [assignedOperatorId], references: [id], onDelete: SetNull)
-  lastInboundAt      DateTime?
-  lastOutboundAt     DateTime?
-  // Latest snapshot from the GoalFitEvaluator gate when the conversation
-  // is in `semi_auto`/`auto` mode: { score, action, reasons[],
-  // agentRunId, decidedAt }. Cleared on any operator-driven mode change.
-  qualityDecision    Json?
-  // Set whenever the API on-open sync (`ConversationSync.syncOne`)
-  // successfully fetches history for this peer. Used by the inbox UI's
-  // "Syncing…" hint and by metrics that detect stale push coverage.
-  lastSyncedAt       DateTime?
+  lastInboundAt      DateTime?          @map("last_inbound_at")
+  lastOutboundAt     DateTime?          @map("last_outbound_at")
+  // Latest GoalFitEvaluator gate snapshot for `semi_auto`/`auto` mode.
+  qualityDecision    Json?              @map("quality_decision")
+  // Updated whenever the API on-open sync successfully fetches history.
+  lastSyncedAt       DateTime?          @map("last_synced_at")
   summary            String?
   meta               Json               @default("{}")
-  createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
 
   messages    Message[]
   suggestions Suggestion[]
@@ -359,52 +402,53 @@ model Conversation {
 
   @@unique([tgAccountId, contactId])
   @@index([lastInboundAt])
+  @@map("conversation")
 }
 
 model Message {
   id             String           @id @default(cuid())
-  conversationId String
+  conversationId String           @map("conversation_id")
   conversation   Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  tgMsgId        String?
+  tgMsgId        String?          @map("tg_msg_id")
   direction      MessageDirection
   sender         MessageSender
   text           String
   attachments    Json             @default("[]")
   status         MessageStatus    @default(pending)
-  suggestionId   String?
+  suggestionId   String?          @map("suggestion_id")
   suggestion     Suggestion?      @relation(fields: [suggestionId], references: [id], onDelete: SetNull)
-  operatorId     String?
+  operatorId     String?          @map("operator_id")
   operator       User?            @relation(fields: [operatorId], references: [id], onDelete: SetNull)
-  sentAt         DateTime?
-  createdAt      DateTime         @default(now())
+  sentAt         DateTime?        @map("sent_at")
+  createdAt      DateTime         @default(now()) @map("created_at")
   // Stable variantKey identifying which opener variant was sent. Populated
   // only for outbound messages whose source `Suggestion.agentName` is
-  // `opening_composer` or `agency_opening_composer`; null everywhere else
-  // (replies, ad-hoc operator messages, inbound). Drives the per-variant
-  // sent/replied/replyRate aggregates served by
-  // `GET /campaigns/:id/opener-stats` (see change `ab-opener-variants`).
-  openerVariant  String?
+  // `opening_composer` or `agency_opening_composer`; drives per-variant
+  // sent/replied/replyRate aggregates served by /campaigns/:id/opener-stats.
+  openerVariant  String?          @map("opener_variant")
 
   @@index([conversationId, createdAt])
   @@index([conversationId, openerVariant])
+  @@map("message")
 }
 
 model Suggestion {
   id             String           @id @default(cuid())
-  conversationId String
+  conversationId String           @map("conversation_id")
   conversation   Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  agentName      String
+  agentName      String           @map("agent_name")
   text           String
   rationale      String           @default("")
   score          Decimal          @default(0)
   status         SuggestionStatus @default(pending)
   meta           Json             @default("{}")
-  createdAt      DateTime         @default(now())
-  expiresAt      DateTime?
+  createdAt      DateTime         @default(now()) @map("created_at")
+  expiresAt      DateTime?        @map("expires_at")
 
   messages Message[]
 
   @@index([conversationId, status])
+  @@map("suggestion")
 }
 
 model AgentConfig {
@@ -412,85 +456,92 @@ model AgentConfig {
   name               String    @unique
   role               String    @default("")
   description        String    @default("")
-  endpointId         String?
+  endpointId         String?   @map("endpoint_id")
   endpoint           Endpoint? @relation("AgentEndpointPrimary", fields: [endpointId], references: [id], onDelete: SetNull)
-  fallbackEndpointId String?
+  fallbackEndpointId String?   @map("fallback_endpoint_id")
   fallbackEndpoint   Endpoint? @relation("AgentEndpointFallback", fields: [fallbackEndpointId], references: [id], onDelete: SetNull)
   model              String    @default("")
-  systemPrompt       String    @default("")
-  userPromptTemplate String    @default("")
+  systemPrompt       String    @default("") @map("system_prompt")
+  userPromptTemplate String    @default("") @map("user_prompt_template")
   params             Json      @default("{}")
   enabled            Boolean   @default(true)
   version            Int       @default(1)
-  updatedById        String?
+  updatedById        String?   @map("updated_by_id")
   updatedBy          User?     @relation("AgentConfigUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
-  updatedAt          DateTime  @updatedAt
-  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
 
   history AgentConfigHistory[]
+
+  @@map("agent_config")
 }
 
 model AgentConfigHistory {
   id            String      @id @default(cuid())
-  agentConfigId String
+  agentConfigId String      @map("agent_config_id")
   agentConfig   AgentConfig @relation(fields: [agentConfigId], references: [id], onDelete: Cascade)
   version       Int
   snapshot      Json
-  changedById   String?
+  changedById   String?     @map("changed_by_id")
   changedBy     User?       @relation("AgentConfigHistoryChangedBy", fields: [changedById], references: [id], onDelete: SetNull)
-  changedAt     DateTime    @default(now())
+  changedAt     DateTime    @default(now()) @map("changed_at")
+
+  @@map("agent_config_history")
 }
 
 model AgentRun {
   id             String         @id @default(cuid())
-  agentName      String
-  channelId      String?
+  agentName      String         @map("agent_name")
+  channelId      String?        @map("channel_id")
   channel        Channel?       @relation(fields: [channelId], references: [id], onDelete: SetNull)
-  contactId      String?
+  contactId      String?        @map("contact_id")
   contact        Contact?       @relation(fields: [contactId], references: [id], onDelete: SetNull)
-  conversationId String?
+  conversationId String?        @map("conversation_id")
   conversation   Conversation?  @relation(fields: [conversationId], references: [id], onDelete: SetNull)
-  endpointId     String?
+  endpointId     String?        @map("endpoint_id")
   endpoint       Endpoint?      @relation(fields: [endpointId], references: [id], onDelete: SetNull)
   model          String?
   input          Json
   output         Json?
-  tokensIn       Int            @default(0)
-  tokensOut      Int            @default(0)
-  costUsd        Decimal        @default(0)
-  latencyMs      Int            @default(0)
+  tokensIn       Int            @default(0) @map("tokens_in")
+  tokensOut      Int            @default(0) @map("tokens_out")
+  costUsd        Decimal        @default(0) @map("cost_usd")
+  latencyMs      Int            @default(0) @map("latency_ms")
   status         AgentRunStatus @default(ok)
   error          String?
-  createdAt      DateTime       @default(now())
+  createdAt      DateTime       @default(now()) @map("created_at")
 
   @@index([agentName, createdAt])
+  @@map("agent_run")
 }
 
 model TgOpLog {
   id          String    @id @default(cuid())
-  tgAccountId String
+  tgAccountId String    @map("tg_account_id")
   tgAccount   TgAccount @relation(fields: [tgAccountId], references: [id], onDelete: Cascade)
   op          String
   ok          Boolean
-  latencyMs   Int       @default(0)
+  latencyMs   Int       @default(0) @map("latency_ms")
   error       String?
   meta        Json      @default("{}")
-  createdAt   DateTime  @default(now())
+  createdAt   DateTime  @default(now()) @map("created_at")
 
   @@index([tgAccountId, createdAt])
+  @@map("tg_op_log")
 }
 
 model AuditLog {
   id         String   @id @default(cuid())
-  userId     String?
+  userId     String?  @map("user_id")
   user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   action     String
-  targetType String
-  targetId   String?
+  targetType String   @map("target_type")
+  targetId   String?  @map("target_id")
   payload    Json     @default("{}")
-  createdAt  DateTime @default(now())
+  createdAt  DateTime @default(now()) @map("created_at")
 
   @@index([createdAt])
+  @@map("audit_log")
 }
 
 // =============== AGENCY SOURCING & MATCHING ===============
@@ -504,26 +555,30 @@ enum MediaAssetKind {
   video
   raw_payload
   other
+
+  @@map("media_asset_kind")
 }
 
-// Configurable campaign type. Drives which agents run, the safety
-// profile (allowed/forbidden vocabulary), the autonomy policy, and the
-// JSON-schema a campaign's `goal` is validated against.
+// Configurable campaign type. Drives which agents run, the safety profile
+// (allowed/forbidden vocabulary), the autonomy policy, and the JSON-schema
+// a campaign's `goal` is validated against.
 model CampaignType {
   id             String   @id @default(cuid())
   key            String   @unique
   name           String
   description    String   @default("")
-  goalSchema     Json     @default("{}")
-  agentSet       Json     @default("{}")
-  safetyProfile  Json     @default("{}")
-  autonomyPolicy Json     @default("{}")
-  builtIn        Boolean  @default(false)
+  goalSchema     Json     @default("{}") @map("goal_schema")
+  agentSet       Json     @default("{}") @map("agent_set")
+  safetyProfile  Json     @default("{}") @map("safety_profile")
+  autonomyPolicy Json     @default("{}") @map("autonomy_policy")
+  builtIn        Boolean  @default(false) @map("built_in")
   enabled        Boolean  @default(true)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
   campaigns Campaign[]
+
+  @@map("campaign_type")
 }
 
 // Runtime feature flag (runtime-feature-flags change). Source of truth for
@@ -534,9 +589,11 @@ model FeatureFlag {
   key         String   @id
   enabled     Boolean  @default(false)
   description String   @default("")
-  updatedById String?
-  updatedAt   DateTime @updatedAt
-  createdAt   DateTime @default(now())
+  updatedById String?  @map("updated_by_id")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("feature_flag")
 }
 
 // Batch channel discovery (batch-channel-discovery change). One row per
@@ -548,29 +605,31 @@ enum DiscoveryBatchStatus {
   running
   done
   failed
+
+  @@map("discovery_batch_status")
 }
 
 model DiscoveryBatch {
   id            String               @id @default(cuid())
-  // The niches submitted by the operator. Stored as JSON so a future
-  // worker can re-process a subset or annotate progress per-entry.
+  // The niches submitted by the operator. Stored as JSON so a future worker
+  // can re-process a subset or annotate progress per-entry.
   queries       Json
-  // Optional platform filter (null = all platforms). Mirrors the
-  // single-search input shape.
+  // Optional platform filter (null = all platforms). Mirrors the single-search
+  // input shape.
   platform      String?
-  limitPerQuery Int                  @default(20)
+  limitPerQuery Int                  @default(20) @map("limit_per_query")
   status        DiscoveryBatchStatus @default(pending)
-  // Accumulated result: per-niche records + totals. Worker updates on
-  // each iteration. Shape mirrors `DiscoveryBatchSummaryZ` in
-  // `@nosquare/shared`.
+  // Accumulated result: per-niche records + totals. Worker updates on each
+  // iteration. Shape mirrors `DiscoveryBatchSummaryZ` in `@nosquare/shared`.
   summary       Json                 @default("{}")
-  createdById   String?
-  createdAt     DateTime             @default(now())
-  updatedAt     DateTime             @updatedAt
-  completedAt   DateTime?
+  createdById   String?              @map("created_by_id")
+  createdAt     DateTime             @default(now()) @map("created_at")
+  updatedAt     DateTime             @updatedAt @map("updated_at")
+  completedAt   DateTime?            @map("completed_at")
 
   @@index([status, createdAt])
   @@index([createdById])
+  @@map("discovery_batch")
 }
 
 // Standardized, queryable catalog row for a blogger/channel. Composed
@@ -579,43 +638,46 @@ model BloggerProfile {
   id         String    @id @default(cuid())
   // Plain indexed reference to Channel.id (no FK relation to keep the
   // existing channel graph's cascade semantics untouched).
-  channelId  String?   @unique
+  channelId  String?   @unique @map("channel_id")
   topics     String[]  @default([])
   languages  String[]  @default([])
   formats    String[]  @default([])
   // Standardized rolled-up fields: { reach, avgViews, rateCards: [...],
   // audience: { age, gender, geo } }. Source of truth is dataPoints.
   audience   Json      @default("{}")
-  rateCards  Json      @default("[]")
+  rateCards  Json      @default("[]") @map("rate_cards")
   reach      Int?
-  avgViews   Int?
-  capturedAt DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  avgViews   Int?      @map("avg_views")
+  capturedAt DateTime? @map("captured_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
 
   dataPoints   ProfileDataPoint[]
   mediaAssets  MediaAsset[]
   matchResults MatchResult[]
+
+  @@map("blogger_profile")
 }
 
 // One harvested fact with provenance, so the rolled-up profile can be
 // re-derived and audited. Raw source text preserved in `rawSnippet`.
 model ProfileDataPoint {
   id              String         @id @default(cuid())
-  profileId       String
+  profileId       String         @map("profile_id")
   profile         BloggerProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
   field           String
   value           Json
   unit            String?
   confidence      Decimal        @default(0)
-  extractedBy     String         @default("llm")
+  extractedBy     String         @default("llm") @map("extracted_by")
   // Plain reference to Message.id (no FK relation).
-  sourceMessageId String?
-  rawSnippet      String         @default("")
-  capturedAt      DateTime       @default(now())
-  createdAt       DateTime       @default(now())
+  sourceMessageId String?        @map("source_message_id")
+  rawSnippet      String         @default("") @map("raw_snippet")
+  capturedAt      DateTime       @default(now()) @map("captured_at")
+  createdAt       DateTime       @default(now()) @map("created_at")
 
   @@index([profileId, field])
+  @@map("profile_data_point")
 }
 
 // Files bloggers send (media kits, stat screenshots) and raw payload
@@ -623,50 +685,54 @@ model ProfileDataPoint {
 model MediaAsset {
   id             String          @id @default(cuid())
   // Plain indexed reference to Conversation.id.
-  conversationId String?
-  profileId      String?
+  conversationId String?         @map("conversation_id")
+  profileId      String?         @map("profile_id")
   profile        BloggerProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
   kind           MediaAssetKind  @default(other)
-  s3Key          String
+  s3Key          String          @map("s3_key")
   mime           String?
   bytes          Int?
   sha256         String?
   // Plain reference to the source TG message id.
-  sourceTgMsgId  String?
-  createdAt      DateTime        @default(now())
+  sourceTgMsgId  String?         @map("source_tg_msg_id")
+  createdAt      DateTime        @default(now()) @map("created_at")
 
   @@index([conversationId])
   @@index([profileId])
+  @@map("media_asset")
 }
 
 // Incoming advertising request to match against the catalog.
 model AdBrief {
   id             String    @id @default(cuid())
   topic          String
-  audienceTarget String    @default("")
+  audienceTarget String    @default("") @map("audience_target")
   budget         Int?
   formats        String[]  @default([])
   geo            String[]  @default([])
   deadline       DateTime?
   notes          String    @default("")
-  createdById    String?
-  createdAt      DateTime  @default(now())
+  createdById    String?   @map("created_by_id")
+  createdAt      DateTime  @default(now()) @map("created_at")
 
   matchResults MatchResult[]
+
+  @@map("ad_brief")
 }
 
 // A ranked candidate for a brief, persisted for auditability.
 model MatchResult {
   id            String         @id @default(cuid())
-  briefId       String
+  briefId       String         @map("brief_id")
   brief         AdBrief        @relation(fields: [briefId], references: [id], onDelete: Cascade)
-  profileId     String
+  profileId     String         @map("profile_id")
   profile       BloggerProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
   score         Decimal        @default(0)
   rationale     String         @default("")
-  rerankedByLlm Boolean        @default(false)
-  createdAt     DateTime       @default(now())
+  rerankedByLlm Boolean        @default(false) @map("reranked_by_llm")
+  createdAt     DateTime       @default(now()) @map("created_at")
 
   @@index([briefId])
   @@index([profileId])
+  @@map("match_result")
 }

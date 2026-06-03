@@ -20,6 +20,38 @@ spec:
         app: api
     spec:
       terminationGracePeriodSeconds: 30
+      # Apply pending Prisma migrations before the api starts serving.
+      # `prisma migrate deploy` is idempotent (only runs migrations whose row
+      # isn't already in `_prisma_migrations`), so this is safe on every
+      # pod restart, not just rollouts. Workers don't run migrations
+      # themselves — they're racy + concurrency-unsafe; this single
+      # initContainer is the only writer to the schema, and workers only
+      # ever read/write data via the generated client.
+      initContainers:
+        - name: migrate
+          image: cr.yandex/__paste-cr-registry-id__/outreach-api:latest
+          imagePullPolicy: Always
+          command:
+            - pnpm
+            - --filter
+            - "@nosquare/db"
+            - exec
+            - prisma
+            - migrate
+            - deploy
+            - --schema=./prisma/schema.prisma
+          envFrom:
+            - configMapRef:
+                name: outreach-config
+            - secretRef:
+                name: outreach-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
       containers:
         - name: api
           image: cr.yandex/__paste-cr-registry-id__/outreach-api:latest
