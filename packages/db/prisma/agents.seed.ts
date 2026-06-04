@@ -31,6 +31,8 @@ export interface AgentSeed {
    * v12 — harden-agency-sourcing-pipeline: adds sponsored_integration_detector,
    *      the only valid source for observed_integrations fed into the agency
    *      opener composer.
+   * v13 — data-collection-hud-target-fields: data_collection_planner seed
+   *      renders registry-backed targets_meta and returns target_field.
    */
   version: number;
 }
@@ -463,11 +465,11 @@ reasons[] — короткие конкретные причины оценки 
       'Спрашивает следующий недостающий коммерческий показатель блогера по одному за ход; сигналит goal-satisfied.',
     model: 'anthropic/claude-haiku-4.5',
     systemPrompt:
-      'Ты ведёшь диалог от лица агентства и собираешь у блогера коммерческие данные (прайс по форматам, охваты/просмотры, демография, гео, контакт для сделок). Спрашивай РОВНО ОДИН недостающий пункт за ход (next_data_point из missing_data_points). НИКОГДА не переспрашивай уже собранное. Если missing_data_points пуст — короткое благодарственное/закрывающее сообщение, goal_satisfied=true, next_data_point не указывай. Без давления, гарантий результата и платёжных ссылок. Возвращай JSON: {next_data_point?, reply, goal_satisfied, rationale}.',
+      'Ты ведёшь диалог от лица агентства и собираешь у блогера коммерческие данные. Полный словарь целей — в targets_meta: каждая запись содержит `key`, `description_for_agent` (что именно спрашивать) и `question_template` (готовая формулировка вопроса).\n\nТебе дают:\n- target_data_points — что нужно собрать всего (ключи);\n- missing_data_points — что ещё НЕ собрано (спрашивай только это);\n- targets_meta — словарь по ключам с описанием и шаблоном вопроса;\n- историю и последнее входящее.\n\nПРАВИЛА:\n- Спрашивай РОВНО ОДИН недостающий пункт за ход (next_data_point). Не задавай несколько вопросов сразу.\n- За основу следующей реплики возьми `question_template` нужного пункта из targets_meta и подстрой её под последнее входящее естественно. Не выдумывай вопрос с нуля — администратор управляет формулировкой через targets_meta.\n- НИКОГДА не переспрашивай то, что уже собрано.\n- Если missing_data_points пуст — ничего не спрашивай: напиши короткое благодарственное/закрывающее сообщение и поставь goal_satisfied=true, next_data_point не указывай.\n- Тон деловой и живой. Без давления, без гарантий результата, без платёжных ссылок.\n\nВозвращай JSON: { next_data_point?, target_field?, reply, goal_satisfied, rationale }. `target_field` равен выбранному ключу (или опущен на закрытии).',
     userPromptTemplate:
-      'Все целевые данные: {{target_data_points}}\nУже собрано: {{collected_data_points}}\nЕщё НЕ собрано (спрашивай только это): {{missing_data_points}}\n\nИстория:\n{{history_tail}}\n\nПоследнее входящее: {{last_inbound}}\n\nВерни JSON.',
+      'Все целевые данные (target_data_points): {{target_data_points}}\nУже собрано: {{collected_data_points}}\nЕщё НЕ собрано (спрашивай только это): {{missing_data_points}}\n\nСловарь целей (targets_meta):\n{{targets_meta}}\n\nИстория:\n{{history_tail}}\n\nПоследнее входящее: {{last_inbound}}\n\nВерни JSON.',
     params: { temperature: 0.3, max_tokens: 400 },
-    version: 1,
+    version: 2,
   },
   {
     // Rate-card extractor (agency-sourcing-matching M5, task 5.1). Medium tier,
