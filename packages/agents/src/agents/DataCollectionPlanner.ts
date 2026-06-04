@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { getTarget } from '@nosquare/shared';
+
 import type { Agent } from '../types.js';
 import { invokeJson } from './_runtime.js';
 
@@ -37,6 +39,14 @@ export const dataCollectionPlannerOutputSchema = z.object({
    * (enforced deterministically in run()).
    */
   next_data_point: z.string().optional(),
+  /**
+   * Same value as `next_data_point` when a question is emitted; omitted
+   * on closing. The worker copies this into `Suggestion.meta.targetField`
+   * (camelCase) so the data-collection HUD can mark the field `asked`
+   * even before any answer arrives. Snake-case here matches the planner's
+   * input/output naming convention; the persisted key is camelCase.
+   */
+  target_field: z.string().optional(),
   /** Proposed reply text: a question for `next_data_point`, or a closing. */
   reply: z.string(),
   /** True iff every target data point is collected. */
@@ -51,27 +61,19 @@ export type DataCollectionPlannerOutput = z.infer<
   typeof dataCollectionPlannerOutputSchema
 >;
 
-/**
- * Deterministic Russian question templates per known data-point key. Used when
- * the planner overrides the LLM's `next_data_point` (because the model picked a
- * collected/wrong field) so the returned `reply` can't keep asking about the
- * wrong point. Unknown keys get a generic, point-aware fallback.
- */
-const QUESTION_TEMPLATES: Record<string, string> = {
-  rate_card: 'Подскажите, пожалуйста, ваш прайс по форматам (пост, сторис и т.д.)?',
-  reach: 'Какие у вас охваты/просмотры на пост и на сторис?',
-  audience: 'Расскажете про аудиторию — пол, возраст, основные интересы?',
-  audience_demographics:
-    'Расскажете про аудиторию — пол, возраст, основные интересы?',
-  geo: 'Из каких стран и городов в основном ваша аудитория?',
-  deals_contact: 'С кем лучше обсуждать размещения — с вами напрямую или есть менеджер?',
-};
-
 const CLOSING_REPLY = 'Спасибо, всё собрал! Вернусь с конкретикой по клиенту.';
 
+/**
+ * Deterministic Russian question for a target. Used when the planner overrides
+ * the LLM's `next_data_point` (because the model picked a collected/wrong
+ * field) so the returned `reply` can't keep asking about the wrong point.
+ * Reads from the shared `data-collection-targets` registry — there is one
+ * place to edit a label or question. Unknown keys get a generic,
+ * point-aware fallback (defensive — every key we ship is in the registry).
+ */
 function questionFor(point: string): string {
   return (
-    QUESTION_TEMPLATES[point] ??
+    getTarget(point)?.question_template ??
     `Подскажите, пожалуйста, по пункту «${point}» — что можете рассказать?`
   );
 }
@@ -148,6 +150,7 @@ export const dataCollectionPlanner: Agent<
       // Goal satisfied: the structural truth is deterministic. The LLM may
       // still emit a reply that re-asks a collected point, so replace it with
       // a deterministic closing line — never pass the model copy verbatim.
+      // `target_field` is intentionally omitted on closing.
       return {
         reply: CLOSING_REPLY,
         goal_satisfied: true,
@@ -171,6 +174,9 @@ export const dataCollectionPlanner: Agent<
 
     return {
       next_data_point: nextPoint,
+      // Mirror the chosen point so downstream (worker → Suggestion.meta.targetField)
+      // can tag the HUD without re-deriving from `next_data_point`.
+      target_field: nextPoint,
       reply,
       goal_satisfied: false,
       rationale: out.rationale,

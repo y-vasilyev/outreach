@@ -3,6 +3,7 @@ import { getRedis } from '../redis.js';
 import {
   AgentRunJobZ,
   QueueNames,
+  buildHudTargetRow,
   extractAgencyClientBrief,
   extractAjtbdView,
   isWithinSchedule,
@@ -10,6 +11,10 @@ import {
   MIN_SPONSORED_CONFIDENCE,
   resolveForceHandoffIntents,
   resolveAgentName,
+  resolveEffectiveHudTargets,
+  resolveEffectivePlannerTargets,
+  getTarget,
+  profileFieldMatchesTarget,
   type CampaignAjtbd,
   type CampaignSchedule,
 } from '@nosquare/shared';
@@ -270,19 +275,19 @@ async function handoffOnAgencyDisabled(
 
 interface DataCollectionPlannerOut {
   next_data_point?: string;
+  target_field?: string;
   reply: string;
   goal_satisfied: boolean;
   rationale: string;
 }
 
-// Default agency data points to harvest when a campaign's goal doesn't
-// declare its own `target_data_points`. `deals_contact` was removed
-// (harden-agency-sourcing-pipeline) because no extractor currently writes
-// a `contact.*`-shaped ProfileDataPoint — leaving it in the defaults made
-// the planner re-ask the same question forever. Operators may still set
-// it explicitly via `goal.target_data_points`; the planner then asks the
-// question (documented limitation: no automated capture path yet).
-const AGENCY_DEFAULT_TARGETS = ['rate_card', 'reach', 'audience_demographics', 'geo'];
+// Default agency data points + their match keys come from the shared
+// `data-collection-targets` registry (data-collection-hud-target-fields
+// change). `resolveEffectivePlannerTargets` excludes `manual_only` entries
+// like `deals_contact` so the planner never asks a question whose answer
+// no extractor can verify — what previously sat in the local
+// `AGENCY_DEFAULT_TARGETS` constant + the `deals_contact` exclusion is now
+// declared once in the registry.
 
 /**
  * Build the `campaign_type` block fed into `GoalFitEvaluator`. Returns
@@ -293,12 +298,20 @@ const AGENCY_DEFAULT_TARGETS = ['rate_card', 'reach', 'audience_demographics', '
  * details), not with the CustDev "ad-sales drift" anti-pattern.
  */
 function buildGoalFitCampaignType(
-  campaign: { goal?: unknown; type?: { key?: string | null } | null } | null | undefined,
+  campaign:
+    | { goal?: unknown; type?: { key?: string | null } | null }
+    | null
+    | undefined,
 ):
   | {
       key: string;
       goalIntent?: string;
       target_data_points?: string[];
+      target_descriptions?: Array<{
+        key: string;
+        label: string;
+        description_for_agent: string;
+      }>;
     }
   | undefined {
   const key = campaign?.type?.key ?? null;
@@ -309,54 +322,59 @@ function buildGoalFitCampaignType(
       : key === 'agency_sourcing'
         ? 'collect_commercial_data'
         : undefined;
+  // Same planner-target list the planner itself sees — gate vocabulary
+  // stays aligned with what the bot actually asks. Manual-only entries
+  // are excluded so the gate doesn't score a stall on an unfillable
+  // field.
+  const plannerTargets =
+    key === 'agency_sourcing'
+      ? resolveEffectivePlannerTargets(campaign ?? null)
+      : [];
   const targetDataPoints =
-    key === 'agency_sourcing' ? agencyTargets(campaign?.goal) : undefined;
+    plannerTargets.length > 0 ? plannerTargets.map((t) => t.key) : undefined;
+  const targetDescriptions =
+    plannerTargets.length > 0
+      ? plannerTargets.map((t) => ({
+          key: t.key,
+          label: t.label,
+          description_for_agent: t.description_for_agent,
+        }))
+      : undefined;
   return {
     key,
     ...(goalIntent ? { goalIntent } : {}),
     ...(targetDataPoints ? { target_data_points: targetDataPoints } : {}),
+    ...(targetDescriptions ? { target_descriptions: targetDescriptions } : {}),
   };
 }
 
-/** Read `target_data_points` from an agency campaign's goal, else the default set. */
-function agencyTargets(goal: unknown): string[] {
-  if (goal && typeof goal === 'object') {
-    const t = (goal as { target_data_points?: unknown }).target_data_points;
-    if (Array.isArray(t)) {
-      const arr = t.filter((x): x is string => typeof x === 'string' && x.length > 0);
-      if (arr.length > 0) return arr;
-    }
-  }
-  return AGENCY_DEFAULT_TARGETS;
+/**
+ * Effective planner targets for an agency campaign as plain string keys,
+ * resolved via the shared registry. Reads `campaign.goal.target_data_points`
+ * if set; falls back to the agency default set; drops unknown / manual_only.
+ */
+function agencyPlannerTargetKeys(
+  campaign: { goal?: unknown } | null | undefined,
+): string[] {
+  return resolveEffectivePlannerTargets(campaign ?? null, (unknownKey) =>
+    logger.warn(
+      { event: 'data_collection.unknown_target_key', key: unknownKey },
+      'campaign.goal.target_data_points referenced an unknown key; dropping',
+    ),
+  ).map((t) => t.key);
 }
 
-// Map a target key to the EXACT ProfileDataPoint fields that satisfy it
-// (harden-agency-sourcing-pipeline). The previous keyword-substring map
-// was too permissive: `audience` matched any `audience.*` so capturing
-// only geo flagged demographics as collected. Now `audience_demographics`
-// is the gender+age slice, `geo` is geo only, and `audience` is the union.
-// `rate_card` matches `rate.<format>`; `reach` matches `reach`/`reach.*`/
-// `views.*`.
-const TARGET_FIELD_KEYWORDS: Record<string, string[]> = {
-  rate_card: ['rate'],
-  reach: ['reach', 'views'],
-  audience_demographics: ['audience.age', 'audience.gender'],
-  geo: ['audience.geo'],
-  audience: ['audience.age', 'audience.gender', 'audience.geo'],
-};
-
 /**
- * `field` satisfies `target` when it EXACTLY matches one of the keys or
- * is a dotted sub-key of one (e.g. `rate.post` for `rate`). No substring
- * fallback — that's what mis-attributed `audience.geo` to
- * `audience_demographics` before.
+ * `target` is satisfied when any of the channel's `ProfileDataPoint` fields
+ * exact-or-dotted-matches the registry entry's `profile_data_point_keys[]`.
+ * Unknown targets (defensive — should never happen after the planner-key
+ * resolver above) count as unsatisfied so the planner stops asking instead
+ * of looping.
  */
 function targetCollected(target: string, fields: string[]): boolean {
-  const kws = TARGET_FIELD_KEYWORDS[target] ?? [target];
-  return fields.some((f) => {
-    const lf = f.toLowerCase();
-    return kws.some((k) => lf === k || lf.startsWith(`${k}.`));
-  });
+  const entry = getTarget(target);
+  if (!entry) return false;
+  return fields.some((f) => profileFieldMatchesTarget(f, entry));
 }
 
 /**
@@ -383,6 +401,68 @@ async function collectedAgencyTargets(
 // queue still exists for on-demand re-runs (manual operator action) and
 // is served by `apps/workers/src/queues/profile-extract.ts` worker — we
 // just no longer fan out from the inbound hot path.
+
+/**
+ * After creating a `Suggestion` with `meta.targetField` set, emit one
+ * `dataCollectionUpdated` event so the inbox right panel flips the
+ * matching target to `asked` (or keeps it `answered`/`stale` if a
+ * contributing data point already exists). Reused across the inbound
+ * pipeline's suggestion-create site (data-collection-hud-target-fields
+ * change, Phase 1).
+ */
+async function emitDataCollectionUpdatesForSuggestion(opts: {
+  conversationId: string;
+  channelId: string | null | undefined;
+  campaign:
+    | { goal?: unknown; type?: { key?: string | null } | null }
+    | null
+    | undefined;
+  targetField: string;
+  askedAt: Date;
+}): Promise<void> {
+  const targets = resolveEffectiveHudTargets(opts.campaign ?? null);
+  const target = targets.find((t) => t.key === opts.targetField);
+  if (!target) return;
+
+  const prisma = getPrisma();
+  let dataPoints: Array<{
+    field: string;
+    value: unknown;
+    capturedAt: Date | null;
+    sourceMessageId: string | null;
+  }> = [];
+  if (opts.channelId) {
+    const profile = await prisma.bloggerProfile.findUnique({
+      where: { channelId: opts.channelId },
+      select: {
+        dataPoints: {
+          select: { field: true, value: true, capturedAt: true, sourceMessageId: true },
+        },
+      },
+    });
+    if (profile) {
+      dataPoints = profile.dataPoints.map((dp) => ({
+        field: dp.field,
+        value: dp.value,
+        capturedAt: dp.capturedAt,
+        sourceMessageId: dp.sourceMessageId,
+      }));
+    }
+  }
+
+  // For the suggestion's target, `askedAt` is the just-created
+  // suggestion's timestamp — newer than anything else in the conversation.
+  const row = buildHudTargetRow(target, dataPoints, opts.askedAt);
+  await publishRealtime(`conversation:${opts.conversationId}`, {
+    type: 'data_collection.updated',
+    conversationId: opts.conversationId,
+    targetKey: target.key,
+    state: row.state,
+    ...(row.current ? { current: row.current } : {}),
+    ...(row.freshness ? { freshness: row.freshness } : {}),
+    ...(row.lastAskedAt ? { lastAskedAt: row.lastAskedAt } : {}),
+  });
+}
 
 /**
  * `on_inbound` pipeline body, exported for unit-testing the silent
@@ -598,8 +678,13 @@ export async function handleOnInbound(data: { conversationId?: string }): Promis
           // gate / auto-approve path below. CustDev / flag-off uses
           // reply_composer exactly as before.
           let reply: ReplyComposerOut | null;
+          // The planner's `target_field` is the registry key the next
+          // question targets. We attach it to the resulting `Suggestion.meta`
+          // so the data-collection HUD can mark the field `asked` even
+          // before any answer arrives. Empty for CustDev / non-agency.
+          let plannerTargetField: string | null = null;
           if (isAgencyConversation(conv.campaign)) {
-            const targets = agencyTargets(conv.campaign?.goal);
+            const targets = agencyPlannerTargetKeys(conv.campaign);
             const collected = await collectedAgencyTargets(conv.contact.channelId, targets);
             const planner = await runAgentSafe<DataCollectionPlannerOut>(
               'data_collection_planner',
@@ -614,6 +699,7 @@ export async function handleOnInbound(data: { conversationId?: string }): Promis
             if (!planner) {
               return { ok: true, degraded: 'data_collection_planner_failed', action: handoff.action };
             }
+            if (planner.target_field) plannerTargetField = planner.target_field;
             reply = {
               variants: [
                 {
@@ -697,6 +783,9 @@ export async function handleOnInbound(data: { conversationId?: string }): Promis
                 agentName: 'reply_composer',
                 text: v.text,
                 rationale: v.rationale,
+                ...(plannerTargetField
+                  ? { meta: { targetField: plannerTargetField } }
+                  : {}),
                 score,
                 status: 'pending',
               },
@@ -714,6 +803,27 @@ export async function handleOnInbound(data: { conversationId?: string }): Promis
                 createdAt: sug.createdAt.toISOString(),
               },
             });
+            // Data-collection HUD: when this suggestion targets a HUD field
+            // (agency path only), emit one event so the inbox right panel
+            // marks the field `asked` without re-fetching the HUD.
+            // Flag-gated; non-fatal on emit failure.
+            if (
+              plannerTargetField &&
+              getFeatureFlags().get('data_collection_hud')
+            ) {
+              await emitDataCollectionUpdatesForSuggestion({
+                conversationId: conv.id,
+                channelId: conv.contact.channelId,
+                campaign: conv.campaign,
+                targetField: plannerTargetField,
+                askedAt: sug.createdAt,
+              }).catch((err) =>
+                logger.warn(
+                  { conversationId: conv.id, err: (err as Error).message },
+                  'data_collection.updated emit failed for suggestion (non-fatal)',
+                ),
+              );
+            }
             if (score > bestScore) {
               bestScore = score;
               bestSuggestionId = sug.id;

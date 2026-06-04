@@ -59,6 +59,22 @@ export const goalFitEvaluatorInputSchema = z.object({
       key: z.string().min(1),
       goalIntent: z.string().optional(),
       target_data_points: z.array(z.string()).optional(),
+      /**
+       * Per-target vocabulary, rendered from the shared
+       * `data-collection-targets` registry so the gate sees the same
+       * labels + agent-facing descriptions the planner uses. Optional
+       * for back-compat: when absent the fallback paragraph in the
+       * system prompt still gives the gate enough context.
+       */
+      target_descriptions: z
+        .array(
+          z.object({
+            key: z.string().min(1),
+            label: z.string().min(1),
+            description_for_agent: z.string().min(1),
+          }),
+        )
+        .optional(),
       allowed_topics: z.array(z.string()).optional(),
     })
     .optional(),
@@ -97,8 +113,8 @@ const FALLBACK_SYSTEM = `Ты оцениваешь, насколько акти�
   continue — идёт к интервью / даёт исследовательский материал. soften — лёгкий дрейф в продуктовый питч. handoff_silent — собеседник принял за рекламу/просит прайс/обсуждает оплату.
 
 — Агентский (campaign_type.key="agency_sourcing" или goalIntent="collect_commercial_data"):
-  Цель — собрать у блогера ПРАЙС, охваты/просмотры, демографию аудитории, гео, контакт для сделок (см. campaign_type.target_data_points).
-  On-goal: блогер делится прайсом/охватами/аудиторией; уточняет форматы.
+  Цель — собрать у блогера данные, перечисленные в campaign_type.target_data_points; описания в campaign_type.target_descriptions[].description_for_agent (если переданы — это словарь, с которым работает планировщик).
+  On-goal: блогер делится одним из перечисленных пунктов; уточняет форматы.
   Non-goals: оператор обещает гарантии результата, выдумывает детали клиента, переводит/просит деньги до подтверждения, обещает условия до согласования. Сам блогер ушёл в нерелевантную тему.
   continue — двигаемся к одному из target_data_points. soften — оператор начинает обещать или уходит в продажу. handoff_silent — есть прямой коммит цены/денег/гарантий ИЛИ блогер требует немедленного согласования сделки.
 

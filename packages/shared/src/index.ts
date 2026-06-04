@@ -11,6 +11,7 @@ export * from './agency-detection.js';
 export * from './agency.js';
 export * from './profile-rollup.js';
 export * from './profile-staleness.js';
+export * from './data-collection-targets.js';
 export * from './matching.js';
 export * from './capability-map.js';
 export * from './schemas/campaign-type-builder.js';

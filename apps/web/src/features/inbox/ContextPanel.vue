@@ -4,6 +4,7 @@ import Avatar from '../../components/Avatar.vue';
 import Pill from '../../components/Pill.vue';
 import Icon from '../../components/Icon.vue';
 import KeyValue, { type KvItem } from '../../components/KeyValue.vue';
+import DataCollectionPanel from './DataCollectionPanel.vue';
 import { formatRelative, initials, formatNumber } from '../../lib/format';
 import { avatarColor } from '../../lib/state';
 import type { ConversationDetail, Suggestion, ConversationChannel } from './types';
@@ -139,6 +140,16 @@ const traceItems = computed(() => {
       <span style="font-weight: 600; font-size: 12px;">Контекст</span>
       <div style="flex: 1;" />
       <button class="btn ghost icon-only sm" @click="emit('close')"><Icon name="x" :size="12" /></button>
+    </div>
+
+    <!--
+      Agency-sourcing data-collection HUD (data-collection-hud-target-fields
+      change, Phase 1). Renders nothing when the `data_collection_hud`
+      runtime flag is off — the endpoint 404s and the panel hides itself,
+      so the legacy ContextPanel layout below is preserved.
+    -->
+    <div style="padding: 12px 14px 0;">
+      <DataCollectionPanel :conversation-id="conversation.id" />
     </div>
 
     <div v-if="channel" style="padding: 12px 14px; border-bottom: 1px solid var(--line);">

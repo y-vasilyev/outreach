@@ -124,6 +124,7 @@ function setAgentResponses(): void {
         return {
           reply: 'Какие у вас охваты на пост и сторис?',
           next_data_point: 'reach',
+          target_field: 'reach',
           goal_satisfied: false,
           rationale: 'спрашиваем reach',
         };
@@ -196,10 +197,16 @@ describe('handleOnInbound — agency routing (B2 + harden)', () => {
     });
     // Agency path does NOT call reply_composer.
     expect(mocks.runAgentSafe.mock.calls.find((c) => c[0] === 'reply_composer')).toBeUndefined();
-    // The planner's reply is turned into a suggestion.
+    // The planner's reply is turned into a suggestion AND tagged with the
+    // registry target key so the data-collection HUD can mark `reach`
+    // `asked` even before the blogger replies (data-collection-hud-target-
+    // fields change).
     expect(mocks.prisma.suggestion.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ text: 'Какие у вас охваты на пост и сторис?' }),
+        data: expect.objectContaining({
+          text: 'Какие у вас охваты на пост и сторис?',
+          meta: { targetField: 'reach' },
+        }),
       }),
     );
   });

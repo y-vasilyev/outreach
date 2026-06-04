@@ -6,6 +6,22 @@ All operator-visible changes worth noting between releases.
 
 ### Added
 
+- **Inbox — data-collection HUD (behind `data_collection_hud` flag)** —
+  a new right-panel section in the conversation view for `agency_sourcing`
+  campaigns shows per-target state (`answered` / `asked` / `missing` /
+  `stale`) live: which commercial data points the bot has already
+  captured, which it asked about with no answer yet, and which contributing
+  facts have gone past their freshness TTL. Each row carries a source
+  link that scrolls the inbox to the originating message, a freshness
+  pill, and a "Задать вопрос" shortcut on `missing`/`stale` rows that
+  pre-fills the composer from the field's operator description. Backed
+  by the new typed target-field registry in `packages/shared/src/
+  data-collection-targets.ts` — single source of truth shared by the
+  planner, the HUD, and the gate prompt. Default OFF; flip
+  `data_collection_hud` from Settings → Features once the feature is
+  validated in staging. See openspec change
+  `data-collection-hud-target-fields`.
+
 - **Agency sourcing — sponsored-integration detector** — a new
   LLM-classifier agent (`sponsored_integration_detector`) is now the
   ONLY source for `observed_integrations` fed into the agency opener

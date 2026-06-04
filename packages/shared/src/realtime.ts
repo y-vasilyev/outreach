@@ -141,6 +141,33 @@ export interface QualityGateEvent {
   decidedAt: string;
 }
 
+/**
+ * Emitted by workers (`profile-extract`, `agent-run`) after a
+ * `ProfileDataPoint` write or a `Suggestion` create whose
+ * `meta.targetField` is set. The web inbox right panel patches its
+ * local data-collection HUD state without re-fetching. Routing is the
+ * conversation's existing realtime room. Delivery is gated by the
+ * `data_collection_hud` runtime flag — emitters early-return when off,
+ * so consumers MUST tolerate gaps.
+ */
+export interface DataCollectionUpdatedEvent {
+  type: 'data_collection.updated';
+  conversationId: string;
+  targetKey: string;
+  state: 'answered' | 'asked' | 'missing' | 'stale';
+  current?: {
+    value: unknown;
+    capturedAt: string;
+    sourceMessageId?: string;
+    sourceField: string;
+  };
+  freshness?: {
+    stale: boolean;
+    ageDays: number | null;
+  };
+  lastAskedAt?: string;
+}
+
 export type RealtimeEvent =
   | MessageEvent
   | SuggestionEvent
@@ -152,4 +179,5 @@ export type RealtimeEvent =
   | DashboardEvent
   | OperatorAssignmentEvent
   | AgentFailedEvent
-  | QualityGateEvent;
+  | QualityGateEvent
+  | DataCollectionUpdatedEvent;

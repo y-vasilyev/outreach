@@ -31,6 +31,7 @@ export const FEATURE_FLAG_DEFAULTS = {
   object_storage: false,
   blogger_matching: false,
   channel_discovery: false,
+  data_collection_hud: false,
 } as const;
 
 export type FeatureFlagKey = keyof typeof FEATURE_FLAG_DEFAULTS;

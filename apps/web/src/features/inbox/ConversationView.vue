@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import Avatar from '../../components/Avatar.vue';
 import Tag from '../../components/Tag.vue';
@@ -275,6 +275,22 @@ useRoom(() => room.value, 'suggestion.approved', () => {
   qc.invalidateQueries({ queryKey: ['conversation-suggestions', cId.value] });
   qc.invalidateQueries({ queryKey: ['conversation-messages', cId.value] });
 });
+
+// Cross-component bus for the data-collection HUD (data-collection-
+// hud-target-fields change, Phase 1): the right-panel emits an
+// `inbox:draft-request` CustomEvent when the operator clicks "Задать
+// вопрос" on a missing/stale field, and the composer fills its draft
+// from the registry's `description_for_operator`.
+function onDraftRequest(ev: Event): void {
+  const detail = (ev as CustomEvent<{ conversationId?: string; text?: string }>).detail;
+  if (!detail) return;
+  if (detail.conversationId && detail.conversationId !== cId.value) return;
+  if (typeof detail.text === 'string' && detail.text.length > 0) {
+    draft.value = detail.text;
+  }
+}
+onMounted(() => window.addEventListener('inbox:draft-request', onDraftRequest));
+onBeforeUnmount(() => window.removeEventListener('inbox:draft-request', onDraftRequest));
 </script>
 
 <template>

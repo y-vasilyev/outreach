@@ -1,16 +1,22 @@
 import { Worker } from 'bullmq';
 import { getRedis } from '../redis.js';
 import {
+  buildHudTargetRow,
+  getSuggestionTargetField,
   preGateExtraction,
   ProfileExtractJobZ,
   QueueNames,
+  resolveEffectiveHudTargets,
   rollUpProfileFields,
+  targetsForProfileField,
+  type DataCollectionTarget,
   type ProfileDataPointDraft,
   type RollupDataPoint,
 } from '@nosquare/shared';
 import { getPrisma, Prisma } from '@nosquare/db';
 import { getFeatureFlags } from '../feature-flags.js';
 import { logger } from '../logger.js';
+import { publishRealtime } from '../services/realtime-emit.js';
 import { runAgentSafe } from '../services/run-agent-safe.js';
 import { snapshotRawPayload } from '../services/media-store.js';
 
@@ -41,7 +47,14 @@ export async function handleProfileExtract(data: {
 
   const conv = await prisma.conversation.findUnique({
     where: { id: data.conversationId },
-    include: { contact: { include: { channel: true } } },
+    include: {
+      contact: { include: { channel: true } },
+      // Needed for the data-collection HUD realtime emit (data-collection-
+      // hud-target-fields change, Phase 1) — campaign.goal drives the
+      // effective target list, campaign.type.key is included in payloads
+      // downstream. Cheap join (one row).
+      campaign: { select: { goal: true, type: { select: { key: true } } } },
+    },
   });
   if (!conv) throw new Error('conversation not found');
 
@@ -302,7 +315,105 @@ export async function handleProfileExtract(data: {
     'blogger profile data points persisted + rolled up',
   );
 
+  // Data-collection HUD realtime patch (data-collection-hud-target-fields
+  // change, Phase 1). One event per effective target the just-written
+  // drafts touch. Flag-gated so flag-off behavior matches today exactly.
+  // Fire-and-forget — failures here never mask extraction success.
+  if (getFeatureFlags().get('data_collection_hud')) {
+    await emitDataCollectionUpdatesForExtraction({
+      conversationId: conv.id,
+      profileId: result.profileId,
+      campaign: conv.campaign,
+      writtenFields: drafts.map((d) => d.draft.field),
+    }).catch((err) =>
+      logger.warn(
+        { conversationId: conv.id, err: (err as Error).message },
+        'data_collection.updated emit failed (non-fatal)',
+      ),
+    );
+  }
+
   return { ok: true, ...result };
+}
+
+/**
+ * After a successful `ProfileDataPoint` write, emit one
+ * `dataCollectionUpdated` event per effective target whose match keys the
+ * write touched. Reads the conversation's full data-point set + the
+ * latest `meta.targetField` per target from existing suggestions so the
+ * payload reflects the post-write state — the web client patches in place
+ * without re-fetching the HUD.
+ */
+async function emitDataCollectionUpdatesForExtraction(opts: {
+  conversationId: string;
+  profileId: string;
+  campaign: { goal?: unknown; type?: { key?: string | null } | null } | null | undefined;
+  writtenFields: string[];
+}): Promise<void> {
+  const targets = resolveEffectiveHudTargets(opts.campaign ?? null);
+  if (targets.length === 0) return;
+
+  // Affected targets = those whose match keys catch ANY of the just-written
+  // fields. Dedup per target.key. Skip manual_only — extractor writes
+  // never satisfy a manual target.
+  const affected = new Map<string, DataCollectionTarget>();
+  for (const field of opts.writtenFields) {
+    for (const t of targetsForProfileField(field)) {
+      if (t.manual_only) continue;
+      // Only emit for targets the conversation's campaign actually surfaces.
+      if (!targets.find((eff) => eff.key === t.key)) continue;
+      affected.set(t.key, t);
+    }
+  }
+  if (affected.size === 0) return;
+
+  const prisma = getPrisma();
+  // Load the full profile + suggestion target-field history once.
+  const [profile, suggestions] = await Promise.all([
+    prisma.bloggerProfile.findUnique({
+      where: { id: opts.profileId },
+      select: {
+        dataPoints: {
+          select: { field: true, value: true, capturedAt: true, sourceMessageId: true },
+        },
+      },
+    }),
+    prisma.suggestion.findMany({
+      where: { conversationId: opts.conversationId },
+      select: { meta: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    }),
+  ]);
+  const dataPoints = (profile?.dataPoints ?? []).map((dp) => ({
+    field: dp.field,
+    value: dp.value,
+    capturedAt: dp.capturedAt,
+    sourceMessageId: dp.sourceMessageId,
+  }));
+  const lastAskedByTarget = new Map<string, Date>();
+  for (const sug of suggestions) {
+    const tf = getSuggestionTargetField(sug);
+    if (!tf) continue;
+    if (lastAskedByTarget.has(tf)) continue;
+    lastAskedByTarget.set(tf, sug.createdAt);
+  }
+
+  for (const target of affected.values()) {
+    const row = buildHudTargetRow(
+      target,
+      dataPoints,
+      lastAskedByTarget.get(target.key) ?? null,
+    );
+    await publishRealtime(`conversation:${opts.conversationId}`, {
+      type: 'data_collection.updated',
+      conversationId: opts.conversationId,
+      targetKey: target.key,
+      state: row.state,
+      ...(row.current ? { current: row.current } : {}),
+      ...(row.freshness ? { freshness: row.freshness } : {}),
+      ...(row.lastAskedAt ? { lastAskedAt: row.lastAskedAt } : {}),
+    });
+  }
 }
 
 export function startProfileExtractWorker() {

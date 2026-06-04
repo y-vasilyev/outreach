@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { ConversationFiltersZ, SendMessageInputZ } from '@nosquare/shared';
 import { conversationsService } from '../services/conversations.js';
 import { syncOneWithBudget } from '../services/conversation-sync.js';
+import { dataCollectionHudService } from '../services/data-collection-hud.js';
+import { requireFeature } from '../require-feature.js';
 
 export async function conversationsRoutes(app: FastifyInstance) {
   app.addHook('onRequest', app.authenticate);
@@ -107,4 +109,23 @@ export async function conversationsRoutes(app: FastifyInstance) {
     const params = z.object({ id: z.string() }).parse(req.params);
     return conversationsService.regenerateSuggestions(params.id);
   });
+
+  /**
+   * Data-collection HUD (data-collection-hud-target-fields change, Phase 1).
+   * Returns per-target state for the inbox right panel. 404 when the
+   * `data_collection_hud` runtime flag is off.
+   */
+  app.get(
+    '/conversations/:id/data-collection',
+    {
+      preHandler: [
+        requireFeature('data_collection_hud'),
+        app.requireRole(['admin', 'operator', 'viewer']),
+      ],
+    },
+    async (req) => {
+      const params = z.object({ id: z.string() }).parse(req.params);
+      return dataCollectionHudService.get(params.id);
+    },
+  );
 }

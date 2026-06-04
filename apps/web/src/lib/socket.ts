@@ -102,6 +102,26 @@ export interface RealtimeEvents {
     reasons: string[];
     decidedAt: string;
   };
+  /**
+   * Per-target patch for the inbox data-collection HUD (data-collection-
+   * hud-target-fields change, Phase 1). One event per affected registry
+   * key after a ProfileDataPoint write or a Suggestion create whose
+   * meta.targetField is set. Delivery is gated by the `data_collection_hud`
+   * runtime flag — the panel must tolerate gaps and fall back to a poll.
+   */
+  'data_collection.updated': {
+    conversationId: string;
+    targetKey: string;
+    state: 'answered' | 'asked' | 'missing' | 'stale';
+    current?: {
+      value: unknown;
+      capturedAt: string;
+      sourceMessageId?: string;
+      sourceField: string;
+    };
+    freshness?: { stale: boolean; ageDays: number | null };
+    lastAskedAt?: string;
+  };
 }
 
 export function useRoom<E extends keyof RealtimeEvents>(

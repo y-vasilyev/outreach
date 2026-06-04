@@ -64,7 +64,12 @@ const attachmentMetaColor = computed(() => (isOut.value ? 'var(--paper-3, rgba(2
 </script>
 
 <template>
-  <div :style="{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start', marginBottom: '14px' }">
+  <!--
+    `data-msg-id` is the scroll target used by the inbox data-collection
+    HUD (data-collection-hud-target-fields change, Phase 1) — clicking a
+    target's source link jumps to the bubble that originated the fact.
+  -->
+  <div :data-msg-id="msg.id" :style="{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start', marginBottom: '14px' }">
     <div style="max-width: 520px; min-width: 0;">
       <div :style="bubbleStyle">
         <div

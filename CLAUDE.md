@@ -37,6 +37,7 @@ pnpm db:reset                   # drop + migrate + seed (только dev!)
 | Новая платформа (TikTok, X) | `packages/platforms/src/<name>/Adapter.ts` имплементит `PlatformAdapter` + регистрация |
 | Новый ScrapeCreators-метод | `packages/platforms/src/scrapecreators/Client.ts` |
 | Дискавери публичных каналов | `packages/platforms/src/discovery/` (Yandex Search) + `apps/api/src/services/discovery.ts` + роут `POST /discovery/search` (за флагом `channel_discovery`; только публичные страницы и явно указанные business/ad contacts) |
+| Поля сбора данных для agency_sourcing (метки, описания для оператора и агента, шаблоны вопросов, freshness-секции, маппинг на `ProfileDataPoint.field`) | `packages/shared/src/data-collection-targets.ts` — единый источник для `DataCollectionPlanner`, HUD `GET /conversations/:id/data-collection`, и `GoalFitEvaluator`. HUD за флагом `data_collection_hud`. |
 | Новый TG-метод | `packages/tg-client/src/methods/` — типизированный DTO, не сырые `Api.*` |
 | Поменять схему БД | `packages/db/prisma/schema.prisma` → `pnpm db:migrate` |
 | Новая фоновая задача | `apps/workers/src/queues/` |

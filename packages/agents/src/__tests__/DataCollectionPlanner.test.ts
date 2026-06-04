@@ -37,6 +37,9 @@ describe('data_collection_planner', () => {
     );
     expect(out.goal_satisfied).toBe(false);
     expect(out.next_data_point).toBe('audience_demographics');
+    // Phase 1: the planner mirrors next_data_point as target_field so the
+    // worker can tag Suggestion.meta.targetField without re-deriving.
+    expect(out.target_field).toBe('audience_demographics');
     // The collected point must NOT be in the missing list fed to the LLM.
     expect(captured).not.toContain('"missing_data_points":["rate_card"');
     expect(captured).toContain('audience_demographics');
@@ -65,6 +68,8 @@ describe('data_collection_planner', () => {
     // rate_card is collected → planner overrides to the first missing one.
     expect(out.next_data_point).not.toBe('rate_card');
     expect(['audience_demographics', 'geo', 'deals_contact']).toContain(out.next_data_point);
+    // target_field tracks the corrected pick (NOT the LLM's wrong key).
+    expect(out.target_field).toBe(out.next_data_point);
     // The reply must NOT keep asking about the (collected) wrong point — the
     // planner substitutes a deterministic question for the corrected field.
     expect(out.reply).not.toMatch(/стоит пост/i);
@@ -93,6 +98,8 @@ describe('data_collection_planner', () => {
     );
     expect(out.goal_satisfied).toBe(true);
     expect(out.next_data_point).toBeUndefined();
+    // Closing path omits target_field — no question is being asked.
+    expect(out.target_field).toBeUndefined();
     expect(out.reply.length).toBeGreaterThan(0);
   });
 
