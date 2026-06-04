@@ -78,25 +78,29 @@ function questionFor(point: string): string {
   );
 }
 
-const FALLBACK_SYSTEM = `Ты ведёшь диалог от лица агентства и собираешь у блогера коммерческие данные: прайс по форматам, охваты/просмотры, демографию аудитории, гео, контакт для сделок.
+const FALLBACK_SYSTEM = `Ты ведёшь диалог от лица агентства и собираешь у блогера коммерческие данные. Полный словарь целей — в targets_meta: каждая запись содержит \`key\`, \`description_for_agent\` (что именно спрашивать) и \`question_template\` (готовая формулировка вопроса).
 
 Тебе дают:
-- target_data_points — что нужно собрать всего;
+- target_data_points — что нужно собрать всего (ключи);
 - missing_data_points — что ещё НЕ собрано (спрашивай только это);
+- targets_meta — словарь по ключам с описанием и шаблоном вопроса;
 - историю и последнее входящее.
 
 ПРАВИЛА:
 - Спрашивай РОВНО ОДИН недостающий пункт за ход (next_data_point). Не задавай несколько вопросов сразу.
+- За основу следующей реплики возьми \`question_template\` нужного пункта из targets_meta и подстрой её под последнее входящее естественно. Не выдумывай вопрос с нуля — администратор управляет формулировкой через targets_meta.
 - НИКОГДА не переспрашивай то, что уже собрано.
 - Если missing_data_points пуст — ничего не спрашивай: напиши короткое благодарственное/закрывающее сообщение и поставь goal_satisfied=true, next_data_point не указывай.
 - Тон деловой и живой. Без давления, без гарантий результата, без платёжных ссылок.
-- Естественно подхвати последнее входящее, потом задай следующий вопрос.
 
-Возвращай JSON: { next_data_point?, reply, goal_satisfied, rationale }.`;
+Возвращай JSON: { next_data_point?, target_field?, reply, goal_satisfied, rationale }. \`target_field\` равен выбранному ключу (или опущен на закрытии).`;
 
 const FALLBACK_USER = `Все целевые данные (target_data_points): {{target_data_points}}
 Уже собрано: {{collected_data_points}}
 Ещё НЕ собрано (спрашивай только это): {{missing_data_points}}
+
+Словарь целей (targets_meta):
+{{targets_meta}}
 
 История:
 {{history_tail}}
@@ -118,6 +122,7 @@ export const dataCollectionPlanner: Agent<
     'target_data_points',
     'collected_data_points',
     'missing_data_points',
+    'targets_meta',
     'history_tail',
     'last_inbound',
   ],
@@ -132,12 +137,26 @@ export const dataCollectionPlanner: Agent<
     // structural decision, but we still let the model phrase a natural
     // closing. To keep cost down and the goal-satisfied signal authoritative,
     // we ask the LLM for the closing copy and override the structural fields.
+    // Render the registry slice for the targets in play so the LLM sees
+    // the operator-tunable `description_for_agent` + `question_template`.
+    // Editing those in the registry now changes the next planner question
+    // on the happy path, not just the deterministic-override fallback.
+    const targets_meta = input.target_data_points
+      .map((k) => getTarget(k))
+      .filter((t): t is NonNullable<ReturnType<typeof getTarget>> => !!t)
+      .map((t) => ({
+        key: t.key,
+        description_for_agent: t.description_for_agent,
+        question_template: t.question_template,
+      }));
+
     const out = await invokeJson({
       ctx,
       vars: {
         target_data_points: input.target_data_points,
         collected_data_points: input.collected_data_points,
         missing_data_points: missing,
+        targets_meta,
         history_tail: input.history_tail.join('\n'),
         last_inbound: input.last_inbound,
       },

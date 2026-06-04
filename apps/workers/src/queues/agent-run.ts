@@ -6,6 +6,7 @@ import {
   buildHudTargetRow,
   extractAgencyClientBrief,
   extractAjtbdView,
+  findUsableMatchingPoints,
   isWithinSchedule,
   buildSafetyInput,
   MIN_SPONSORED_CONFIDENCE,
@@ -14,7 +15,6 @@ import {
   resolveEffectiveHudTargets,
   resolveEffectivePlannerTargets,
   getTarget,
-  profileFieldMatchesTarget,
   type CampaignAjtbd,
   type CampaignSchedule,
 } from '@nosquare/shared';
@@ -365,22 +365,40 @@ function agencyPlannerTargetKeys(
 }
 
 /**
- * `target` is satisfied when any of the channel's `ProfileDataPoint` fields
- * exact-or-dotted-matches the registry entry's `profile_data_point_keys[]`.
+ * `target` is satisfied when at least one of the channel's
+ * `ProfileDataPoint`s is BOTH a name-match for the registry entry's
+ * `profile_data_point_keys[]` AND a usable contributing value per
+ * `findUsableMatchingPoints` (numeric for rate/reach/avgViews,
+ * non-empty share record for audience, non-empty string list for
+ * topics/languages/formats). This is what the rollup actually treats
+ * as "have the fact" — keying the planner off raw name presence let
+ * a stray `rate.post = "договорная"` or empty `audience.geo = {}`
+ * close out a target the operator still needs answered.
+ *
  * Unknown targets (defensive — should never happen after the planner-key
- * resolver above) count as unsatisfied so the planner stops asking instead
- * of looping.
+ * resolver above) count as unsatisfied so the planner stops asking
+ * instead of looping.
  */
-function targetCollected(target: string, fields: string[]): boolean {
+function targetCollected(
+  target: string,
+  dataPoints: Array<{ field: string; value: unknown }>,
+): boolean {
   const entry = getTarget(target);
   if (!entry) return false;
-  return fields.some((f) => profileFieldMatchesTarget(f, entry));
+  // `findUsableMatchingPoints` accepts the HUD-shaped input; the
+  // capturedAt isn't relevant for collected-check, so we pass `null`.
+  const usable = findUsableMatchingPoints(
+    entry,
+    dataPoints.map((dp) => ({ field: dp.field, value: dp.value, capturedAt: null })),
+  );
+  return usable.length > 0;
 }
 
 /**
  * Which target data points are already collected for a channel's blogger
- * profile (by mapping the profile's ProfileDataPoint fields onto the target
- * categories). Empty when there's no channel or profile yet.
+ * profile, evaluated against the rollup's usability filter so the planner
+ * agrees with the HUD's "answered" signal. Empty when there's no channel
+ * or profile yet.
  */
 async function collectedAgencyTargets(
   channelId: string | null | undefined,
@@ -389,11 +407,11 @@ async function collectedAgencyTargets(
   if (!channelId) return [];
   const profile = await getPrisma().bloggerProfile.findUnique({
     where: { channelId },
-    select: { dataPoints: { select: { field: true } } },
+    select: { dataPoints: { select: { field: true, value: true } } },
   });
   if (!profile) return [];
-  const fields = profile.dataPoints.map((d) => d.field);
-  return targets.filter((t) => targetCollected(t, fields));
+  const dataPoints = profile.dataPoints.map((d) => ({ field: d.field, value: d.value }));
+  return targets.filter((t) => targetCollected(t, dataPoints));
 }
 
 // `profile-extract` is now invoked SYNCHRONOUSLY from `handleOnInbound`

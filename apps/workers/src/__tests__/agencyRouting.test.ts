@@ -214,9 +214,15 @@ describe('handleOnInbound — agency routing (B2 + harden)', () => {
   it('marks collected targets from the blogger profile so the planner skips them', async () => {
     mocks.flagState.agency_sourcing = true;
     setupConversation({ typeKey: 'agency_sourcing', agentSet: AGENCY_AGENT_SET });
-    // Profile already has a rate-card data point → rate_card is "collected".
+    // Profile already has usable rate-card + reach data points → both
+    // collected. Values must be CONTRIBUTING (numeric here) per the
+    // rollup's usability filter — name-only presence is no longer
+    // enough (data-collection-hud-target-fields P1).
     mocks.prisma.bloggerProfile.findUnique.mockResolvedValue({
-      dataPoints: [{ field: 'rate.post' }, { field: 'reach.story' }],
+      dataPoints: [
+        { field: 'rate.post', value: 15000 },
+        { field: 'reach.story', value: 12000 },
+      ],
     });
 
     await handleOnInbound({ conversationId: 'conv1' });
@@ -227,6 +233,24 @@ describe('handleOnInbound — agency routing (B2 + harden)', () => {
     expect(plannerCall?.[1]).toMatchObject({
       collected_data_points: expect.arrayContaining(['rate_card', 'reach']),
     });
+  });
+
+  it('does NOT count a non-contributing rate value as collected (P1 regression guard)', async () => {
+    mocks.flagState.agency_sourcing = true;
+    setupConversation({ typeKey: 'agency_sourcing', agentSet: AGENCY_AGENT_SET });
+    // `rate.post = "договорная"` is a name-match for the rate_card target
+    // but NOT a usable contributing value (the rollup filters non-numeric
+    // rate values out). The planner must keep asking for rate_card.
+    mocks.prisma.bloggerProfile.findUnique.mockResolvedValue({
+      dataPoints: [{ field: 'rate.post', value: 'договорная' }],
+    });
+
+    await handleOnInbound({ conversationId: 'conv1' });
+
+    const plannerCall = mocks.runAgentSafe.mock.calls.find(
+      (c) => c[0] === 'data_collection_planner',
+    );
+    expect(plannerCall?.[1]).toMatchObject({ collected_data_points: [] });
   });
 
   it('does NOT run profile-extract for CustDev (flag on, custdev type)', async () => {

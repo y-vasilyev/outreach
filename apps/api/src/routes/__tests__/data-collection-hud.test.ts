@@ -1,6 +1,6 @@
 // Env stubbing runs from vitest's setupFiles in apps/api/vitest.config.ts.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 
 /**
@@ -60,6 +60,17 @@ const NOW = new Date('2026-06-04T00:00:00.000Z');
 function freshDate(daysAgo: number): Date {
   return new Date(NOW.getTime() - daysAgo * 86_400_000);
 }
+
+// Pin the system clock so the HUD's freshness / TTL classification is
+// deterministic. The HUD service goes through `buildHudTargetRow` which
+// defaults `now` to `new Date()` — fake timers ensure that default
+// resolves to our pinned NOW regardless of when the test runs.
+beforeAll(() => {
+  vi.useFakeTimers({ now: NOW, shouldAdvanceTime: false });
+});
+afterAll(() => {
+  vi.useRealTimers();
+});
 
 beforeEach(async () => {
   vi.clearAllMocks();

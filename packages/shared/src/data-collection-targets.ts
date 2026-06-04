@@ -23,7 +23,9 @@
 import { z } from 'zod';
 
 import {
-  computeProfileFreshness,
+  classifyProfileField,
+  isContributingValue,
+  PROFILE_FIELD_TTL_DAYS,
   type ProfileFreshnessCategory,
 } from './profile-staleness.js';
 
@@ -296,6 +298,44 @@ export interface HudDataPointInput {
 }
 
 /**
+ * Subset of a target's matching data points that ALSO satisfy the
+ * rollup's usability filter for THEIR OWN classification (numeric for
+ * rate/reach/avgViews, non-empty share record for audience, non-empty
+ * string list for topics/languages/formats). Mirrors how the rolled-up
+ * profile picks contributing values, so the HUD's "answered" agrees
+ * with the freshness signal and the planner stops asking for what the
+ * rollup actually has.
+ *
+ * The per-point classification matters because a target like `reach`
+ * may legitimately accept both `reach.*` (classifies to `reach`) and
+ * `views.*` (classifies to `avgViews`). A `views.avg = 30000` is a
+ * usable observation even though it lands in a different freshness
+ * section than the target's declared `freshness_section`. The caller
+ * gets each point paired with its category so it can apply the right
+ * TTL when computing freshness.
+ *
+ * Returns `[]` for `manual_only` targets — no extractor write ever
+ * counts as a usable observation for those (operator-only).
+ */
+export function findUsableMatchingPoints(
+  target: DataCollectionTarget,
+  dataPoints: ReadonlyArray<HudDataPointInput>,
+): Array<{ point: HudDataPointInput; category: ProfileFreshnessCategory }> {
+  if (target.manual_only) return [];
+  const out: Array<{ point: HudDataPointInput; category: ProfileFreshnessCategory }> = [];
+  for (const dp of dataPoints) {
+    if (!profileFieldMatchesTarget(dp.field, target)) continue;
+    const category = classifyProfileField(dp.field);
+    if (!category) continue;
+    if (!isContributingValue(category, dp.value)) continue;
+    out.push({ point: dp, category });
+  }
+  return out;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
  * Compute the HUD row for one target from the conversation's matching
  * data points + the most-recent suggestion that asked for it. Caller is
  * responsible for filtering data points to those whose channel/profile
@@ -304,11 +344,25 @@ export interface HudDataPointInput {
  * Same function powers `GET /conversations/:id/data-collection` (one call
  * per target) and the `dataCollectionUpdated` WS payload emitted after a
  * `ProfileDataPoint` write or a `Suggestion` create.
+ *
+ * Semantics (data-collection-hud-target-fields):
+ *
+ *   - `current` is picked from the USABLE contributing points only (per
+ *     per-point classification + the rollup's usability filter). A fresh
+ *     non-numeric `rate.post = "договорная"` is NOT current; the latest
+ *     numeric `rate.<format>` wins.
+ *   - `freshness` is set ONLY when `current` exists. Each point's TTL is
+ *     read from its own classification's section TTL, so a `views.avg`
+ *     contributing to the `reach` target is judged against the `avgViews`
+ *     TTL — matching the rollup's semantics.
+ *   - `now` is injectable so tests can pin time without mocking the
+ *     module's clock. Production callers use the default (`new Date()`).
  */
 export function buildHudTargetRow(
   target: DataCollectionTarget,
   dataPoints: ReadonlyArray<HudDataPointInput>,
   lastAskedAt: Date | string | null | undefined,
+  now: Date = new Date(),
 ): HudTargetRow {
   const lastAskedIso = toIsoString(lastAskedAt);
 
@@ -324,35 +378,34 @@ export function buildHudTargetRow(
     };
   }
 
-  const matching = dataPoints.filter((dp) => profileFieldMatchesTarget(dp.field, target));
+  const usable = findUsableMatchingPoints(target, dataPoints);
 
   let current: HudTargetCurrent | undefined;
   let freshness: HudTargetFreshness | undefined;
 
-  if (matching.length > 0) {
-    const computed = computeProfileFreshness(
-      matching.map((dp) => ({
-        field: dp.field,
-        value: dp.value,
-        capturedAt: dp.capturedAt ?? null,
-      })),
+  if (usable.length > 0) {
+    // Pick the newest contributing point. Its OWN classification drives
+    // the TTL — a `views.avg` contributing to the `reach` target is
+    // judged stale against the `avgViews` TTL (same 90d in practice,
+    // but the principle stays correct if the helper's TTLs ever
+    // diverge).
+    const sorted = [...usable].sort(
+      (a, b) => toMillis(b.point.capturedAt) - toMillis(a.point.capturedAt),
     );
-    const section = computed[target.freshness_section];
-    freshness = { stale: section.stale, ageDays: section.ageDays };
-
-    if (section.ageDays != null) {
-      const sorted = [...matching].sort((a, b) => toMillis(b.capturedAt) - toMillis(a.capturedAt));
-      for (const dp of sorted) {
-        const iso = toIsoString(dp.capturedAt);
-        if (!iso) continue;
-        current = {
-          value: dp.value,
-          capturedAt: iso,
-          sourceField: dp.field,
-          ...(dp.sourceMessageId ? { sourceMessageId: dp.sourceMessageId } : {}),
-        };
-        break;
-      }
+    const top = sorted[0]!;
+    const iso = toIsoString(top.point.capturedAt);
+    const capturedMs = toMillis(top.point.capturedAt);
+    if (iso && capturedMs > 0) {
+      current = {
+        value: top.point.value,
+        capturedAt: iso,
+        sourceField: top.point.field,
+        ...(top.point.sourceMessageId ? { sourceMessageId: top.point.sourceMessageId } : {}),
+      };
+      const ageMs = Math.max(0, now.getTime() - capturedMs);
+      const ageDays = Math.floor(ageMs / DAY_MS);
+      const ttlMs = PROFILE_FIELD_TTL_DAYS[top.category] * DAY_MS;
+      freshness = { stale: ageMs > ttlMs, ageDays };
     }
   }
 
