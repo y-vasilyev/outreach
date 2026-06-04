@@ -112,7 +112,12 @@ const showEmpty = computed(() => list.value.length === 0 && hasAnyFilter(filters
       <ConversationList :items="list" :active-id="conversationId" @pick="pick" />
     </div>
     <template v-if="current">
-      <ConversationView :conversation="current" :show-context="showContext" @toggle-context="showContext = !showContext" />
+      <ConversationView
+        :key="current.id"
+        :conversation="current"
+        :show-context="showContext"
+        @toggle-context="showContext = !showContext"
+      />
       <ContextPanel
         v-if="showContext && details"
         :conversation="details"

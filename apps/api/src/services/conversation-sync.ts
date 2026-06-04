@@ -1,5 +1,7 @@
-import { getPrisma } from '@nosquare/db';
+import { getPrisma, Prisma } from '@nosquare/db';
+import type { MessageAttachment } from '@nosquare/shared';
 import { isAppError } from '@nosquare/shared/errors';
+import type { HistoryMessage } from '@nosquare/tg-client';
 
 import { logger } from '../logger.js';
 import { getQueues } from '../queues.js';
@@ -43,6 +45,19 @@ interface CacheEntry {
 }
 
 const cache = new Map<string, CacheEntry>();
+const inFlight = new Map<string, Promise<SyncResult>>();
+
+function attachmentsFromHistoryMedia(media: HistoryMessage['media']): MessageAttachment[] {
+  if (!media) return [];
+  return [
+    {
+      kind: media.kind,
+      ...(media.mime ? { mime: media.mime } : {}),
+      ...(media.fileName ? { fileName: media.fileName } : {}),
+      ...(typeof media.bytes === 'number' ? { bytes: media.bytes } : {}),
+    },
+  ];
+}
 
 /**
  * Test-only: drop the in-memory sync cache so tests can run consecutive
@@ -51,6 +66,7 @@ const cache = new Map<string, CacheEntry>();
  */
 export function _resetSyncCacheForTests(): void {
   cache.clear();
+  inFlight.clear();
 }
 
 /**
@@ -74,6 +90,17 @@ export async function syncOne(conversationId: string): Promise<SyncResult> {
     return { ...cached.result, cached: true };
   }
 
+  const running = inFlight.get(conversationId);
+  if (running) return running;
+
+  const work = syncOneFresh(conversationId, now).finally(() => {
+    inFlight.delete(conversationId);
+  });
+  inFlight.set(conversationId, work);
+  return work;
+}
+
+async function syncOneFresh(conversationId: string, now: number): Promise<SyncResult> {
   const prisma = getPrisma();
   const conv = await prisma.conversation.findUnique({
     where: { id: conversationId },
@@ -249,12 +276,14 @@ export async function syncOne(conversationId: string): Promise<SyncResult> {
 
   await prisma.$transaction(async (tx) => {
     for (const m of fresh) {
+      const attachments = attachmentsFromHistoryMedia(m.media);
       await tx.message.create({
         data: {
           conversationId: conv.id,
           direction: 'in_',
           sender: 'contact',
           text: m.text,
+          attachments: attachments as unknown as Prisma.InputJsonValue,
           status: 'received',
           tgMsgId: m.tgMsgId,
           createdAt: new Date(m.sentAt),
@@ -286,6 +315,7 @@ export async function syncOne(conversationId: string): Promise<SyncResult> {
   // The shared MessageDirection wire shape is `'in'` / `'out'` (no
   // underscore — that's the Prisma DB shape only).
   for (const m of fresh) {
+    const attachments = attachmentsFromHistoryMedia(m.media);
     emitToRoom(`conversation:${conv.id}`, {
       type: 'message.new',
       conversationId: conv.id,
@@ -294,6 +324,7 @@ export async function syncOne(conversationId: string): Promise<SyncResult> {
         direction: 'in',
         sender: 'contact',
         text: m.text,
+        attachments,
         createdAt: m.sentAt,
       },
     });

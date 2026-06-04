@@ -1,4 +1,4 @@
-import type { HistoryMessage } from '../types.js';
+import type { HistoryMessage, IncomingMedia } from '../types.js';
 
 /**
  * Pure helper that wraps GramJS `client.getMessages` (which itself wraps
@@ -37,6 +37,7 @@ interface GramJSHistoryRow {
   fromId?: { className?: string; userId?: { toString?(): string } };
   sender?: { username?: string; firstName?: string; lastName?: string } | null;
   _sender?: { username?: string; firstName?: string; lastName?: string } | null;
+  media?: unknown;
 }
 
 export async function fetchHistorySinceImpl(
@@ -70,7 +71,8 @@ function mapHistoryRow(m: GramJSHistoryRow, tgAccountId: string): HistoryMessage
   if (!tgMsgId) return null;
 
   const text = typeof m.message === 'string' ? m.message : typeof m.text === 'string' ? m.text : '';
-  if (!text) return null;
+  const media = mapHistoryMedia(m.media);
+  if (!text && !media) return null;
 
   // peerId.userId is the OTHER party in a 1-1 chat regardless of direction.
   const peerTgUserId = m.peerId?.userId?.toString?.() ?? '';
@@ -108,5 +110,51 @@ function mapHistoryRow(m: GramJSHistoryRow, tgAccountId: string): HistoryMessage
     ...(fromUsername !== undefined && { fromUsername }),
     ...(fromFirstName !== undefined && { fromFirstName }),
     ...(fromLastName !== undefined && { fromLastName }),
+    ...(media !== undefined && { media }),
   };
+}
+
+function mapHistoryMedia(raw: unknown): IncomingMedia | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const media = raw as {
+    className?: string;
+    document?: {
+      mimeType?: string;
+      size?: number | { toString(): string };
+      attributes?: Array<{ className?: string; fileName?: string }>;
+    };
+  };
+  const className = media.className ?? 'Unknown';
+  if (className === 'MessageMediaWebPage' || className === 'MessageMediaEmpty') {
+    return undefined;
+  }
+
+  if (className === 'MessageMediaPhoto') {
+    return { className, kind: 'image' };
+  }
+
+  if (className === 'MessageMediaDocument' && media.document) {
+    const doc = media.document;
+    const mime = typeof doc.mimeType === 'string' ? doc.mimeType : undefined;
+    const size =
+      typeof doc.size === 'number'
+        ? doc.size
+        : typeof doc.size === 'object' && doc.size
+          ? Number(doc.size.toString())
+          : undefined;
+    const fileName = doc.attributes?.find(
+      (a) => a.className === 'DocumentAttributeFilename' && a.fileName,
+    )?.fileName;
+    const isVideo = !!mime && mime.startsWith('video/');
+    const isImage = !!mime && mime.startsWith('image/');
+    return {
+      className,
+      kind: isVideo ? 'video' : isImage ? 'image' : 'document',
+      ...(mime ? { mime } : {}),
+      ...(typeof size === 'number' && Number.isFinite(size) ? { bytes: size } : {}),
+      ...(fileName ? { fileName } : {}),
+    };
+  }
+
+  return { className, kind: 'other' };
 }

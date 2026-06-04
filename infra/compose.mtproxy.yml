@@ -20,9 +20,10 @@
 # same. Generate a fresh one with:
 #   docker run --rm nineseconds/mtg:1.0.7 generate-secret simple
 #
-# Why mtg v1 and not v2: v2 is fake-TLS-only and GramJS does not implement
-# fake-TLS obfuscation, so v2 would never accept our handshake. v1 still ships
-# the legacy "simple" mode that GramJS speaks.
+# Why mtg v1 here: this compose file is a simple legacy-MTProxy smoke test.
+# Production fake-TLS MTProxy is supported by packages/tg-client when you pass
+# an ee-prefixed TG_PROXY_SECRET; use TG_PROXY_FORCE_PORT_443=1 if the proxy/DC
+# path requires Telegram traffic on :443.
 
 services:
   mtg:

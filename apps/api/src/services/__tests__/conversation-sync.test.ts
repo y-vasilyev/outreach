@@ -175,6 +175,63 @@ describe('conversation-sync.syncOne', () => {
     expect(queuesMock.agentRun.add).not.toHaveBeenCalled();
   });
 
+  it('persists media-only missed inbound with attachment metadata', async () => {
+    handleMock.fetchHistorySince.mockResolvedValueOnce([
+      {
+        tgAccountId: 'tg1',
+        peerTgUserId: '999',
+        fromTgUserId: '999',
+        text: '',
+        tgMsgId: '401',
+        sentAt: '2026-05-08T10:00:00.000Z',
+        out: false,
+        media: {
+          className: 'MessageMediaDocument',
+          kind: 'document',
+          mime: 'application/pdf',
+          bytes: 12345,
+          fileName: 'media-kit.pdf',
+        },
+      },
+    ]);
+
+    const result = await syncOne('conv1');
+    expect(result.persisted).toBe(1);
+    expect(prismaMock.message.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        text: '',
+        attachments: [
+          {
+            kind: 'document',
+            mime: 'application/pdf',
+            bytes: 12345,
+            fileName: 'media-kit.pdf',
+          },
+        ],
+      }),
+    });
+  });
+
+  it('coalesces concurrent sync calls for the same conversation', async () => {
+    let resolveHistory!: (value: unknown[]) => void;
+    handleMock.fetchHistorySince.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        resolveHistory = resolve;
+      }),
+    );
+
+    const first = syncOne('conv1');
+    const second = syncOne('conv1');
+    for (let i = 0; i < 10 && !resolveHistory; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(resolveHistory).toBeTypeOf('function');
+    resolveHistory([]);
+
+    await Promise.all([first, second]);
+    expect(handleMock.fetchHistorySince).toHaveBeenCalledTimes(1);
+  });
+
   it('handles TG transport failure gracefully (no throw, no persist)', async () => {
     handleMock.fetchHistorySince.mockRejectedValueOnce(new Error('FLOOD_WAIT_30'));
 

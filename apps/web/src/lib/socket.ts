@@ -1,5 +1,5 @@
 import { io, type Socket } from 'socket.io-client';
-import { onBeforeUnmount, onMounted } from 'vue';
+import { onBeforeUnmount, onMounted, watch, type WatchStopHandle } from 'vue';
 import { getToken } from './api';
 
 let socket: Socket | null = null;
@@ -69,7 +69,23 @@ export function disconnectSocket(): void {
 }
 
 export interface RealtimeEvents {
-  'message.new': { conversationId: string; messageId: string; direction: 'in' | 'out'; text: string };
+  'message.new': {
+    conversationId: string;
+    message: {
+      id: string;
+      direction: 'in' | 'out';
+      sender: 'contact' | 'ai' | 'operator' | 'system';
+      text: string;
+      attachments?: Array<{
+        kind: 'image' | 'video' | 'document' | 'other';
+        mime?: string;
+        fileName?: string;
+        bytes?: number;
+        assetId?: string;
+      }>;
+      createdAt: string;
+    };
+  };
   'suggestion.new': { conversationId: string; suggestionId: string };
   'suggestion.approved': { conversationId: string; suggestionId: string; auto?: boolean };
   'status.changed': { conversationId: string; status: string };
@@ -94,6 +110,7 @@ export function useRoom<E extends keyof RealtimeEvents>(
   handler: (payload: RealtimeEvents[E]) => void,
 ): void {
   let joinedRoom: string | null = null;
+  let stopWatch: WatchStopHandle | null = null;
   const wrapped = (payload: RealtimeEvents[E]): void => handler(payload);
 
   function resolve(): string | null {
@@ -101,21 +118,43 @@ export function useRoom<E extends keyof RealtimeEvents>(
     return r ? r : null;
   }
 
-  onMounted(() => {
-    const r = resolve();
-    if (!r) return;
-    joinedRoom = r;
+  function syncRoom(forceJoin = false): void {
+    const next = resolve();
     const s = getSocket();
-    s.emit('room:join', r);
+    if (joinedRoom && joinedRoom !== next) {
+      s.emit('room:leave', joinedRoom);
+      joinedRoom = null;
+    }
+    if (!next) return;
+    if (forceJoin || joinedRoom !== next) {
+      s.emit('room:join', next);
+      joinedRoom = next;
+    }
+  }
+
+  function rejoinAfterConnect(): void {
+    syncRoom(true);
+  }
+
+  onMounted(() => {
+    const s = getSocket();
     s.on(event as string, wrapped as (...args: unknown[]) => void);
+    s.on('connect', rejoinAfterConnect);
+    syncRoom();
+    stopWatch = watch(() => resolve(), () => syncRoom());
+    if (s.connected) rejoinAfterConnect();
   });
 
   onBeforeUnmount(() => {
-    if (!joinedRoom) return;
     const s = getSocket();
+    stopWatch?.();
+    stopWatch = null;
+    s.off('connect', rejoinAfterConnect);
     s.off(event as string, wrapped as (...args: unknown[]) => void);
-    s.emit('room:leave', joinedRoom);
-    joinedRoom = null;
+    if (joinedRoom) {
+      s.emit('room:leave', joinedRoom);
+      joinedRoom = null;
+    }
   });
 }
 

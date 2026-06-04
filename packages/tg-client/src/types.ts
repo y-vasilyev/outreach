@@ -102,6 +102,11 @@ export interface HistoryMessage {
   fromUsername?: string;
   fromFirstName?: string;
   fromLastName?: string;
+  /**
+   * Lightweight media metadata for history backfill. Mirrors IncomingMessage so
+   * API sync can surface media-only replies that the push listener missed.
+   */
+  media?: IncomingMedia;
 }
 
 export interface IncomingMessage {

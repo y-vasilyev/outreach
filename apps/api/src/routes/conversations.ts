@@ -26,6 +26,10 @@ export async function conversationsRoutes(app: FastifyInstance) {
 
   app.get('/conversations/:id/messages', { preHandler: [app.requireRole(['admin', 'operator', 'viewer'])] }, async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
+    // The open thread polls this endpoint. Run the same bounded Telegram
+    // history sync here too, otherwise a missed push update remains invisible
+    // while the operator is already sitting in the chat.
+    await syncOneWithBudget(params.id);
     return conversationsService.getMessages(params.id);
   });
 

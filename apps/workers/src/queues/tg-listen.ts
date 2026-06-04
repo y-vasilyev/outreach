@@ -319,8 +319,10 @@ const RECONCILE_INTERVAL_MS = 30_000;
  * the snapshot taken at boot.
  *
  * Reconcile semantics:
- *   - desired = (role outreach/both) ∧ (status active|idle) ∧ cooldown
- *     null/past.
+ *   - desired = (role outreach/both) ∧ (status active|idle|cooldown).
+ *     Cooldown pauses outbound work, but inbound listening must stay alive:
+ *     otherwise contacts can reply during a FloodWait window and the operator
+ *     will not see the message until an explicit history sync catches it.
  *   - subscribe any desired account not yet in the registry.
  *   - unsubscribe any registered account no longer in desired (status
  *     flipped to need_auth/banned, deleted, etc.).
@@ -382,8 +384,7 @@ export async function startTgListenSubscribers(): Promise<{ stop: () => Promise<
     const accounts = await prisma.tgAccount.findMany({
       where: {
         role: { in: ['outreach', 'both'] },
-        status: { in: ['active', 'idle'] },
-        OR: [{ cooldownUntil: null }, { cooldownUntil: { lte: new Date() } }],
+        status: { in: ['active', 'idle', 'cooldown'] },
       },
       select: { id: true, label: true },
     });
