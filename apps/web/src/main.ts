@@ -5,17 +5,13 @@ import App from './App.vue';
 import { router } from './router';
 import { queryClient } from './lib/queryClient';
 import { bootstrapAuth } from './lib/auth';
-import {
-  clearChunkReloadSentinel,
-  installChunkReloadHandler,
-} from './lib/chunkReload';
+import { installChunkReloadHandler } from './lib/chunkReload';
 import './styles.css';
 
 // Recover stale tabs after a redeploy: reload once when a lazy chunk fails to
-// load. Clearing the sentinel here (a successful load reached bootstrap) lets
-// a future stale-deploy recover again.
+// load. The router clears the sentinel only after a successful navigation, so
+// a persistently missing chunk cannot enter a reload loop.
 installChunkReloadHandler();
-clearChunkReloadSentinel();
 
 bootstrapAuth();
 

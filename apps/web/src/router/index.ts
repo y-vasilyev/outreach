@@ -1,6 +1,10 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
 import { bootstrapAuth, useAuth } from '../lib/auth';
-import { isChunkLoadError, recoverFromChunkError } from '../lib/chunkReload';
+import {
+  clearChunkReloadSentinel,
+  isChunkLoadError,
+  recoverFromChunkError,
+} from '../lib/chunkReload';
 
 const routes: RouteRecordRaw[] = [
   {
@@ -164,6 +168,14 @@ export const router = createRouter({
 // as the `vite:preloadError` handler in main.ts.
 router.onError((err) => {
   if (isChunkLoadError(err)) recoverFromChunkError();
+});
+
+// Clear the cross-reload sentinel only after a navigation has completed
+// successfully. This proves the current route's lazy chunk loaded; clearing it
+// during bootstrap or after a navigation failure would re-enable reloads before
+// a persistently missing chunk fails again.
+router.afterEach((_to, _from, failure) => {
+  if (!failure) clearChunkReloadSentinel();
 });
 
 router.beforeEach(async (to) => {
