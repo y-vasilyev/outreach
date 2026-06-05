@@ -34,6 +34,9 @@ Instagram — https://instagram.com/polyaam?igshid=YmMyMTA2M2Y
 ВК-клип — 22 000
 
 Бонусом кросс-постинг в Tik Tok — www.tiktok.com/@polyaamm Статистика https://disk.yandex.ru/d/2BP6ZLLjtiLwyg`;
+  const inlineKidfriendlyQuote = `Добрый день) у нас есть формат размещений в тг-канале: пост на сутки 13000, пост на месяц 21000 + налог 6%
+
+А также есть формат выездных обзоров в кидфрендли места: стоимость 30000 (входит пост обзор без удаления + доп пост с упоминанием важных событий и анонсов)`;
 
   it('maps per-format prices to rate.<format> data points', async () => {
     const llm = makeLLM({
@@ -171,6 +174,30 @@ Instagram — https://instagram.com/polyaam?igshid=YmMyMTA2M2Y
       ['rate.vk_clip', 22000],
     ]);
     expect(out.data_points.some((d) => d.field === 'rate.post' || d.field === 'rate.other')).toBe(false);
+  });
+
+  it('recovers inline placement terms so same-format post rates do not collapse', async () => {
+    const llm = makeLLM({
+      completeJsonImpl: () => ({
+        data_points: [
+          { field: 'rate.post', value: 13000, unit: 'RUB', confidence: 0.86, rawSnippet: 'пост на сутки 13000' },
+          { field: 'rate.post', value: 21000, unit: 'RUB', confidence: 0.86, rawSnippet: 'пост на месяц 21000' },
+          { field: 'rate.other', value: 30000, unit: 'RUB', confidence: 0.7, rawSnippet: 'стоимость 30000' },
+        ],
+      }),
+    });
+    const ctx = makeCtx({ llm, config: baseConfig });
+    const out = await rateCardExtractor.run(
+      { replies: [inlineKidfriendlyQuote], last_inbound: inlineKidfriendlyQuote, channel_title: 'kidfriendly', language: 'ru' },
+      ctx,
+    );
+
+    expect(out.data_points.map((d) => [d.field, d.value])).toEqual([
+      ['rate.telegram_post_day', 13000],
+      ['rate.telegram_post_month', 21000],
+      ['rate.offsite_review', 30000],
+    ]);
+    expect(out.data_points.some((d) => d.field === 'rate.post' || d.rawSnippet.includes('налог 6%'))).toBe(false);
   });
 });
 

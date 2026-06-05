@@ -175,11 +175,23 @@ function platformFromHeader(line: string): string | null {
   return null;
 }
 
+function platformFromInlineText(line: string): string | null {
+  if (/(^|[^\p{L}\p{N}])(?:тг|telegram|телеграм)(?=$|[^\p{L}\p{N}])/iu.test(line)) return 'telegram';
+  if (/(^|[^\p{L}\p{N}])(?:youtube|ютуб)(?=$|[^\p{L}\p{N}])/iu.test(line)) return 'youtube';
+  if (/(^|[^\p{L}\p{N}])(?:instagram|инстаграм)(?=$|[^\p{L}\p{N}])/iu.test(line)) return 'instagram';
+  if (/(^|[^\p{L}\p{N}])(?:vk|вк|вконтакте)(?=$|[^\p{L}\p{N}])/iu.test(line)) return 'vk';
+  if (/(^|[^\p{L}\p{N}])(?:tiktok|tik\s*tok|тик\s*ток)(?=$|[^\p{L}\p{N}])/iu.test(line)) return 'tiktok';
+  return null;
+}
+
 function canonicalFormat(label: string, platform: string | null): string {
   const l = label.toLowerCase().replace(/\s+/g, ' ').trim();
   const prefix = platform ? `${platform}_` : '';
+  if (/выездн[\p{L}\p{N}_]*\s+обзор|обзор[\p{L}\p{N}_]*\s+выездн/u.test(l)) return `${prefix}offsite_review`;
   if (/фото\s*-?\s*пост|фотопост|photo\s*-?\s*post/.test(l)) return `${prefix}photo_post`;
   if (/видео\s*-?\s*пост|видеопост|video\s*-?\s*post/.test(l)) return `${prefix}video_post`;
+  if (/пост\s+на\s+(?:сутки|24\s*час(?:а|ов)?|день)/.test(l)) return `${prefix}post_day`;
+  if (/пост\s+на\s+месяц/.test(l)) return `${prefix}post_month`;
   if (/кружок/.test(l)) return `${prefix}round_text`;
   if (/интеграц/.test(l)) {
     return /перв(ый|ого)?\s+слот|first\s+slot/.test(l) ? `${prefix}integration_first_slot` : `${prefix}integration`;
@@ -192,6 +204,84 @@ function canonicalFormat(label: string, platform: string | null): string {
   if (/пост|post/.test(l)) return `${prefix}post`;
   if (/видео|video/.test(l)) return `${prefix}video`;
   return platform ? `${prefix}other` : 'other';
+}
+
+const PRICE_WITH_CURRENCY_RE_SOURCE = String.raw`((?:\d{1,3}(?:[\s\u00a0]\d{3})+|\d+)(?:[.,]\d+)?\s*(?:к|k)?)(?:\s*(₽|руб\.?|р\.?|rub|usd|\$|eur|€))?`;
+
+function cleanRawSnippet(raw: string): string {
+  return raw.replace(/^[^\p{L}\p{N}]+/u, '').trim();
+}
+
+function pushRateDataPoint(
+  out: ProfileDataPointDraft[],
+  seen: Set<string>,
+  opts: {
+    format: string;
+    price: number;
+    currency?: string;
+    confidence: number;
+    rawSnippet: string;
+  },
+): void {
+  const key = `${opts.format}:${opts.price}:${opts.rawSnippet}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  out.push({
+    field: `rate.${opts.format}`,
+    value: opts.price,
+    unit: opts.currency ?? 'RUB',
+    confidence: opts.confidence,
+    rawSnippet: opts.rawSnippet,
+  });
+}
+
+function extractInlineRateDataPointsFromLine(
+  line: string,
+  platform: string | null,
+  out: ProfileDataPointDraft[],
+  seen: Set<string>,
+): void {
+  const postDurationRe = new RegExp(
+    String.raw`(^|[^\p{L}\p{N}])((?:пост|post)\s+на\s+(сутки|24\s*час(?:а|ов)?|день|месяц))\s*[:—–-]?\s*${PRICE_WITH_CURRENCY_RE_SOURCE}`,
+    'giu',
+  );
+  for (const m of line.matchAll(postDurationRe)) {
+    const rawSnippet = cleanRawSnippet(m[0] ?? '');
+    const price = parsePrice(m[4] ?? '');
+    if (!rawSnippet || price == null) continue;
+    const period = /месяц/i.test(m[3] ?? '') ? 'month' : 'day';
+    pushRateDataPoint(out, seen, {
+      format: `${platform ? `${platform}_` : ''}post_${period}`,
+      price,
+      currency: parseCurrency(m[5]),
+      confidence: 0.96,
+      rawSnippet,
+    });
+  }
+
+  if (!/выездн[\p{L}\p{N}_]*.{0,120}обзор|обзор[\p{L}\p{N}_]*.{0,120}выездн/iu.test(line)) return;
+  const priceRe = new RegExp(
+    String.raw`(?:стоимост[\p{L}\p{N}_]*|цена|стоит)\s*[:—–-]?\s*${PRICE_WITH_CURRENCY_RE_SOURCE}`,
+    'iu',
+  );
+  const m = priceRe.exec(line);
+  if (!m) return;
+  const price = parsePrice(m[1] ?? '');
+  if (price == null) return;
+  const startCandidates = [
+    line.search(/формат\s+выездн/iu),
+    line.search(/выездн/iu),
+    0,
+  ].filter((idx) => idx >= 0);
+  const start = Math.min(...startCandidates);
+  const rawSnippet = line.slice(start, m.index + m[0].length).trim();
+  pushRateDataPoint(out, seen, {
+    format: 'offsite_review',
+    price,
+    currency: parseCurrency(m[2]),
+    confidence: 0.92,
+    rawSnippet,
+  });
 }
 
 export function extractRateCardDataPointsFromText(text: string): ProfileDataPointDraft[] {
@@ -207,6 +297,8 @@ export function extractRateCardDataPointsFromText(text: string): ProfileDataPoin
       platform = nextPlatform;
       continue;
     }
+    const linePlatform = platformFromInlineText(line) ?? platform;
+    extractInlineRateDataPointsFromLine(line, linePlatform, out, seen);
 
     const m = /^(.+?)\s+[—–]\s+((?:\d{1,3}(?:[\s\u00a0]\d{3})+|\d+)(?:[.,]\d+)?\s*(?:к|k)?)(?:\s*(₽|руб\.?|р\.?|rub|usd|\$|eur|€))?\s*$/i.exec(line);
     if (!m) continue;
@@ -214,14 +306,11 @@ export function extractRateCardDataPointsFromText(text: string): ProfileDataPoin
     if (/налог|бонус|статистик|скидк/i.test(label)) continue;
     const price = parsePrice(m[2]!);
     if (price == null) continue;
-    const format = canonicalFormat(label, platform);
-    const key = `${format}:${price}:${line}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({
-      field: `rate.${format}`,
-      value: price,
-      unit: parseCurrency(m[3]),
+    const format = canonicalFormat(label, linePlatform);
+    pushRateDataPoint(out, seen, {
+      format,
+      price,
+      currency: parseCurrency(m[3]),
       confidence: GENERIC_RATE_FORMATS.has(format) ? 0.75 : 0.96,
       rawSnippet: line,
     });

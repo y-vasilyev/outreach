@@ -161,6 +161,9 @@ export const rateCardExtractor: Agent<RateCardExtractorInput, RateCardExtractorO
     const deterministicSnippets = new Set(
       deterministic.map((dp) => dp.rawSnippet.trim().toLowerCase()).filter(Boolean),
     );
+    const deterministicFieldPrices = new Set(
+      deterministic.map((dp) => `${dp.field}:${String(dp.value)}`),
+    );
     const genericRateFields = new Set([
       'rate.integration',
       'rate.other',
@@ -173,6 +176,7 @@ export const rateCardExtractor: Agent<RateCardExtractorInput, RateCardExtractorO
     const remainingModelPoints = data_points.filter((dp) => {
       const snippet = dp.rawSnippet.trim().toLowerCase();
       if (snippet && deterministicSnippets.has(snippet)) return false;
+      if (deterministicFieldPrices.has(`${dp.field}:${String(dp.value)}`)) return false;
       if (genericRateFields.has(dp.field) && deterministicPrices.has(String(dp.value))) return false;
       return true;
     });

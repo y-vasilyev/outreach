@@ -151,4 +151,22 @@ describe('rollUpProfileFields', () => {
     expect(out.capturedAt).toBe('2026-06-04T10:00:00.000Z');
     expect(out.rateCards.some((r) => r.format.includes('tiktok') || r.format.includes('tax'))).toBe(false);
   });
+
+  it('keeps inline post duration rates as separate catalog rows', () => {
+    const capturedAt = at('2026-06-05T00:00:00Z');
+    const points: RollupDataPoint[] = [
+      { field: 'rate.telegram_post_day', value: 13000, unit: 'RUB', confidence: 0.96, capturedAt },
+      { field: 'rate.telegram_post_month', value: 21000, unit: 'RUB', confidence: 0.96, capturedAt },
+      { field: 'rate.offsite_review', value: 30000, unit: 'RUB', confidence: 0.92, capturedAt },
+    ];
+
+    const out = rollUpProfileFields(points);
+
+    expect(out.rateCards).toEqual([
+      { format: 'offsite_review', price: 30000, currency: 'RUB' },
+      { format: 'telegram_post_day', price: 13000, currency: 'RUB' },
+      { format: 'telegram_post_month', price: 21000, currency: 'RUB' },
+    ]);
+    expect(out.formats).toEqual(out.rateCards.map((r) => r.format));
+  });
 });

@@ -320,4 +320,53 @@ Instagram — https://instagram.com/polyaam?igshid=YmMyMTA2M2Y
     ]);
     expect(out.formats).toEqual(out.rateCards.map((r) => r.format));
   });
+
+  it('repairs inline placement terms from source text so post prices do not collapse', async () => {
+    const inlineQuote = `Добрый день) у нас есть формат размещений в тг-канале: пост на сутки 13000, пост на месяц 21000 + налог 6%
+
+А также есть формат выездных обзоров в кидфрендли места: стоимость 30000 (входит пост обзор без удаления + доп пост с упоминанием важных событий и анонсов)`;
+    prismaMock.bloggerProfile.findUnique.mockResolvedValue({
+      id: 'p_inline',
+      channelId: 'chan_inline',
+      topics: [],
+      languages: ['ru'],
+      formats: ['post', 'other'],
+      audience: {},
+      rateCards: [
+        { format: 'post', price: 13000, currency: 'RUB' },
+        { format: 'other', price: 30000, currency: 'RUB' },
+      ],
+      reach: null,
+      avgViews: null,
+      capturedAt: NOW,
+      createdAt: NOW,
+      updatedAt: NOW,
+      dataPoints: [
+        {
+          id: 'dp_inline',
+          profileId: 'p_inline',
+          field: 'rate.post',
+          value: 13000,
+          unit: 'RUB',
+          confidence: '0.8',
+          extractedBy: 'rate_card_extractor',
+          sourceMessageId: 'm_inline',
+          rawSnippet: 'пост на сутки 13000',
+          capturedAt: NOW,
+          createdAt: NOW,
+        },
+      ],
+      mediaAssets: [],
+    });
+    prismaMock.message.findMany.mockResolvedValue([{ id: 'm_inline', text: inlineQuote }]);
+
+    const out = await bloggerProfilesService.get('p_inline');
+
+    expect(out.rateCards).toEqual([
+      { format: 'offsite_review', price: 30000, currency: 'RUB' },
+      { format: 'telegram_post_day', price: 13000, currency: 'RUB' },
+      { format: 'telegram_post_month', price: 21000, currency: 'RUB' },
+    ]);
+    expect(out.formats).toEqual(['offsite_review', 'telegram_post_day', 'telegram_post_month']);
+  });
 });
