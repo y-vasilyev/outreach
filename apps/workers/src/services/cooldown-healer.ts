@@ -3,7 +3,7 @@ import { logger } from '../logger.js';
 
 /**
  * Periodic worker-side reconciler that flips `tg_account.status` from
- * `cooldown` back to `idle` once `cooldown_until` is in the past. Closes
+ * `cooldown` back to `active` once `cooldown_until` is in the past. Closes
  * the gap left by the FloodWait hook in SessionManager, which sets the
  * timestamp but has no scheduler to undo the status flip.
  *
@@ -15,23 +15,25 @@ import { logger } from '../logger.js';
  */
 const HEAL_INTERVAL_MS = 30_000;
 
+export async function healExpiredCooldownAccounts(): Promise<number> {
+  const result = await getPrisma().tgAccount.updateMany({
+    where: {
+      status: 'cooldown',
+      OR: [{ cooldownUntil: null }, { cooldownUntil: { lte: new Date() } }],
+    },
+    data: { status: 'active' },
+  });
+  return result.count;
+}
+
 export function startCooldownHealer(): { stop: () => void } {
   let stopped = false;
   const tick = async () => {
     if (stopped) return;
     try {
-      const result = await getPrisma().tgAccount.updateMany({
-        where: {
-          status: 'cooldown',
-          OR: [
-            { cooldownUntil: null },
-            { cooldownUntil: { lte: new Date() } },
-          ],
-        },
-        data: { status: 'idle' },
-      });
-      if (result.count > 0) {
-        logger.info({ healed: result.count }, 'cooldown-healer: returned accounts to idle');
+      const healed = await healExpiredCooldownAccounts();
+      if (healed > 0) {
+        logger.info({ healed }, 'cooldown-healer: returned accounts to active');
       }
     } catch (err) {
       logger.warn({ err: (err as Error).message }, 'cooldown-healer: tick failed');

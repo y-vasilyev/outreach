@@ -17,7 +17,13 @@ import TgAccountForm from './TgAccountForm.vue';
 import TgLoginDialog from './TgLoginDialog.vue';
 import { api } from '../../lib/api';
 import { toast } from '../../lib/toast';
-import { initials, formatRelative, formatUntil, formatNumber, formatDateTime } from '../../lib/format';
+import {
+  initials,
+  formatRelative,
+  formatUntil,
+  formatNumber,
+  formatDateTime,
+} from '../../lib/format';
 import {
   WARMUP_STAGES,
   WARMUP_TOP_STAGE,
@@ -89,7 +95,19 @@ const delMut = useMutation({
 
 const pauseMut = useMutation({
   mutationFn: (id: string) => api.patch<void>(`/tg-accounts/${id}`, { status: 'idle' }),
-  onSuccess: () => { qc.invalidateQueries({ queryKey: ['tg-accounts'] }); toast.info('Аккаунт на паузе'); },
+  onSuccess: () => {
+    qc.invalidateQueries({ queryKey: ['tg-accounts'] });
+    toast.info('Аккаунт на паузе');
+  },
+});
+
+const activateMut = useMutation({
+  mutationFn: (id: string) => api.patch<void>(`/tg-accounts/${id}`, { status: 'active' }),
+  onSuccess: () => {
+    qc.invalidateQueries({ queryKey: ['tg-accounts'] });
+    toast.success('Аккаунт активирован');
+  },
+  onError: (e: Error) => toast.error('Не удалось активировать аккаунт', e.message),
 });
 
 const clearCooldownMut = useMutation({
@@ -101,8 +119,14 @@ const clearCooldownMut = useMutation({
   onError: (e: Error) => toast.error('Не удалось сбросить cooldown', e.message),
 });
 
-function openEdit(a: TgAccount): void { editing.value = a; formOpen.value = true; }
-function openNew(): void { editing.value = null; formOpen.value = true; }
+function openEdit(a: TgAccount): void {
+  editing.value = a;
+  formOpen.value = true;
+}
+function openNew(): void {
+  editing.value = null;
+  formOpen.value = true;
+}
 
 function warmupSummary(a: TgAccount): {
   stage: number;
@@ -149,7 +173,11 @@ function warmupTooltip(a: TgAccount): string {
   ];
   if (s.daysSinceStart !== null) parts.push(`Дней с начала warmup: ${s.daysSinceStart}`);
   if (s.daysUntilNext !== null && !s.isTopStage) {
-    parts.push(s.daysUntilNext === 0 ? 'Готов к промоушену (ждёт reply-rate gate)' : `До следующей стадии: ${s.daysUntilNext} д`);
+    parts.push(
+      s.daysUntilNext === 0
+        ? 'Готов к промоушену (ждёт reply-rate gate)'
+        : `До следующей стадии: ${s.daysUntilNext} д`,
+    );
   }
   if (!a.warmupStartedAt) parts.push('Warmup ещё не стартовал (нет ни одного outbound)');
   return parts.join('\n');
@@ -164,7 +192,12 @@ function dropdownItems(a: TgAccount) {
   const showClearCooldown = a.status === 'cooldown' || !!a.cooldownUntil;
   const items: Array<
     | { divider: true; label: string }
-    | { label: string; icon: 'key' | 'edit' | 'pause_circle' | 'refresh' | 'trash'; variant?: 'danger'; onClick: () => void }
+    | {
+        label: string;
+        icon: 'key' | 'edit' | 'pause_circle' | 'play_circle' | 'refresh' | 'trash';
+        variant?: 'danger';
+        onClick: () => void;
+      }
   > = [
     {
       label: a.status === 'need_auth' ? 'Войти заново' : 'Релогин',
@@ -176,12 +209,20 @@ function dropdownItems(a: TgAccount) {
       icon: 'edit',
       onClick: () => openEdit(a),
     },
-    {
+  ];
+  if (a.status === 'idle') {
+    items.push({
+      label: 'Активировать',
+      icon: 'play_circle',
+      onClick: () => activateMut.mutate(a.id),
+    });
+  } else if (a.status === 'active') {
+    items.push({
       label: 'Поставить на паузу',
       icon: 'pause_circle',
       onClick: () => pauseMut.mutate(a.id),
-    },
-  ];
+    });
+  }
   if (showClearCooldown) {
     items.push({
       label: 'Сбросить cooldown',
@@ -201,15 +242,25 @@ function dropdownItems(a: TgAccount) {
 </script>
 
 <template>
-  <PageHead title="TG-аккаунты" :sub="`${counts.outreach} outreach · ${counts.parser} parser · все под FloodGuard`">
+  <PageHead
+    title="TG-аккаунты"
+    :sub="`${counts.outreach} outreach · ${counts.parser} parser · все под FloodGuard`"
+  >
     <template #actions>
       <button class="btn"><Icon name="shield" :size="12" /><span>FloodGuard logs</span></button>
-      <button class="btn primary" @click="openNew"><Icon name="plus" :size="12" /><span>Подключить аккаунт</span></button>
+      <button class="btn primary" @click="openNew">
+        <Icon name="plus" :size="12" /><span>Подключить аккаунт</span>
+      </button>
     </template>
   </PageHead>
   <Tabs :tabs="tabsList" :active="tab" @change="(id) => (tab = id as any)" />
   <FilterBar>
-    <FilterChipSelect v-model="stateFilter" label="Состояние" :options="stateOptions" placeholder="любое" />
+    <FilterChipSelect
+      v-model="stateFilter"
+      label="Состояние"
+      :options="stateOptions"
+      placeholder="любое"
+    />
     <template #right>
       <span class="muted-2">{{ filtered.length }} из {{ list.length }}</span>
     </template>
@@ -223,7 +274,9 @@ function dropdownItems(a: TgAccount) {
     icon="send"
   >
     <template #action>
-      <button class="btn primary" @click="openNew"><Icon name="plus" :size="12" /><span>Добавить</span></button>
+      <button class="btn primary" @click="openNew">
+        <Icon name="plus" :size="12" /><span>Добавить</span>
+      </button>
     </template>
   </EmptyState>
   <div v-else class="table-wrap">
@@ -237,17 +290,17 @@ function dropdownItems(a: TgAccount) {
           <th>Сегодня</th>
           <th>Cooldown</th>
           <th>Подключён</th>
-          <th style="width: 160px;"></th>
+          <th style="width: 160px"></th>
         </tr>
       </thead>
       <tbody>
         <tr v-for="a in filtered" :key="a.id">
           <td>
-            <div style="display: flex; align-items: center; gap: 9px;">
+            <div style="display: flex; align-items: center; gap: 9px">
               <Avatar :text="initials(a.label)" :color="avatarColor(a.id)" />
               <div>
                 <div class="cell-strong">{{ a.label }}</div>
-                <div class="mono muted-2" style="font-size: 10.5px;">{{ a.phone }}</div>
+                <div class="mono muted-2" style="font-size: 10.5px">{{ a.phone }}</div>
               </div>
             </div>
           </td>
@@ -257,25 +310,26 @@ function dropdownItems(a: TgAccount) {
             <Pill v-else cls="accent" :label="'outreach'" :dot="false" />
           </td>
           <td>
-            <div style="display: flex; align-items: center; gap: 6px;">
+            <div style="display: flex; align-items: center; gap: 6px">
               <Pill :state="a.status" />
               <span
                 v-if="a.status === 'cooldown' && a.cooldownUntil"
                 class="muted-2 mono"
-                style="font-size: 10.5px;"
+                style="font-size: 10.5px"
                 :title="formatDateTime(a.cooldownUntil)"
-              >{{ formatUntil(a.cooldownUntil) }}</span>
+                >{{ formatUntil(a.cooldownUntil) }}</span
+              >
             </div>
           </td>
           <td :title="warmupTooltip(a)">
-            <div style="display: flex; align-items: center; gap: 6px;">
+            <div style="display: flex; align-items: center; gap: 6px">
               <Bar :value="a.warmupStage / 4" :width="60" />
-              <span class="mono muted-2" style="font-size: 10.5px;">{{ a.warmupStage }}/4</span>
+              <span class="mono muted-2" style="font-size: 10.5px">{{ a.warmupStage }}/4</span>
             </div>
             <div
               v-if="warmupSummary(a).daysUntilNext !== null && !warmupSummary(a).isTopStage"
               class="mono muted-2"
-              style="font-size: 10px; margin-top: 2px;"
+              style="font-size: 10px; margin-top: 2px"
             >
               <template v-if="warmupSummary(a).daysUntilNext === 0">готов к промоушену</template>
               <template v-else>до next: {{ warmupSummary(a).daysUntilNext }} д</template>
@@ -283,27 +337,36 @@ function dropdownItems(a: TgAccount) {
             <div
               v-else-if="!a.warmupStartedAt"
               class="mono muted-2"
-              style="font-size: 10px; margin-top: 2px;"
-            >не стартовал</div>
+              style="font-size: 10px; margin-top: 2px"
+            >
+              не стартовал
+            </div>
           </td>
           <td>
-            <div style="font-size: 11px; color: var(--ink-3);" :title="warmupTooltip(a)">
-              <div>msg <span class="mono cell-strong">{{ formatNumber(a.sentTodayMsg) }}</span> / {{ effectiveCapLabel(a) }}</div>
-              <div>new <span class="mono cell-strong">{{ formatNumber(a.sentTodayNew) }}</span> / {{ formatNumber(a.dailyNewContactLimit) }}</div>
+            <div style="font-size: 11px; color: var(--ink-3)" :title="warmupTooltip(a)">
+              <div>
+                msg <span class="mono cell-strong">{{ formatNumber(a.sentTodayMsg) }}</span> /
+                {{ effectiveCapLabel(a) }}
+              </div>
+              <div>
+                new <span class="mono cell-strong">{{ formatNumber(a.sentTodayNew) }}</span> /
+                {{ formatNumber(a.dailyNewContactLimit) }}
+              </div>
             </div>
           </td>
           <td>
             <span
               v-if="a.cooldownUntil"
               class="mono"
-              style="color: var(--bad);"
+              style="color: var(--bad)"
               :title="formatDateTime(a.cooldownUntil)"
-            >{{ formatUntil(a.cooldownUntil) }}</span>
+              >{{ formatUntil(a.cooldownUntil) }}</span
+            >
             <span v-else class="muted-2">—</span>
           </td>
-          <td class="muted-2 mono" style="font-size: 10.5px;">{{ formatRelative(a.createdAt) }}</td>
+          <td class="muted-2 mono" style="font-size: 10.5px">{{ formatRelative(a.createdAt) }}</td>
           <td>
-            <div style="display: flex; gap: 4px; justify-content: flex-end;">
+            <div style="display: flex; gap: 4px; justify-content: flex-end">
               <button v-if="a.status === 'need_auth'" class="btn sm" @click="loginFor = a">
                 <Icon name="key" :size="11" /><span>Войти</span>
               </button>
@@ -321,19 +384,34 @@ function dropdownItems(a: TgAccount) {
     :open="formOpen"
     :account="editing"
     @close="formOpen = false"
-    @saved="(acc) => { qc.invalidateQueries({ queryKey: ['tg-accounts'] }); formOpen = false; if (!editing) loginFor = acc; }"
+    @saved="
+      (acc) => {
+        qc.invalidateQueries({ queryKey: ['tg-accounts'] });
+        formOpen = false;
+        if (!editing) loginFor = acc;
+      }
+    "
   />
   <TgLoginDialog
     v-if="loginFor"
     :open="!!loginFor"
     :account="loginFor"
     @close="loginFor = null"
-    @done="() => { qc.invalidateQueries({ queryKey: ['tg-accounts'] }); loginFor = null; }"
+    @done="
+      () => {
+        qc.invalidateQueries({ queryKey: ['tg-accounts'] });
+        loginFor = null;
+      }
+    "
   />
   <ConfirmDialog
     :open="!!deleteFor"
     title="Удалить TG аккаунт?"
-    :description="deleteFor ? `Аккаунт «${deleteFor.label}» будет отключён. Активные диалоги перейдут в режим manual.` : ''"
+    :description="
+      deleteFor
+        ? `Аккаунт «${deleteFor.label}» будет отключён. Активные диалоги перейдут в режим manual.`
+        : ''
+    "
     confirm-label="Удалить"
     destructive
     :loading="delMut.isPending.value"

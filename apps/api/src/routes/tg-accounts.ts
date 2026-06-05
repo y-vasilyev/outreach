@@ -7,27 +7,31 @@ import { auditService } from '../services/audit.js';
 export async function tgAccountsRoutes(app: FastifyInstance) {
   app.addHook('onRequest', app.authenticate);
 
-  app.get('/tg-accounts', { preHandler: [app.requireRole(['admin', 'operator', 'viewer'])] }, async () => {
-    const list = await tgAccountsService.list();
-    return list.map((a) => ({
-      id: a.id,
-      label: a.label,
-      phone: a.phone,
-      status: a.status,
-      role: a.role,
-      dailyMsgLimit: a.dailyMsgLimit,
-      dailyNewContactLimit: a.dailyNewContactLimit,
-      parserRpm: a.parserRpm,
-      outreachRpm: a.outreachRpm,
-      sentTodayMsg: a.sentTodayMsg,
-      sentTodayNew: a.sentTodayNew,
-      cooldownUntil: a.cooldownUntil?.toISOString() ?? null,
-      warmupStage: a.warmupStage,
-      warmupStartedAt: a.warmupStartedAt?.toISOString() ?? null,
-      tags: a.tags,
-      notes: a.notes,
-    }));
-  });
+  app.get(
+    '/tg-accounts',
+    { preHandler: [app.requireRole(['admin', 'operator', 'viewer'])] },
+    async () => {
+      const list = await tgAccountsService.list();
+      return list.map((a) => ({
+        id: a.id,
+        label: a.label,
+        phone: a.phone,
+        status: a.status,
+        role: a.role,
+        dailyMsgLimit: a.dailyMsgLimit,
+        dailyNewContactLimit: a.dailyNewContactLimit,
+        parserRpm: a.parserRpm,
+        outreachRpm: a.outreachRpm,
+        sentTodayMsg: a.sentTodayMsg,
+        sentTodayNew: a.sentTodayNew,
+        cooldownUntil: a.cooldownUntil?.toISOString() ?? null,
+        warmupStage: a.warmupStage,
+        warmupStartedAt: a.warmupStartedAt?.toISOString() ?? null,
+        tags: a.tags,
+        notes: a.notes,
+      }));
+    },
+  );
 
   app.post('/tg-accounts', { preHandler: [app.requireRole(['admin'])] }, async (req) => {
     const body = CreateTgAccountInputZ.parse(req.body);
@@ -55,6 +59,7 @@ export async function tgAccountsRoutes(app: FastifyInstance) {
         // Admin override for warmup. 0..4. Use 4 to skip warmup entirely
         // on a known-aged account; use a lower value to redo warmup.
         warmupStage: z.number().int().min(0).max(4).optional(),
+        status: z.enum(['idle', 'active', 'cooldown', 'banned', 'need_auth']).optional(),
         role: z.enum(['parser', 'outreach', 'both']).optional(),
       })
       .parse(req.body);
@@ -73,25 +78,41 @@ export async function tgAccountsRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  app.post('/tg-accounts/:id/clear-cooldown', { preHandler: [app.requireRole(['admin'])] }, async (req) => {
-    const params = z.object({ id: z.string() }).parse(req.params);
-    return tgAccountsService.clearCooldown(params.id);
-  });
+  app.post(
+    '/tg-accounts/:id/clear-cooldown',
+    { preHandler: [app.requireRole(['admin'])] },
+    async (req) => {
+      const params = z.object({ id: z.string() }).parse(req.params);
+      return tgAccountsService.clearCooldown(params.id);
+    },
+  );
 
-  app.post('/tg-accounts/:id/login/start', { preHandler: [app.requireRole(['admin'])] }, async (req) => {
-    const params = z.object({ id: z.string() }).parse(req.params);
-    return tgAccountsService.startLogin(params.id);
-  });
+  app.post(
+    '/tg-accounts/:id/login/start',
+    { preHandler: [app.requireRole(['admin'])] },
+    async (req) => {
+      const params = z.object({ id: z.string() }).parse(req.params);
+      return tgAccountsService.startLogin(params.id);
+    },
+  );
 
-  app.post('/tg-accounts/:id/login/confirm-code', { preHandler: [app.requireRole(['admin'])] }, async (req) => {
-    const params = z.object({ id: z.string() }).parse(req.params);
-    const body = ConfirmCodeInputZ.parse({ tgAccountId: params.id, ...(req.body as object) });
-    return tgAccountsService.confirmCode(params.id, body.code);
-  });
+  app.post(
+    '/tg-accounts/:id/login/confirm-code',
+    { preHandler: [app.requireRole(['admin'])] },
+    async (req) => {
+      const params = z.object({ id: z.string() }).parse(req.params);
+      const body = ConfirmCodeInputZ.parse({ tgAccountId: params.id, ...(req.body as object) });
+      return tgAccountsService.confirmCode(params.id, body.code);
+    },
+  );
 
-  app.post('/tg-accounts/:id/login/confirm-password', { preHandler: [app.requireRole(['admin'])] }, async (req) => {
-    const params = z.object({ id: z.string() }).parse(req.params);
-    const body = ConfirmPasswordInputZ.parse({ tgAccountId: params.id, ...(req.body as object) });
-    return tgAccountsService.confirmPassword(params.id, body.password);
-  });
+  app.post(
+    '/tg-accounts/:id/login/confirm-password',
+    { preHandler: [app.requireRole(['admin'])] },
+    async (req) => {
+      const params = z.object({ id: z.string() }).parse(req.params);
+      const body = ConfirmPasswordInputZ.parse({ tgAccountId: params.id, ...(req.body as object) });
+      return tgAccountsService.confirmPassword(params.id, body.password);
+    },
+  );
 }

@@ -142,6 +142,7 @@ export const tgAccountsService = {
       parserRpm: number | null;
       outreachRpm: number | null;
       warmupStage: number;
+      status: 'idle' | 'active' | 'cooldown' | 'banned' | 'need_auth';
       role: 'parser' | 'outreach' | 'both';
     }>,
   ) {
@@ -155,7 +156,7 @@ export const tgAccountsService = {
   },
 
   /**
-   * Force-clear a FloodWait cooldown on an account. Sets `status='idle'` +
+   * Force-clear a FloodWait cooldown on an account. Sets `status='active'` +
    * `cooldownUntil=null`. Use sparingly: the wall-clock TG-side cooldown
    * is unchanged by this call — if the operator clears too early, the
    * next MTProto call will just re-trip FloodWait. Intended for accounts
@@ -168,7 +169,7 @@ export const tgAccountsService = {
     if (!a) throw Errors.notFound('tg-account', id);
     return prisma.tgAccount.update({
       where: { id },
-      data: { status: 'idle', cooldownUntil: null },
+      data: { status: 'active', cooldownUntil: null },
     });
   },
 
