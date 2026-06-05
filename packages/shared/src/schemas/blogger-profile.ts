@@ -18,6 +18,12 @@ export const RateCardZ = z.object({
   unit: z.string().optional(),
 });
 
+export const SocialProfileLinkZ = z.object({
+  platform: z.string().min(1),
+  url: z.string().url(),
+  handle: z.string().optional(),
+});
+
 /** Audience breakdown — each map is label → share (0..1) or absolute count. */
 export const AudienceZ = z
   .object({
@@ -31,6 +37,8 @@ export const AudienceZ = z
 export const BloggerProfileZ = z.object({
   id: z.string(),
   channelId: z.string().nullable(),
+  displayName: z.string().nullable().optional(),
+  socialLinks: z.array(SocialProfileLinkZ).default([]).optional(),
   topics: z.array(z.string()).default([]),
   languages: z.array(z.string()).default([]),
   formats: z.array(z.string()).default([]),
@@ -82,6 +90,7 @@ export const ProfileExtractionOutputZ = z.object({
 });
 
 export type RateCard = z.infer<typeof RateCardZ>;
+export type SocialProfileLink = z.infer<typeof SocialProfileLinkZ>;
 export type Audience = z.infer<typeof AudienceZ>;
 export type BloggerProfile = z.infer<typeof BloggerProfileZ>;
 export type ProfileDataPoint = z.infer<typeof ProfileDataPointZ>;

@@ -108,6 +108,84 @@ describe('handleProfileExtract', () => {
     expect(result).toMatchObject({ ok: true, profileId: 'prof1', dataPointsCreated: 2 });
   });
 
+  it('fills the blogger profile rate card from a real multi-platform quote', async () => {
+    const liveQuote = `Юрий, добрый день!
+
+*налог на ИП включен
+
+Telegram — https://t.me/polyaam
+*1 месяц, 2-3 часа в топе
+Фотопост — 47 000
+Видеопост — 53 000
+Кружок + текст — 54 000
+
+YouTube — https://youtube.com/@polyaam
+Интеграция 60-120 секунд (первый слот) — 65 000
+Shorts — 42 000
+
+Instagram — https://instagram.com/polyaam?igshid=YmMyMTA2M2Y
+Серия сторис — 37 000
+Рилс — 87 000
+
+ВКонтакте — https://vk.com/club227874258
+Фото-пост — 19 000
+ВК-клип — 22 000
+
+Бонусом кросс-постинг в Tik Tok — www.tiktok.com/@polyaamm Статистика https://disk.yandex.ru/d/2BP6ZLLjtiLwyg`;
+    const ratePoints = [
+      { field: 'rate.telegram_photo_post', value: 47000, unit: 'RUB', confidence: 0.94, rawSnippet: 'Фотопост — 47 000' },
+      { field: 'rate.telegram_video_post', value: 53000, unit: 'RUB', confidence: 0.94, rawSnippet: 'Видеопост — 53 000' },
+      { field: 'rate.telegram_round_text', value: 54000, unit: 'RUB', confidence: 0.94, rawSnippet: 'Кружок + текст — 54 000' },
+      { field: 'rate.youtube_integration_first_slot', value: 65000, unit: 'RUB', confidence: 0.94, rawSnippet: 'Интеграция 60-120 секунд (первый слот) — 65 000' },
+      { field: 'rate.youtube_shorts', value: 42000, unit: 'RUB', confidence: 0.94, rawSnippet: 'Shorts — 42 000' },
+      { field: 'rate.instagram_story_series', value: 37000, unit: 'RUB', confidence: 0.94, rawSnippet: 'Серия сторис — 37 000' },
+      { field: 'rate.instagram_reels', value: 87000, unit: 'RUB', confidence: 0.94, rawSnippet: 'Рилс — 87 000' },
+      { field: 'rate.vk_photo_post', value: 19000, unit: 'RUB', confidence: 0.94, rawSnippet: 'Фото-пост — 19 000' },
+      { field: 'rate.vk_clip', value: 22000, unit: 'RUB', confidence: 0.94, rawSnippet: 'ВК-клип — 22 000' },
+    ];
+    mocks.prisma.message.findUnique.mockResolvedValue({
+      id: 'm_live',
+      text: liveQuote,
+      conversationId: 'conv1',
+      direction: 'in_',
+    });
+    mocks.runAgentSafe.mockImplementation(async (name: string) => {
+      if (name === 'rate_card_extractor') return { data_points: ratePoints };
+      return { data_points: [] };
+    });
+    mocks.prisma.profileDataPoint.findMany.mockResolvedValue(
+      ratePoints.map((p) => ({ ...p, capturedAt: new Date('2026-06-04T10:00:00Z') })),
+    );
+
+    const result = await handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm_live' });
+
+    expect(mocks.prisma.profileDataPoint.create).toHaveBeenCalledTimes(9);
+    expect(
+      mocks.prisma.profileDataPoint.create.mock.calls.every(
+        (c) => (c[0] as { data: { sourceMessageId: string } }).data.sourceMessageId === 'm_live',
+      ),
+    ).toBe(true);
+    expect(mocks.prisma.bloggerProfile.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'prof1' },
+        data: expect.objectContaining({
+          rateCards: [
+            { format: 'instagram_reels', price: 87000, currency: 'RUB' },
+            { format: 'instagram_story_series', price: 37000, currency: 'RUB' },
+            { format: 'telegram_photo_post', price: 47000, currency: 'RUB' },
+            { format: 'telegram_round_text', price: 54000, currency: 'RUB' },
+            { format: 'telegram_video_post', price: 53000, currency: 'RUB' },
+            { format: 'vk_clip', price: 22000, currency: 'RUB' },
+            { format: 'vk_photo_post', price: 19000, currency: 'RUB' },
+            { format: 'youtube_integration_first_slot', price: 65000, currency: 'RUB' },
+            { format: 'youtube_shorts', price: 42000, currency: 'RUB' },
+          ],
+        }),
+      }),
+    );
+    expect(result).toMatchObject({ ok: true, profileId: 'prof1', dataPointsCreated: 9 });
+  });
+
   it('attributes data points to the explicit triggering message (S1 provenance)', async () => {
     mocks.runAgentSafe.mockImplementation(async (name: string) => {
       if (name === 'rate_card_extractor') {

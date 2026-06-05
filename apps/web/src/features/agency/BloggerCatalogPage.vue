@@ -29,6 +29,14 @@ function topRates(p: BloggerProfile): string {
     .map((r) => `${r.format}: ${formatCompact(r.price)} ${r.currency}`)
     .join(' · ');
 }
+
+function profileName(p: BloggerProfile): string {
+  return p.displayName || p.channelId || p.id.slice(0, 8);
+}
+
+function socialLabel(link: NonNullable<BloggerProfile['socialLinks']>[number]): string {
+  return `${link.platform}${link.handle ? ` @${link.handle}` : ''}`;
+}
 </script>
 
 <template>
@@ -62,9 +70,24 @@ function topRates(p: BloggerProfile): string {
     </template>
     <template #row="{ row }">
       <td>
-        <span class="cell-strong">{{ row.channelId ?? row.id.slice(0, 8) }}</span>
+        <span class="cell-strong">{{ profileName(row) }}</span>
         <div v-if="row.languages.length" class="muted-2" style="font-size: 11px;">
           {{ row.languages.join(', ') }}
+        </div>
+        <div v-if="row.socialLinks?.length" style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px;">
+          <a
+            v-for="link in row.socialLinks.slice(0, 4)"
+            :key="`${link.platform}:${link.url}`"
+            class="muted-2"
+            style="font-size: 11px;"
+            :href="link.url"
+            target="_blank"
+            rel="noreferrer"
+            @click.stop
+          >
+            {{ socialLabel(link) }}
+          </a>
+          <span v-if="row.socialLinks.length > 4" class="muted-2" style="font-size: 11px;">+{{ row.socialLinks.length - 4 }}</span>
         </div>
       </td>
       <td>

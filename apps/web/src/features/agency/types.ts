@@ -11,6 +11,12 @@ export interface RateCard {
   unit?: string;
 }
 
+export interface SocialProfileLink {
+  platform: string;
+  url: string;
+  handle?: string;
+}
+
 export interface Audience {
   age?: Record<string, number>;
   gender?: Record<string, number>;
@@ -44,6 +50,8 @@ export type ProfileFreshness = Record<ProfileFreshnessCategory, ProfileFreshness
 export interface BloggerProfile {
   id: string;
   channelId: string | null;
+  displayName?: string | null;
+  socialLinks?: SocialProfileLink[];
   topics: string[];
   languages: string[];
   formats: string[];

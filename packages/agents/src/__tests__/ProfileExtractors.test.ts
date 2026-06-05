@@ -11,6 +11,29 @@ import { makeCtx, makeConfig, makeLLM } from './_mocks.js';
  */
 describe('rate_card_extractor', () => {
   const baseConfig = makeConfig({ systemPrompt: '', userPromptTemplate: '' });
+  const liveMultiPlatformQuote = `Юрий, добрый день!
+
+*налог на ИП включен
+
+Telegram — https://t.me/polyaam
+*1 месяц, 2-3 часа в топе
+Фотопост — 47 000
+Видеопост — 53 000
+Кружок + текст — 54 000
+
+YouTube — https://youtube.com/@polyaam
+Интеграция 60-120 секунд (первый слот) — 65 000
+Shorts — 42 000
+
+Instagram — https://instagram.com/polyaam?igshid=YmMyMTA2M2Y
+Серия сторис — 37 000
+Рилс — 87 000
+
+ВКонтакте — https://vk.com/club227874258
+Фото-пост — 19 000
+ВК-клип — 22 000
+
+Бонусом кросс-постинг в Tik Tok — www.tiktok.com/@polyaamm Статистика https://disk.yandex.ru/d/2BP6ZLLjtiLwyg`;
 
   it('maps per-format prices to rate.<format> data points', async () => {
     const llm = makeLLM({
@@ -74,6 +97,80 @@ describe('rate_card_extractor', () => {
     const ctx = makeCtx({ llm, config: baseConfig });
     const out = await rateCardExtractor.run({ replies: ['пост 5000'], last_inbound: '', channel_title: '', language: 'ru' }, ctx);
     expect(out.data_points[0]?.rawSnippet).toBe('пост 5000');
+  });
+
+  it('keeps paid rows from a real multi-platform quote and ignores tax/bonus lines', async () => {
+    const llm = makeLLM({
+      completeJsonImpl: () => ({
+        data_points: [
+          { field: 'rate.telegram_photo_post', value: 47000, unit: 'RUB', confidence: 0.94, rawSnippet: 'Фотопост — 47 000' },
+          { field: 'rate.telegram_video_post', value: 53000, unit: 'RUB', confidence: 0.94, rawSnippet: 'Видеопост — 53 000' },
+          { field: 'rate.telegram_round_text', value: 54000, unit: 'RUB', confidence: 0.94, rawSnippet: 'Кружок + текст — 54 000' },
+          { field: 'rate.youtube_integration_first_slot', value: 65000, unit: 'RUB', confidence: 0.94, rawSnippet: 'Интеграция 60-120 секунд (первый слот) — 65 000' },
+          { field: 'rate.youtube_shorts', value: 42000, unit: 'RUB', confidence: 0.94, rawSnippet: 'Shorts — 42 000' },
+          { field: 'rate.instagram_story_series', value: 37000, unit: 'RUB', confidence: 0.94, rawSnippet: 'Серия сторис — 37 000' },
+          { field: 'rate.instagram_reels', value: 87000, unit: 'RUB', confidence: 0.94, rawSnippet: 'Рилс — 87 000' },
+          { field: 'rate.vk_photo_post', value: 19000, unit: 'RUB', confidence: 0.94, rawSnippet: 'Фото-пост — 19 000' },
+          { field: 'rate.vk_clip', value: 22000, unit: 'RUB', confidence: 0.94, rawSnippet: 'ВК-клип — 22 000' },
+        ],
+        note: 'tax included; TikTok is bonus cross-posting without a price',
+      }),
+    });
+    const ctx = makeCtx({ llm, config: baseConfig });
+    const out = await rateCardExtractor.run(
+      { replies: [liveMultiPlatformQuote], last_inbound: liveMultiPlatformQuote, channel_title: 'polyaam', language: 'ru' },
+      ctx,
+    );
+
+    expect(out.data_points).toHaveLength(9);
+    expect(out.data_points.map((d) => [d.field, d.value])).toEqual([
+      ['rate.telegram_photo_post', 47000],
+      ['rate.telegram_video_post', 53000],
+      ['rate.telegram_round_text', 54000],
+      ['rate.youtube_integration_first_slot', 65000],
+      ['rate.youtube_shorts', 42000],
+      ['rate.instagram_story_series', 37000],
+      ['rate.instagram_reels', 87000],
+      ['rate.vk_photo_post', 19000],
+      ['rate.vk_clip', 22000],
+    ]);
+    expect(out.data_points.some((d) => d.field.includes('tax') || d.field.includes('tiktok'))).toBe(false);
+    expect(out.data_points.find((d) => d.field === 'rate.youtube_integration_first_slot')?.rawSnippet).toBe(
+      'Интеграция 60-120 секунд (первый слот) — 65 000',
+    );
+  });
+
+  it('recovers platform-specific rates when the model returns generic fields', async () => {
+    const llm = makeLLM({
+      completeJsonImpl: () => ({
+        data_points: [
+          { field: 'rate.integration', value: 65000, unit: 'RUB', confidence: 0.8, rawSnippet: 'Интеграция 60-120 секунд (первый слот) — 65 000' },
+          { field: 'rate.other', value: 54000, unit: 'RUB', confidence: 0.7, rawSnippet: 'Кружок + текст — 54 000' },
+          { field: 'rate.post', value: 47000, unit: 'RUB', confidence: 0.8, rawSnippet: 'Фотопост — 47 000' },
+          { field: 'rate.reels', value: 87000, unit: 'RUB', confidence: 0.8, rawSnippet: 'Рилс — 87 000' },
+          { field: 'rate.story', value: 37000, unit: 'RUB', confidence: 0.8, rawSnippet: 'Серия сторис — 37 000' },
+          { field: 'rate.video', value: 53000, unit: 'RUB', confidence: 0.8, rawSnippet: 'Видеопост — 53 000' },
+        ],
+      }),
+    });
+    const ctx = makeCtx({ llm, config: baseConfig });
+    const out = await rateCardExtractor.run(
+      { replies: [liveMultiPlatformQuote], last_inbound: liveMultiPlatformQuote, channel_title: 'polyaam', language: 'ru' },
+      ctx,
+    );
+
+    expect(out.data_points.map((d) => [d.field, d.value])).toEqual([
+      ['rate.telegram_photo_post', 47000],
+      ['rate.telegram_video_post', 53000],
+      ['rate.telegram_round_text', 54000],
+      ['rate.youtube_integration_first_slot', 65000],
+      ['rate.youtube_shorts', 42000],
+      ['rate.instagram_story_series', 37000],
+      ['rate.instagram_reels', 87000],
+      ['rate.vk_photo_post', 19000],
+      ['rate.vk_clip', 22000],
+    ]);
+    expect(out.data_points.some((d) => d.field === 'rate.post' || d.field === 'rate.other')).toBe(false);
   });
 });
 

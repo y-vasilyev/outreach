@@ -41,6 +41,7 @@ const standardKv = computed<KvItem[]>(() => {
   const p = profile.value;
   if (!p) return [];
   return [
+    { label: 'Профиль', value: p.displayName || p.channelId || p.id, mono: !p.displayName },
     { label: 'Канал', value: p.channelId ?? '—', mono: true },
     { label: 'Языки', value: p.languages.join(', ') || '—' },
     { label: 'Охват', value: p.reach != null ? formatCompact(p.reach) : '—' },
@@ -59,6 +60,15 @@ function assetLabel(a: MediaAsset): string {
   return `${kind}${size}`;
 }
 
+function profileTitle(): string {
+  const p = profile.value;
+  return p?.displayName || p?.channelId || 'Профиль блогера';
+}
+
+function socialLabel(link: NonNullable<BloggerProfile['socialLinks']>[number]): string {
+  return `${link.platform}${link.handle ? ` @${link.handle}` : ''}`;
+}
+
 function renderValue(v: unknown): string {
   if (v == null) return '—';
   if (typeof v === 'object') return JSON.stringify(v);
@@ -67,7 +77,7 @@ function renderValue(v: unknown): string {
 </script>
 
 <template>
-  <PageHead :title="profile?.channelId ?? 'Профиль блогера'" sub="Стандартизированный коммерческий профиль">
+  <PageHead :title="profileTitle()" sub="Стандартизированный коммерческий профиль">
     <template #actions>
       <button class="btn" @click="router.push('/bloggers')">
         <Icon name="arrow_left" :size="12" /><span>К каталогу</span>
@@ -101,6 +111,23 @@ function renderValue(v: unknown): string {
       <div class="card-head"><Icon name="users_round" :size="12" /><span>Стандартизированные поля</span></div>
       <div class="card-body">
         <KeyValue :items="standardKv" />
+        <div v-if="profile.socialLinks?.length" style="margin-top: 12px;">
+          <div class="muted-2" style="font-size: 11px; text-transform: uppercase; margin-bottom: 6px;">Соцпрофили</div>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+            <a
+              v-for="link in profile.socialLinks"
+              :key="`${link.platform}:${link.url}`"
+              class="btn"
+              style="height: 28px; padding: 0 9px; font-size: 12px;"
+              :href="link.url"
+              target="_blank"
+              rel="noreferrer"
+            >
+              <Icon name="arrow_up_right" :size="12" />
+              <span>{{ socialLabel(link) }}</span>
+            </a>
+          </div>
+        </div>
         <div style="margin-top: 12px;">
           <div class="muted-2" style="font-size: 11px; text-transform: uppercase; margin-bottom: 6px;">Темы</div>
           <div style="display: flex; flex-wrap: wrap; gap: 4px;">

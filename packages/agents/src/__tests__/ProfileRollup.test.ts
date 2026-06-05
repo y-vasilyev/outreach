@@ -119,4 +119,36 @@ describe('rollUpProfileFields', () => {
     const out = rollUpProfileFields(points);
     expect(out.rateCards).toEqual([]);
   });
+
+  it('fills rate cards for a real multi-platform quote without tax/bonus rows', () => {
+    const capturedAt = at('2026-06-04T10:00:00Z');
+    const points: RollupDataPoint[] = [
+      { field: 'rate.telegram_photo_post', value: 47000, unit: 'RUB', confidence: 0.94, capturedAt },
+      { field: 'rate.telegram_video_post', value: 53000, unit: 'RUB', confidence: 0.94, capturedAt },
+      { field: 'rate.telegram_round_text', value: 54000, unit: 'RUB', confidence: 0.94, capturedAt },
+      { field: 'rate.youtube_integration_first_slot', value: 65000, unit: 'RUB', confidence: 0.94, capturedAt },
+      { field: 'rate.youtube_shorts', value: 42000, unit: 'RUB', confidence: 0.94, capturedAt },
+      { field: 'rate.instagram_story_series', value: 37000, unit: 'RUB', confidence: 0.94, capturedAt },
+      { field: 'rate.instagram_reels', value: 87000, unit: 'RUB', confidence: 0.94, capturedAt },
+      { field: 'rate.vk_photo_post', value: 19000, unit: 'RUB', confidence: 0.94, capturedAt },
+      { field: 'rate.vk_clip', value: 22000, unit: 'RUB', confidence: 0.94, capturedAt },
+    ];
+
+    const out = rollUpProfileFields(points);
+
+    expect(out.rateCards).toEqual([
+      { format: 'instagram_reels', price: 87000, currency: 'RUB' },
+      { format: 'instagram_story_series', price: 37000, currency: 'RUB' },
+      { format: 'telegram_photo_post', price: 47000, currency: 'RUB' },
+      { format: 'telegram_round_text', price: 54000, currency: 'RUB' },
+      { format: 'telegram_video_post', price: 53000, currency: 'RUB' },
+      { format: 'vk_clip', price: 22000, currency: 'RUB' },
+      { format: 'vk_photo_post', price: 19000, currency: 'RUB' },
+      { format: 'youtube_integration_first_slot', price: 65000, currency: 'RUB' },
+      { format: 'youtube_shorts', price: 42000, currency: 'RUB' },
+    ]);
+    expect(out.formats).toEqual(out.rateCards.map((r) => r.format));
+    expect(out.capturedAt).toBe('2026-06-04T10:00:00.000Z');
+    expect(out.rateCards.some((r) => r.format.includes('tiktok') || r.format.includes('tax'))).toBe(false);
+  });
 });

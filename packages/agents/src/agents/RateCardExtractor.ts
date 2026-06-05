@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ProfileExtractionOutputZ } from '@nosquare/shared';
+import { extractRateCardDataPointsFromText, ProfileExtractionOutputZ } from '@nosquare/shared';
 
 import type { Agent } from '../types.js';
 import { invokeJson } from './_runtime.js';
@@ -146,6 +146,40 @@ export const rateCardExtractor: Agent<RateCardExtractorInput, RateCardExtractorO
       });
     }
 
-    return { data_points, ...(out.note !== undefined ? { note: out.note } : {}) };
+    // Structured multi-platform quotes often have explicit platform headers:
+    // "Telegram — <url>" followed by "Фотопост — 47 000". If the LLM emits
+    // generic `rate.post` / `rate.video` rows, the catalog loses the platform
+    // context even though it is deterministic in the source text. Recover those
+    // rows locally and let them supersede generic rows with the same price or
+    // snippet.
+    const deterministic = extractRateCardDataPointsFromText(sourceText);
+    if (deterministic.length === 0) {
+      return { data_points, ...(out.note !== undefined ? { note: out.note } : {}) };
+    }
+
+    const deterministicPrices = new Set(deterministic.map((dp) => String(dp.value)));
+    const deterministicSnippets = new Set(
+      deterministic.map((dp) => dp.rawSnippet.trim().toLowerCase()).filter(Boolean),
+    );
+    const genericRateFields = new Set([
+      'rate.integration',
+      'rate.other',
+      'rate.post',
+      'rate.reels',
+      'rate.shorts',
+      'rate.story',
+      'rate.video',
+    ]);
+    const remainingModelPoints = data_points.filter((dp) => {
+      const snippet = dp.rawSnippet.trim().toLowerCase();
+      if (snippet && deterministicSnippets.has(snippet)) return false;
+      if (genericRateFields.has(dp.field) && deterministicPrices.has(String(dp.value))) return false;
+      return true;
+    });
+
+    return {
+      data_points: [...deterministic, ...remainingModelPoints],
+      ...(out.note !== undefined ? { note: out.note } : {}),
+    };
   },
 };

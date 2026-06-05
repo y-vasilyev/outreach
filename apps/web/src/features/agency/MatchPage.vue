@@ -70,6 +70,10 @@ const mut = useMutation({
 });
 
 const candidates = computed(() => result.value?.candidates ?? []);
+
+function profileName(profile: MatchResponse['candidates'][number]['profile']): string {
+  return profile.displayName || profile.channelId || profile.id.slice(0, 8);
+}
 </script>
 
 <template>
@@ -140,7 +144,7 @@ const candidates = computed(() => result.value?.candidates ?? []);
         <div v-for="(c, i) in candidates" :key="c.profile.id" class="card">
           <div class="card-head" style="cursor: pointer;" @click="router.push(`/bloggers/${c.profile.id}`)">
             <span class="mono muted-2">#{{ i + 1 }}</span>
-            <span style="font-weight: 500; flex: 1;">{{ c.profile.channelId ?? c.profile.id.slice(0, 8) }}</span>
+            <span style="font-weight: 500; flex: 1;">{{ profileName(c.profile) }}</span>
             <Pill v-if="c.rerankedByLlm" cls="violet" :dot="false" label="LLM re-rank" />
             <span class="mono cell-strong" style="font-size: 14px;">{{ Math.round(c.score * 100) }}</span>
           </div>
