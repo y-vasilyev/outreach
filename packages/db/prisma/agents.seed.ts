@@ -485,7 +485,7 @@ reasons[] — короткие конкретные причины оценки 
     userPromptTemplate:
       'Канал: {{channel_title}} (язык: {{language}})\n\nОтветы блогера (свежий — последний):\n{{replies_text}}\n\nСтруктурированный снимок (если есть):\n{{structured_snapshot}}\n\nВерни JSON: data_points (легаси), placement_offers (структурированные размещения), attribute_proposals (новые атрибуты вне реестра). Сохрани verbatim rawSnippet.',
     params: { temperature: 0.1, max_tokens: 1100 },
-    version: 2,
+    version: 4,
   },
   {
     // Audience-stats extractor (agency-sourcing-matching M5, task 5.1). Medium
