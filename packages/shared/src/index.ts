@@ -19,3 +19,4 @@ export * from './capability-map.js';
 export * from './schemas/campaign-type-builder.js';
 export * from './opener-variant.js';
 export * from './warmup.js';
+export * from './contact-priority.js';

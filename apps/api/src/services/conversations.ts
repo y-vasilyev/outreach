@@ -2,6 +2,11 @@ import { getPrisma, Prisma } from '@nosquare/db';
 import { buildSafetyInput, Errors, extractOpenerVariant } from '@nosquare/shared';
 import type { z } from 'zod';
 import type { ConversationFiltersZ } from '@nosquare/shared';
+import {
+  planConversationDedupe,
+  type DedupeCandidate,
+  type DedupeResult,
+} from './conversation-dedupe.js';
 import { getQueues } from '../queues.js';
 import { emitToRoom } from '../realtime/io.js';
 import { getAgentRunner } from './agents.js';
@@ -130,6 +135,60 @@ export const conversationsService = {
         unread,
       };
     });
+  },
+
+  /**
+   * Collapse duplicate conversations so each channel keeps one outreach
+   * thread. Any conversation we already engaged (has a message) is preserved;
+   * only never-contacted empty shells of a channel that already has a kept
+   * conversation — or the lower-priority empties when none are engaged — are
+   * removed. See `planConversationDedupe` for the exact rule.
+   *
+   * Hard delete is safe here: removed rows have zero messages (nothing to
+   * cascade on `message`), pending opener suggestions are ephemeral
+   * (cascade-deleted), and `agent_run.conversation_id` is `SetNull`, so LLM
+   * cost accounting is preserved.
+   */
+  async dedupe(): Promise<DedupeResult> {
+    const prisma = getPrisma();
+    const convs = await prisma.conversation.findMany({
+      where: { contact: { channelId: { not: null } } },
+      select: {
+        id: true,
+        createdAt: true,
+        contact: {
+          select: { channelId: true, roleGuess: true, type: true, confidence: true },
+        },
+        _count: { select: { messages: true } },
+      },
+    });
+
+    const candidates: DedupeCandidate[] = convs.map((c) => ({
+      id: c.id,
+      channelId: c.contact.channelId,
+      hasMessages: c._count.messages > 0,
+      roleGuess: c.contact.roleGuess,
+      type: c.contact.type,
+      confidence: c.contact.confidence,
+      createdAtMs: c.createdAt.getTime(),
+    }));
+
+    const perChannel = new Map<string, number>();
+    for (const c of candidates) {
+      if (c.channelId) perChannel.set(c.channelId, (perChannel.get(c.channelId) ?? 0) + 1);
+    }
+    const duplicateChannels = [...perChannel.values()].filter((n) => n > 1).length;
+
+    const toRemove = planConversationDedupe(candidates);
+    if (toRemove.length > 0) {
+      await prisma.conversation.deleteMany({ where: { id: { in: toRemove } } });
+    }
+
+    logger.info(
+      { removed: toRemove.length, duplicateChannels, scannedChannels: perChannel.size },
+      'conversation dedupe',
+    );
+    return { scannedChannels: perChannel.size, duplicateChannels, removed: toRemove.length };
   },
 
   async get(id: string) {

@@ -14,6 +14,17 @@ export async function conversationsRoutes(app: FastifyInstance) {
     return conversationsService.list(q);
   });
 
+  /**
+   * Collapse duplicate conversations so each channel keeps a single outreach
+   * thread. A conversation we've already engaged (any message) is always kept;
+   * only never-contacted empty duplicates are removed. Registered before the
+   * `/conversations/:id` param route — `dedupe` is a static segment so Fastify
+   * matches it first, but keeping it above is clearer. Admin/operator only.
+   */
+  app.post('/conversations/dedupe', { preHandler: [app.requireRole(['admin', 'operator'])] }, async () => {
+    return conversationsService.dedupe();
+  });
+
   app.get('/conversations/:id', { preHandler: [app.requireRole(['admin', 'operator', 'viewer'])] }, async (req) => {
     const params = z.object({ id: z.string() }).parse(req.params);
     // Pull any messages the workers missed while offline before

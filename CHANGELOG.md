@@ -6,6 +6,16 @@ All operator-visible changes worth noting between releases.
 
 ### Added
 
+- **«Убрать дубли» в инбоксе.** Кнопка над списком диалогов (admin/operator)
+  схлопывает дублирующиеся диалоги по каналам: на канал остаётся один тред.
+  Чаты, где уже была переписка (входящие ИЛИ исходящие), всегда сохраняются —
+  «если я уже кому-то написал, оставляем этот чат». Удаляются только пустые
+  дубликаты, по которым ещё никто не писал; если на канале пусто во всех, по
+  приоритету роли остаётся лучший контакт (`ad_manager` > `owner` > `generic` >
+  …). Холодные лиды без канала не трогаются. Удаление пустых тредов безопасно
+  для учёта: `agent_run` сохраняются (ссылка обнуляется), теряются только
+  эфемерные pending-подсказки опенинга. Эндпоинт `POST /conversations/dedupe`.
+
 - **`bot` contact type** (openspec change `add-bot-contact-type`). Some bloggers
   publish only an advertising bot as their business contact (e.g. «по рекламе —
   @hadeout_bot»). These are now captured as a first-class `bot` contact type

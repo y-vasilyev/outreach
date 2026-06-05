@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { useQuery, useQueryClient } from '@tanstack/vue-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import ConversationList from './ConversationList.vue';
 import ConversationView from './ConversationView.vue';
 import ContextPanel from './ContextPanel.vue';
 import InboxFilters from './InboxFilters.vue';
 import EmptyState from '../../components/EmptyState.vue';
+import ConfirmDialog from '../../components/ConfirmDialog.vue';
+import Icon from '../../components/Icon.vue';
 import { api } from '../../lib/api';
+import { toast } from '../../lib/toast';
+import { useAuth } from '../../lib/auth';
 import { useRoom } from '../../lib/socket';
 import type { ConversationListItem, Suggestion, ConversationDetail } from './types';
 import {
@@ -20,8 +24,39 @@ import {
 const route = useRoute();
 const router = useRouter();
 const qc = useQueryClient();
+const { user } = useAuth();
 
 const showContext = ref(true);
+
+// Conversation dedup: collapse a channel's duplicate threads to one. Any chat
+// we already wrote to is kept; only never-contacted empty duplicates are
+// removed. Admin/operator only (destructive maintenance action).
+const canDedupe = computed(() => user.value?.role === 'admin' || user.value?.role === 'operator');
+const showDedupeConfirm = ref(false);
+
+const dedupe = useMutation({
+  mutationFn: () =>
+    api.post<{ scannedChannels: number; duplicateChannels: number; removed: number }>(
+      '/conversations/dedupe',
+    ),
+  onSuccess: (r) => {
+    showDedupeConfirm.value = false;
+    if (r.removed > 0) {
+      toast.success(
+        `Убрано дублей: ${r.removed}`,
+        `Каналов с дублями: ${r.duplicateChannels}. Чаты, где уже была переписка, сохранены.`,
+      );
+    } else {
+      toast.info('Дублей не найдено', 'Каждый канал уже ведётся одним диалогом.');
+    }
+    qc.invalidateQueries({ queryKey: ['conversations'] });
+    qc.invalidateQueries({ queryKey: ['conversation'] });
+  },
+  onError: (e: Error) => {
+    showDedupeConfirm.value = false;
+    toast.error('Не удалось дедуплицировать', e.message);
+  },
+});
 
 const conversationId = computed(() => (route.params.conversationId as string | undefined) ?? undefined);
 const filters = computed<InboxFiltersT>(() => parseInboxFilters(route.query));
@@ -118,6 +153,21 @@ useRoom(() => campaignRoom.value, 'message.new', () => {
         :model-value="filters"
         @update:model-value="updateFilters"
       />
+      <div
+        v-if="canDedupe"
+        style="display: flex; justify-content: flex-end; padding: 6px 10px; border-bottom: 1px solid var(--line); background: var(--paper-2);"
+      >
+        <button
+          class="btn ghost sm"
+          type="button"
+          title="Убрать дублирующиеся диалоги по каналам. Чаты, где уже была переписка, сохраняются."
+          :disabled="dedupe.isPending.value"
+          @click="showDedupeConfirm = true"
+        >
+          <Icon name="layers" :size="11" />
+          <span>Убрать дубли</span>
+        </button>
+      </div>
       <ConversationList :items="list" :active-id="conversationId" @pick="pick" />
     </div>
     <template v-if="current">
@@ -146,4 +196,15 @@ useRoom(() => campaignRoom.value, 'message.new', () => {
       </div>
     </template>
   </div>
+
+  <ConfirmDialog
+    :open="showDedupeConfirm"
+    title="Убрать дубли диалогов?"
+    description="По каждому каналу останется один диалог. Чаты, где уже была переписка (входящие или исходящие), сохраняются — удаляются только пустые дубликаты, по которым ещё никто не писал."
+    confirm-label="Убрать дубли"
+    destructive
+    :loading="dedupe.isPending.value"
+    @close="showDedupeConfirm = false"
+    @confirm="dedupe.mutate()"
+  />
 </template>

@@ -8,6 +8,7 @@ import {
   isWithinSchedule,
   MIN_SPONSORED_CONFIDENCE,
   resolveAgentName,
+  scoreContactPriority,
 } from '@nosquare/shared';
 import { getRunner } from '../services/runner.js';
 import { logger } from '../logger.js';
@@ -29,45 +30,19 @@ export const AUTO_DISPATCH_BASE_WHERE = {
 };
 
 /**
- * Role priority for picking WHICH contact of a channel to write to. Mirrors
- * `ContactPrioritizer`'s deterministic ROLE_BASE so the dispatcher and the
- * (LLM-optional) prioritizer agent agree: an explicit advertising/manager
- * contact ("Сотрудничество: менеджер @…", role_guess=`ad_manager`) must win
- * over a channel owner / general "По вопросам" contact on the same channel.
- */
-const DISPATCH_ROLE_PRIORITY: Record<string, number> = {
-  ad_manager: 100,
-  owner: 80,
-  generic: 50,
-  bot: 25,
-  unknown: 10,
-};
-
-const DISPATCH_TYPE_BONUS: Record<string, number> = {
-  tg_username: 15,
-  tg_link: 12,
-  email: 6,
-  phone: 4,
-  web_form: 2,
-  website: 1,
-  other: 0,
-};
-
-/**
- * Dispatch priority for a single contact: role dominates, then contact type,
- * then confidence as a tiebreak. A contact the operator explicitly dropped
- * into THIS campaign (`cmp:<id>` tag) always wins within its channel —
- * explicit selection beats heuristics. Exported pure for unit tests.
+ * Dispatch priority for a single contact. Builds on the shared
+ * `scoreContactPriority` (role dominates, then type, then confidence — the
+ * same ranking the inbox dedup and `ContactPrioritizer` use) and adds one
+ * dispatcher-specific rule: a contact the operator explicitly dropped into
+ * THIS campaign (`cmp:<id>` tag) always wins within its channel — explicit
+ * selection beats heuristics. Exported pure for unit tests.
  */
 export function dispatchContactScore(
   contact: { roleGuess: string; type: string; confidence: unknown; tags: string[] },
   manualTag: string,
 ): number {
-  const role = DISPATCH_ROLE_PRIORITY[contact.roleGuess] ?? 0;
-  const typeBonus = DISPATCH_TYPE_BONUS[contact.type] ?? 0;
-  const conf = Math.round(Number(contact.confidence ?? 0) * 10);
   const manual = contact.tags.includes(manualTag) ? 1000 : 0;
-  return manual + role + typeBonus + conf;
+  return manual + scoreContactPriority(contact);
 }
 
 /**
