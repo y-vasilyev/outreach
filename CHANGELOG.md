@@ -41,6 +41,18 @@ All operator-visible changes worth noting between releases.
 
 ### Fixed
 
+- **Campaign dispatch writes to the channel's ad/manager contact, not its
+  owner.** When a channel published both an explicit advertising contact
+  («Сотрудничество: менеджер @leksamng», `ad_manager`) and a general owner /
+  «По вопросам» contact (`owner`), the dispatcher could open the conversation
+  with the owner — it ranked candidates by `confidence` alone, so a
+  higher-confidence owner outran the manager, and with no per-channel dedup it
+  even messaged both. The dispatcher now keeps at most one contact per channel
+  and picks the best by role first (`ad_manager` > `owner` > `generic` > `bot`
+  > `unknown`), then type, then confidence — matching `ContactPrioritizer`. A
+  contact an operator explicitly dropped into the campaign («В кампанию») still
+  wins within its channel. Cold-lead contacts (no channel) are unaffected.
+
 - **Production console errors — realtime restored & noise removed**
   (openspec change `fix-prod-console-errors`). Three production-only
   defects fixed: (1) the inbox WebSocket (`wss://outreach.su/socket.io/`)

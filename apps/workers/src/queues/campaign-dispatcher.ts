@@ -28,6 +28,86 @@ export const AUTO_DISPATCH_BASE_WHERE = {
   type: { not: 'bot' as const },
 };
 
+/**
+ * Role priority for picking WHICH contact of a channel to write to. Mirrors
+ * `ContactPrioritizer`'s deterministic ROLE_BASE so the dispatcher and the
+ * (LLM-optional) prioritizer agent agree: an explicit advertising/manager
+ * contact ("Сотрудничество: менеджер @…", role_guess=`ad_manager`) must win
+ * over a channel owner / general "По вопросам" contact on the same channel.
+ */
+const DISPATCH_ROLE_PRIORITY: Record<string, number> = {
+  ad_manager: 100,
+  owner: 80,
+  generic: 50,
+  bot: 25,
+  unknown: 10,
+};
+
+const DISPATCH_TYPE_BONUS: Record<string, number> = {
+  tg_username: 15,
+  tg_link: 12,
+  email: 6,
+  phone: 4,
+  web_form: 2,
+  website: 1,
+  other: 0,
+};
+
+/**
+ * Dispatch priority for a single contact: role dominates, then contact type,
+ * then confidence as a tiebreak. A contact the operator explicitly dropped
+ * into THIS campaign (`cmp:<id>` tag) always wins within its channel —
+ * explicit selection beats heuristics. Exported pure for unit tests.
+ */
+export function dispatchContactScore(
+  contact: { roleGuess: string; type: string; confidence: unknown; tags: string[] },
+  manualTag: string,
+): number {
+  const role = DISPATCH_ROLE_PRIORITY[contact.roleGuess] ?? 0;
+  const typeBonus = DISPATCH_TYPE_BONUS[contact.type] ?? 0;
+  const conf = Math.round(Number(contact.confidence ?? 0) * 10);
+  const manual = contact.tags.includes(manualTag) ? 1000 : 0;
+  return manual + role + typeBonus + conf;
+}
+
+/**
+ * Collapse a candidate list to at most one contact per channel — the
+ * highest-scoring one. Without this the dispatcher writes to EVERY qualifying
+ * contact of a channel, so a higher-confidence `owner`/"По вопросам" contact
+ * gets messaged ahead of (or instead of, under pacing) the explicit
+ * `ad_manager`. Cold leads (`channelId === null`) are never collapsed — each
+ * pasted lead is its own target. Result is sorted best-first so per-tick
+ * pacing/caps spend on the best contact first. Exported pure for unit tests.
+ */
+export function dedupeBestContactPerChannel<
+  T extends {
+    channelId: string | null;
+    roleGuess: string;
+    type: string;
+    confidence: unknown;
+    tags: string[];
+  },
+>(candidates: T[], manualTag: string): T[] {
+  const bestByChannel = new Map<string, T>();
+  const coldLeads: T[] = [];
+  for (const c of candidates) {
+    if (c.channelId == null) {
+      coldLeads.push(c);
+      continue;
+    }
+    const cur = bestByChannel.get(c.channelId);
+    if (
+      !cur ||
+      dispatchContactScore(c, manualTag) > dispatchContactScore(cur, manualTag)
+    ) {
+      bestByChannel.set(c.channelId, c);
+    }
+  }
+  return [...bestByChannel.values(), ...coldLeads].sort(
+    (a, b) => dispatchContactScore(b, manualTag) - dispatchContactScore(a, manualTag),
+  );
+}
+
 interface OpenerOut {
   // `variantKey` is populated by the composer's deterministic post-process
   // (`assignVariantKeys`) — always non-empty (alphabetical fallback when the
@@ -229,7 +309,7 @@ export function startCampaignDispatcher() {
           ],
         };
 
-        const candidates = await prisma.contact.findMany({
+        const rawCandidates = await prisma.contact.findMany({
           where,
           include: { channel: true },
           // Higher take so a "В кампанию" of 50–100 contacts isn't paced
@@ -238,6 +318,12 @@ export function startCampaignDispatcher() {
           take: 25,
           orderBy: { confidence: 'desc' },
         });
+
+        // One outreach per channel, to its best contact: prefer the explicit
+        // ad_manager ("Сотрудничество: менеджер @…") over a higher-confidence
+        // owner / "По вопросам" contact on the same channel. Без этого
+        // диспетчер пишет блогеру-владельцу вместо менеджера по рекламе.
+        const candidates = dedupeBestContactPerChannel(rawCandidates, manualTag);
 
         if (candidates.length === 0) continue;
         if (c.outreachAccountPool.length === 0) {
