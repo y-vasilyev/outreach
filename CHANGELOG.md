@@ -4,6 +4,29 @@ All operator-visible changes worth noting between releases.
 
 ## Unreleased
 
+### Added
+
+- **Structured placement offers** (openspec change `entity-style-rate-cards`).
+  Blogger quotes are now extracted as structured commercial offers — each with
+  a stable `kind` plus typed attributes (platform, duration, deletion policy,
+  included deliverables, tax, notes), confidence, and source provenance —
+  instead of only flat `rate.<format>` price points. A day post and a month
+  post no longer collapse into one price; tax (e.g. «налог 6%») is kept as an
+  attribute rather than a phantom price row. The blogger profile page renders a
+  new "Размещения" card showing each offer's terms with its raw source snippet;
+  the legacy price table remains as a fallback. The data-collection planner now
+  asks focused follow-ups for missing terms (deletion policy, duration, tax,
+  deliverables) instead of re-asking for the whole rate card, and blogger
+  matching can rank on structured terms (e.g. a long-lived Telegram post over a
+  one-day post). Extraction may propose new attributes it sees in real quotes;
+  proposals stay inactive until an admin approves them under a new
+  **Settings → admin** review surface (`/placement-attributes`). Everything is
+  gated by the new **`structured_placement_offers`** feature flag
+  (Settings → Features, admin-only, default off) with a legacy-only fallback;
+  legacy `rateCards`/`formats` stay populated (derived from offers) during
+  rollout. Ships a DB migration (`blogger_profile.placement_offers` column +
+  `placement_attribute` registry/proposals table).
+
 ### Fixed
 
 - **Production console errors — realtime restored & noise removed**

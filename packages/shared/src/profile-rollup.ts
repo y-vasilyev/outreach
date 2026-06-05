@@ -1,3 +1,13 @@
+import {
+  PlacementOfferZ,
+  type PlacementOffer,
+} from './schemas/placement-offer.js';
+import {
+  derivePlacementFormatKey,
+  getOfferAttribute,
+  placementOffersToFormats,
+  placementOffersToRateCards,
+} from './placement-offers.js';
 import type { Audience, BloggerProfile, RateCard } from './schemas/blogger-profile.js';
 
 /**
@@ -16,6 +26,7 @@ import type { Audience, BloggerProfile, RateCard } from './schemas/blogger-profi
  * value beating a slightly-less-confident fresh value (S2).
  *
  * Field naming convention emitted by the extractor agents:
+ *   - `placement.offer`            → structured PlacementOffer (entity-style)
  *   - `rate.<format>`              → rate card entries (value = numeric price)
  *   - `reach.<format>` / `reach`   → reach (numeric)
  *   - `views.avg` / `avg_views`    → average views (numeric)
@@ -38,7 +49,15 @@ export interface RollupDataPoint {
 
 export type RolledUpProfileFields = Pick<
   BloggerProfile,
-  'topics' | 'languages' | 'formats' | 'audience' | 'rateCards' | 'reach' | 'avgViews' | 'capturedAt'
+  | 'topics'
+  | 'languages'
+  | 'formats'
+  | 'audience'
+  | 'rateCards'
+  | 'placementOffers'
+  | 'reach'
+  | 'avgViews'
+  | 'capturedAt'
 >;
 
 function toMillis(at: string | Date): number {
@@ -119,6 +138,80 @@ function rateFormat(field: string): string | undefined {
 }
 
 /**
+ * Field name the extractor/persistence layer (Section 2) writes structured
+ * placement offers under: one `ProfileDataPoint` row per offer, `value` a
+ * validated `PlacementOffer` JSON object.
+ */
+const PLACEMENT_OFFER_FIELD = 'placement.offer';
+
+/**
+ * A stored placement offer plus the timestamp it was captured at, used to
+ * choose best-by-confidence-then-recency across messages.
+ */
+interface CollectedOffer {
+  offer: PlacementOffer;
+  capturedMs: number;
+}
+
+/**
+ * Stable identity for an offer: two offers with the same platform/kind/duration/
+ * price/currency/snippet are the *same* offer (e.g. re-quoted in two messages).
+ * A day post vs a month post differ on `duration`, so they never collapse.
+ */
+function offerDedupeKey(offer: PlacementOffer): string {
+  const duration = getOfferAttribute(offer, 'duration');
+  const durationStr = typeof duration === 'string' ? duration.toLowerCase() : '';
+  return [
+    (offer.platform ?? '').toLowerCase(),
+    offer.kind.toLowerCase(),
+    durationStr,
+    offer.price ?? '',
+    (offer.currency ?? '').toLowerCase(),
+    offer.rawSnippet.trim(),
+  ].join('|');
+}
+
+/**
+ * Roll up `placement.offer` data points into the deduped list of structured
+ * offers. Invalid values are skipped (provenance on the row is the audit trail).
+ * Within identical identity keys we keep the highest-confidence, then most
+ * recent offer; distinct offers (e.g. day vs month post) are all preserved.
+ * Provenance already lives on each `PlacementOffer` (sourceMessageId/rawSnippet/
+ * capturedAt); we keep the row's `capturedAt` as a tie-break fallback when the
+ * offer itself carries none.
+ */
+function collectPlacementOffers(points: RollupDataPoint[]): PlacementOffer[] {
+  const best = new Map<string, CollectedOffer>();
+  const order: string[] = [];
+  for (const p of points) {
+    if (p.field !== PLACEMENT_OFFER_FIELD) continue;
+    const parsed = PlacementOfferZ.safeParse(p.value);
+    if (!parsed.success) continue;
+    const offer = parsed.data;
+    // Keep the offer's own capturedAt provenance; backfill from the row when
+    // the stored offer didn't carry one (older writes).
+    if (!offer.capturedAt) {
+      const at = p.capturedAt;
+      offer.capturedAt = at instanceof Date ? at.toISOString() : String(at);
+    }
+    const capturedMs = offer.capturedAt ? toMillis(offer.capturedAt) : toMillis(p.capturedAt);
+    const key = offerDedupeKey(offer);
+    const existing = best.get(key);
+    if (!existing) {
+      best.set(key, { offer, capturedMs });
+      order.push(key);
+      continue;
+    }
+    // Higher confidence wins; tie → more recent.
+    const better =
+      offer.confidence > existing.offer.confidence ||
+      (offer.confidence === existing.offer.confidence && capturedMs > existing.capturedMs);
+    if (better) best.set(key, { offer, capturedMs });
+  }
+  return order.map((k) => best.get(k)!.offer);
+}
+
+/**
  * Compose the standardized profile fields from a set of data points.
  * Returns the rolled-up view; the caller persists it onto the BloggerProfile
  * row. `capturedAt` is the most recent contributing data point's timestamp
@@ -134,13 +227,19 @@ export function rollUpProfileFields(points: RollupDataPoint[]): RolledUpProfileF
   const groupsMatching = (pred: (field: string) => boolean): RollupDataPoint[] =>
     points.filter((p) => pred(p.field));
 
-  // ── Rate cards: one per distinct format, latest-high-confidence price ──
+  // ── Structured placement offers (entity-style-rate-cards). Source of truth
+  // for commercial terms when present; legacy rateCards/formats are derived
+  // from these and merged with the legacy `rate.*`-derived ones below. ──
+  const placementOffers = collectPlacementOffers(points);
+
+  // ── Legacy rate cards: one per distinct `rate.<format>`, latest-high-
+  // confidence price ──
   const rateFormats = new Set<string>();
   for (const f of byField.keys()) {
     const fmt = rateFormat(f);
     if (fmt) rateFormats.add(fmt);
   }
-  const rateCards: RateCard[] = [];
+  const legacyRateCards: RateCard[] = [];
   for (const fmt of [...rateFormats].sort()) {
     const pts = byField.get(`rate.${fmt}`) ?? [];
     const chosen = byConfidenceThenRecency(pts).find(
@@ -148,11 +247,24 @@ export function rollUpProfileFields(points: RollupDataPoint[]): RolledUpProfileF
     );
     const price = chosen ? toFiniteNumber(chosen.value) : undefined;
     if (price === undefined) continue;
-    rateCards.push({
+    legacyRateCards.push({
       format: fmt,
       price,
       currency: chosen?.unit && chosen.unit.trim() ? chosen.unit.trim() : 'RUB',
     });
+  }
+
+  // ── Merge precedence: structured offers win over a legacy `rate.<fmt>` that
+  // maps to the SAME derived format key, but distinct legacy cards with no
+  // structured equivalent are preserved. Two distinct structured offers (day vs
+  // month post) yield two cards (placementOffersToRateCards keeps them apart). ──
+  const structuredRateCards = placementOffersToRateCards(placementOffers);
+  const structuredFormatKeys = new Set<string>();
+  for (const offer of placementOffers) structuredFormatKeys.add(derivePlacementFormatKey(offer));
+  const rateCards: RateCard[] = [...structuredRateCards];
+  for (const legacy of legacyRateCards) {
+    if (structuredFormatKeys.has(legacy.format)) continue;
+    rateCards.push(legacy);
   }
 
   // ── Reach: prefer the bare `reach` field, else any reach.<x> ──
@@ -203,9 +315,14 @@ export function rollUpProfileFields(points: RollupDataPoint[]): RolledUpProfileF
   };
   const topics = collectList((f) => f === 'topics' || f === 'topic');
   const languages = collectList((f) => f === 'languages' || f === 'language');
-  // Formats offered = explicit format fields ∪ formats we have a rate card for.
+  // Formats offered = explicit format fields ∪ structured-offer formats ∪
+  // formats we have a (merged) rate card for. Structured offers contribute even
+  // when price-less (a term-only offer still describes an offered format).
   const formatsFromFields = collectList((f) => f === 'formats' || f === 'format');
   const formats = [...formatsFromFields];
+  for (const f of placementOffersToFormats(placementOffers)) {
+    if (!formats.includes(f)) formats.push(f);
+  }
   for (const rc of rateCards) {
     if (!formats.includes(rc.format)) formats.push(rc.format);
   }
@@ -226,6 +343,7 @@ export function rollUpProfileFields(points: RollupDataPoint[]): RolledUpProfileF
     formats,
     audience,
     rateCards,
+    placementOffers,
     reach: reach ?? null,
     avgViews: avgViews ?? null,
     capturedAt,

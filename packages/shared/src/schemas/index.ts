@@ -8,6 +8,8 @@ export * from './contact.js';
 export * from './campaign.js';
 export * from './campaign-type.js';
 export * from './blogger-profile.js';
+export * from './placement-offer.js';
+export * from './placement-attribute-review.js';
 export * from './media-asset.js';
 export * from './matching.js';
 export * from './discovery.js';

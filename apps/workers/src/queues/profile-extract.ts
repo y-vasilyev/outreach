@@ -3,13 +3,17 @@ import { getRedis } from '../redis.js';
 import {
   buildHudTargetRow,
   getSuggestionTargetField,
+  PlacementOfferZ,
   preGateExtraction,
   ProfileExtractJobZ,
   QueueNames,
   resolveEffectiveHudTargets,
   rollUpProfileFields,
+  stampOfferProvenance,
   targetsForProfileField,
   type DataCollectionTarget,
+  type PlacementAttributeProposalDraft,
+  type PlacementOfferDraft,
   type ProfileDataPointDraft,
   type RollupDataPoint,
 } from '@nosquare/shared';
@@ -22,6 +26,8 @@ import { snapshotRawPayload } from '../services/media-store.js';
 
 interface ExtractionOut {
   data_points: ProfileDataPointDraft[];
+  placement_offers?: PlacementOfferDraft[];
+  attribute_proposals?: PlacementAttributeProposalDraft[];
   note?: string;
 }
 
@@ -179,6 +185,19 @@ export async function handleProfileExtract(data: {
     return { ok: true, channelId, dataPoints: 0 };
   }
 
+  // Structured placement offers (entity-style-rate-cards). Behind the
+  // `structured_placement_offers` flag: when off, behavior is unchanged
+  // (legacy data_points only). When on, we ALSO dual-write the extractor's
+  // placement_offers as `placement.offer` ProfileDataPoint rows and its
+  // attribute_proposals as `placement_attribute` rows (status='proposed').
+  const structuredOffersEnabled = getFeatureFlags().get('structured_placement_offers');
+  const placementOfferDrafts: PlacementOfferDraft[] = structuredOffersEnabled
+    ? (rate?.placement_offers ?? [])
+    : [];
+  const attributeProposals: PlacementAttributeProposalDraft[] = structuredOffersEnabled
+    ? (rate?.attribute_proposals ?? [])
+    : [];
+
   // Ensure the catalog profile exists (keyed by channelId), then persist all
   // data points and re-roll the standardized fields — in one transaction so a
   // reader never sees data points without the rolled-up view they imply.
@@ -230,6 +249,80 @@ export async function handleProfileExtract(data: {
       });
     }
 
+    // Dual-write structured placement offers as `placement.offer` data points
+    // (entity-style-rate-cards). Idempotent on
+    // (profileId, sourceMessageId, field='placement.offer', extractedBy) PLUS
+    // the offer's rawSnippet (so two distinct offers from the same message —
+    // e.g. day vs month post — both persist, but a re-run does not duplicate).
+    if (structuredOffersEnabled) {
+      const capturedAt = now.toISOString();
+      for (const draft of placementOfferDrafts) {
+        const offer = stampOfferProvenance(draft, {
+          sourceMessageId,
+          extractedBy: 'rate_card_extractor',
+          capturedAt,
+        });
+        const value = PlacementOfferZ.parse(offer);
+        const existing = await tx.profileDataPoint.findFirst({
+          where: {
+            profileId: profile.id,
+            sourceMessageId,
+            field: 'placement.offer',
+            extractedBy: 'rate_card_extractor',
+            rawSnippet: value.rawSnippet,
+          },
+          select: { id: true },
+        });
+        if (existing) continue;
+        await tx.profileDataPoint.create({
+          data: {
+            profileId: profile.id,
+            field: 'placement.offer',
+            value: value as never,
+            unit: value.currency,
+            confidence: value.confidence,
+            extractedBy: 'rate_card_extractor',
+            sourceMessageId,
+            rawSnippet: value.rawSnippet,
+            capturedAt: now,
+          },
+        });
+      }
+
+      // Persist attribute proposals as `placement_attribute` rows
+      // (status='proposed'). Dedupe by (key, sourceMessageId) so the same
+      // suggestedKey from the same source message is not duplicated on re-run.
+      for (const proposal of attributeProposals) {
+        const key = proposal.suggestedKey.trim();
+        if (!key) continue;
+        const existing = await tx.placementAttribute.findFirst({
+          where: { key, sourceMessageId },
+          select: { id: true },
+        });
+        if (existing) continue;
+        await tx.placementAttribute.create({
+          data: {
+            key,
+            valueType: proposal.suggestedType,
+            description: proposal.rationale,
+            applicableKinds: proposal.applicableKinds,
+            enumValues: proposal.enumValues ?? [],
+            status: 'proposed',
+            evidence: proposal.evidence as never,
+            confidence: proposal.confidence,
+            rationale: proposal.rationale,
+            sourceMessageId,
+            // The agent run id is not surfaced by `runAgentSafe` (it returns
+            // only the parsed output). Correlate proposals to the run via the
+            // (profileId, sourceMessageId) tuple + the `agent_run` row written
+            // by AgentRunner for this conversation/message. Left null until the
+            // runner exposes the id. (Section follow-up.)
+            proposedByRunId: null,
+          },
+        });
+      }
+    }
+
     const allPoints = await tx.profileDataPoint.findMany({
       where: { profileId: profile.id },
     });
@@ -253,6 +346,11 @@ export async function handleProfileExtract(data: {
         reach: rolled.reach,
         avgViews: rolled.avgViews,
         capturedAt: rolled.capturedAt ? new Date(rolled.capturedAt) : null,
+        // Structured placement offers (entity-style-rate-cards). The roll-up
+        // populates `rolled.placementOffers` from the `placement.offer` data
+        // points; we persist it onto the new column. Only when the flag is on
+        // (so flag-off behavior is byte-identical to today).
+        ...(structuredOffersEnabled ? { placementOffers: rolled.placementOffers as never } : {}),
       },
     });
 

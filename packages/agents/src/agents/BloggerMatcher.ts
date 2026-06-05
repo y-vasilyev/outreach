@@ -34,6 +34,29 @@ const candidateInZ = z.object({
   rate_cards: z
     .array(z.object({ format: z.string(), price: z.number(), currency: z.string().default('RUB') }))
     .default([]),
+  /**
+   * Structured placement offers (entity-style-rate-cards) the deterministic
+   * scorer used for format/budget fit. Present only when the
+   * `structured_placement_offers` flag is on AND the profile has offers; the
+   * model should prefer these over `rate_cards` when both are present, since
+   * they preserve platform/kind/duration/deletion-policy/included-deliverables/
+   * tax terms that the flat rate cards collapse.
+   */
+  placement_offers: z
+    .array(
+      z.object({
+        kind: z.string(),
+        platform: z.string().nullable().default(null),
+        price: z.number().nullable().default(null),
+        currency: z.string().default('RUB'),
+        attributes: z
+          .array(z.object({ key: z.string(), value: z.unknown() }))
+          .default([]),
+      }),
+    )
+    .default([]),
+  /** Compact human-readable summary of the best-fit offer's placement terms. */
+  placement_terms: z.string().default(''),
   reach: z.number().nullable().default(null),
 });
 
@@ -68,7 +91,8 @@ const FALLBACK_SYSTEM = `Ты — медиабайер агентства. Те�
 - Работай ТОЛЬКО с переданными profile_id. НЕ добавляй и НЕ выдумывай новых.
 - Можешь скорректировать score (0..1) и rationale, но оставайся близко к данным; не завышай при превышении бюджета.
 - Верни ВСЕ переданные profile_id (если сомневаешься — оставь исходный score и rationale).
-- rationale — короткое человекочитаемое объяснение, ссылайся на прайс/гео/форматы.
+- Если у кандидата есть structured placement terms (поле placement_offers / placement_terms) — опирайся ИМЕННО на них (площадка, тип, срок размещения, удаление/бессрочно, что входит, налог), а не на синтетические rate_cards. Пример: для брифа на долгоживущий пост в Telegram кандидат с platform=telegram, kind=post, duration=month (или delete_policy=permanent) должен стоять выше того, кто предлагает только пост на сутки.
+- rationale — короткое человекочитаемое объяснение; ссылайся на КОНКРЕТНЫЕ условия размещения (срок, удаление, что входит, налог) и прайс/гео, которые определили выбор или штраф.
 
 Возвращай только JSON: { ranked: [{ profile_id, score, rationale }] } по убыванию score.`;
 

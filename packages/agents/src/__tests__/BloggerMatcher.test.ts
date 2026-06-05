@@ -31,6 +31,8 @@ function candidate(id: string, score: number) {
     formats: ['пост'],
     geo: ['RU'],
     rate_cards: [{ format: 'пост', price: 10000, currency: 'RUB' }],
+    placement_offers: [],
+    placement_terms: '',
     reach: 50000,
   };
 }

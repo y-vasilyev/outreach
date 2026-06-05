@@ -321,6 +321,116 @@ Instagram — https://instagram.com/polyaam?igshid=YmMyMTA2M2Y
     expect(out.formats).toEqual(out.rateCards.map((r) => r.format));
   });
 
+  it('surfaces structured placement offers and keeps day vs month post prices distinct', async () => {
+    const dayPost = {
+      kind: 'post',
+      platform: 'telegram',
+      price: 13000,
+      currency: 'RUB',
+      attributes: [{ key: 'duration', value: 'day', confidence: 0.9, rawSnippet: 'на сутки' }],
+      confidence: 0.9,
+      rawSnippet: 'пост на сутки 13000',
+      sourceMessageId: 'm_offers',
+      extractedBy: 'rate_card_extractor',
+      capturedAt: NOW.toISOString(),
+    };
+    const monthPost = {
+      kind: 'post',
+      platform: 'telegram',
+      price: 21000,
+      currency: 'RUB',
+      attributes: [
+        { key: 'duration', value: 'month', confidence: 0.9, rawSnippet: 'на месяц' },
+        { key: 'tax', value: 'налог 6%', confidence: 0.8, rawSnippet: '+ налог 6%' },
+      ],
+      confidence: 0.9,
+      rawSnippet: 'пост на месяц 21000 + налог 6%',
+      sourceMessageId: 'm_offers',
+      extractedBy: 'rate_card_extractor',
+      capturedAt: NOW.toISOString(),
+    };
+    prismaMock.bloggerProfile.findUnique.mockResolvedValue({
+      id: 'p_offers',
+      channelId: null,
+      topics: [],
+      languages: ['ru'],
+      formats: ['telegram_post_day', 'telegram_post_month'],
+      audience: {},
+      rateCards: [
+        { format: 'telegram_post_day', price: 13000, currency: 'RUB' },
+        { format: 'telegram_post_month', price: 21000, currency: 'RUB' },
+      ],
+      placementOffers: [dayPost, monthPost],
+      reach: null,
+      avgViews: null,
+      capturedAt: NOW,
+      createdAt: NOW,
+      updatedAt: NOW,
+      dataPoints: [],
+      mediaAssets: [],
+    });
+
+    const out = await bloggerProfilesService.get('p_offers');
+
+    // Structured offers surface with typed attributes and provenance.
+    expect(out.placementOffers).toHaveLength(2);
+    expect(out.placementOffers[1]).toMatchObject({
+      kind: 'post',
+      price: 21000,
+      currency: 'RUB',
+      sourceMessageId: 'm_offers',
+      rawSnippet: 'пост на месяц 21000 + налог 6%',
+    });
+    // Day vs month post stay distinct compatibility rate cards (no collapse).
+    expect(out.rateCards).toEqual([
+      { format: 'telegram_post_day', price: 13000, currency: 'RUB' },
+      { format: 'telegram_post_month', price: 21000, currency: 'RUB' },
+    ]);
+    expect(out.formats).toEqual(['telegram_post_day', 'telegram_post_month']);
+  });
+
+  it('keeps unknown / inactive attributes out of the active offer attributes (review-only)', async () => {
+    // Section 2 persists only validated active attributes on the offer; an
+    // unknown key (e.g. an unapproved proposal) is NOT stored as an offer
+    // attribute, so it must not appear on the read surface.
+    const offer = {
+      kind: 'post',
+      platform: 'telegram',
+      price: 21000,
+      currency: 'RUB',
+      attributes: [{ key: 'duration', value: 'month', confidence: 0.9, rawSnippet: '' }],
+      confidence: 0.9,
+      rawSnippet: 'пост на месяц 21000',
+      sourceMessageId: null,
+      extractedBy: 'llm',
+      capturedAt: NOW.toISOString(),
+    };
+    prismaMock.bloggerProfile.findUnique.mockResolvedValue({
+      id: 'p_review',
+      channelId: null,
+      topics: [],
+      languages: ['ru'],
+      formats: [],
+      audience: {},
+      rateCards: [],
+      placementOffers: [offer],
+      reach: null,
+      avgViews: null,
+      capturedAt: NOW,
+      createdAt: NOW,
+      updatedAt: NOW,
+      dataPoints: [],
+      mediaAssets: [],
+    });
+
+    const out = await bloggerProfilesService.get('p_review');
+    const keys = out.placementOffers[0]?.attributes.map((a) => a.key) ?? [];
+    expect(keys).toEqual(['duration']);
+    // No unknown/inactive attribute leaked onto the active offer.
+    expect(keys).not.toContain('delete_policy_v2');
+    expect(JSON.stringify(out.placementOffers)).not.toContain('proposal');
+  });
+
   it('repairs inline placement terms from source text so post prices do not collapse', async () => {
     const inlineQuote = `Добрый день) у нас есть формат размещений в тг-канале: пост на сутки 13000, пост на месяц 21000 + налог 6%
 

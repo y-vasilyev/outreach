@@ -2,17 +2,21 @@ import { getPrisma, type BloggerProfile as DbBloggerProfile, type AdBrief as DbA
 import {
   Errors,
   rankProfiles,
+  structuredPlacementScore,
   RateCardZ,
   AudienceZ,
+  PlacementOfferZ,
   type AdBrief,
   type MatchableProfile,
   type ScoredProfile,
   type RateCard,
   type Audience,
+  type PlacementOffer,
 } from '@nosquare/shared';
 import type { CreateAdBriefInput } from '@nosquare/shared';
 
 import { getAgentRunner } from './agents.js';
+import { getFeatureFlags } from '../feature-flags.js';
 import { logger } from '../logger.js';
 
 /**
@@ -58,6 +62,17 @@ function parseAudience(value: unknown): Audience {
   return parsed.success ? parsed.data : {};
 }
 
+/** Parse the profile's `placementOffers` JSON column into typed offers. */
+function parsePlacementOffers(value: unknown): PlacementOffer[] {
+  const arr = Array.isArray(value) ? value : [];
+  const out: PlacementOffer[] = [];
+  for (const item of arr) {
+    const parsed = PlacementOfferZ.safeParse(item);
+    if (parsed.success) out.push(parsed.data);
+  }
+  return out;
+}
+
 function toMatchable(p: DbBloggerProfile): MatchableProfile {
   return {
     id: p.id,
@@ -66,6 +81,7 @@ function toMatchable(p: DbBloggerProfile): MatchableProfile {
     formats: p.formats,
     audience: parseAudience(p.audience),
     rateCards: parseRateCards(p.rateCards),
+    placementOffers: parsePlacementOffers((p as { placementOffers?: unknown }).placementOffers),
     reach: p.reach ?? null,
     avgViews: p.avgViews ?? null,
   };
@@ -128,8 +144,16 @@ export const matchingService = {
     const profiles = profilesRows.map(toMatchable);
     const profileById = new Map(profilesRows.map((p) => [p.id, p]));
 
+    // `structured_placement_offers` rollout: when ON, matching prefers a
+    // profile's structured placement offers and falls back to legacy rateCards
+    // per-profile (those without offers). When OFF, matching is legacy-only and
+    // byte-identical to the pre-change behavior. The flag is read HERE (impure
+    // service) and passed into the pure matcher — `matching.ts` never reads it.
+    const useStructuredOffers = getFeatureFlags().get('structured_placement_offers');
+    const matchOpts = { useStructuredOffers };
+
     // Stage 1+2: deterministic prefilter → score → order.
-    let ranked: ScoredProfile[] = rankProfiles(brief, profiles);
+    let ranked: ScoredProfile[] = rankProfiles(brief, profiles, matchOpts);
     const rerankedIds = new Set<string>();
 
     // Stage 3 (optional): bounded LLM re-rank of the top N.
@@ -141,6 +165,14 @@ export const matchingService = {
         const candidates = head.map((s) => {
           const p = profileById.get(s.profileId);
           const mp = p ? toMatchable(p) : undefined;
+          const offers = mp?.placementOffers ?? [];
+          // Structured placement terms used for scoring (entity-style-rate-cards
+          // task 5.2). Only populated when the flag is on AND the profile has
+          // offers, so the model reasons over the same terms that drove the
+          // deterministic format/budget sub-scores. The best-fit offer's
+          // terms feed the compact `placement_terms` summary the prompt cites.
+          const useOffersForCand = useStructuredOffers && offers.length > 0;
+          const structured = useOffersForCand ? structuredPlacementScore(brief, offers) : undefined;
           return {
             profile_id: s.profileId,
             score: s.score,
@@ -154,6 +186,16 @@ export const matchingService = {
               price: rc.price,
               currency: rc.currency,
             })),
+            placement_offers: useOffersForCand
+              ? offers.map((o) => ({
+                  kind: o.kind,
+                  platform: o.platform,
+                  price: o.price,
+                  currency: o.currency,
+                  attributes: o.attributes.map((a) => ({ key: a.key, value: a.value })),
+                }))
+              : [],
+            placement_terms: structured?.bestSummary ?? '',
             reach: mp?.reach ?? null,
           };
         });

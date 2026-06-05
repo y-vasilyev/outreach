@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import {
+  PlacementAttributeProposalDraftZ,
+  PlacementOfferDraftZ,
+  PlacementOfferZ,
+} from './placement-offer.js';
 
 /**
  * Standardized blogger commercial profile (agency-sourcing-matching change).
@@ -44,6 +49,12 @@ export const BloggerProfileZ = z.object({
   formats: z.array(z.string()).default([]),
   audience: AudienceZ,
   rateCards: z.array(RateCardZ).default([]),
+  /**
+   * Structured placement offers (entity-style-rate-cards). Rolled up from
+   * `placement.offer` data points. `rateCards`/`formats` above are derived from
+   * these for compatibility when structured offers exist.
+   */
+  placementOffers: z.array(PlacementOfferZ).default([]),
   reach: z.number().int().nullable(),
   avgViews: z.number().int().nullable(),
   capturedAt: z.string().nullable(),
@@ -85,6 +96,17 @@ export const ProfileDataPointDraftZ = z.object({
  */
 export const ProfileExtractionOutputZ = z.object({
   data_points: z.array(ProfileDataPointDraftZ).default([]),
+  /**
+   * Structured placement offers (entity-style-rate-cards). Emitted alongside
+   * legacy `data_points` during rollout. Each carries typed attributes,
+   * confidence, and a verbatim source snippet.
+   */
+  placement_offers: z.array(PlacementOfferDraftZ).default([]),
+  /**
+   * Inactive proposals for attributes not in the active registry. Routed to
+   * operator review; never treated as collected facts or sent to the contact.
+   */
+  attribute_proposals: z.array(PlacementAttributeProposalDraftZ).default([]),
   /** Optional free-text note (e.g. why nothing was extracted). */
   note: z.string().optional(),
 });

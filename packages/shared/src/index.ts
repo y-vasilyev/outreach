@@ -12,6 +12,7 @@ export * from './agency.js';
 export * from './profile-rollup.js';
 export * from './profile-staleness.js';
 export * from './blogger-profile-enrichment.js';
+export * from './placement-offers.js';
 export * from './data-collection-targets.js';
 export * from './matching.js';
 export * from './capability-map.js';

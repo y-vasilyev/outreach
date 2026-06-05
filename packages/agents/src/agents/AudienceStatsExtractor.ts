@@ -114,6 +114,14 @@ export const audienceStatsExtractor: Agent<
       rawSnippet: dp.rawSnippet && dp.rawSnippet.trim().length > 0 ? dp.rawSnippet : sourceText,
     }));
 
-    return { data_points, ...(out.note !== undefined ? { note: out.note } : {}) };
+    // AudienceStatsExtractor does not produce commercial placement offers; the
+    // shared `ProfileExtractionOutputZ` now carries those arrays (entity-style-
+    // rate-cards) so return them empty to satisfy the contract.
+    return {
+      data_points,
+      placement_offers: [],
+      attribute_proposals: [],
+      ...(out.note !== undefined ? { note: out.note } : {}),
+    };
   },
 };

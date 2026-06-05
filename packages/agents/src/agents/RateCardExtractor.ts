@@ -1,5 +1,13 @@
 import { z } from 'zod';
-import { extractRateCardDataPointsFromText, ProfileExtractionOutputZ } from '@nosquare/shared';
+import {
+  extractPlacementOffersFromText,
+  extractRateCardDataPointsFromText,
+  PLACEMENT_ATTRIBUTE_REGISTRY_V1,
+  ProfileExtractionOutputZ,
+  validateOfferAttributes,
+  type PlacementAttributeProposalDraft,
+  type PlacementOfferDraft,
+} from '@nosquare/shared';
 
 import type { Agent } from '../types.js';
 import { invokeJson } from './_runtime.js';
@@ -42,22 +50,28 @@ export const rateCardExtractorOutputSchema = ProfileExtractionOutputZ;
 export type RateCardExtractorInput = z.infer<typeof rateCardExtractorInputSchema>;
 export type RateCardExtractorOutput = z.infer<typeof rateCardExtractorOutputSchema>;
 
-const FALLBACK_SYSTEM = `Ты извлекаешь ПРАЙС за рекламные форматы из ответов блогера. На вход — свободный текст (и иногда структурированный снимок). Твоя задача — превратить упомянутые цены в структурированные точки данных.
+const FALLBACK_SYSTEM = `Ты извлекаешь ПРАЙС за рекламные размещения из ответов блогера. На вход — свободный текст (и иногда структурированный снимок). Размещение — это коммерческий объект (пост на сутки, пост на месяц, выездной обзор без удаления, интеграция), а не просто цена. Возвращай ДВА представления одновременно.
 
-ФОРМАТ ВЫВОДА: массив data_points. Каждая точка:
-- field — "rate.<формат>" латиницей: rate.post (пост), rate.story (сторис), rate.reels (reels/клип), rate.video (видео/ролик), rate.integration (интеграция), rate.repost (репост/закреп). Если формат непонятен — rate.other.
-- value — ЧИСЛО (цена), без валюты и пробелов. "8 000" → 8000, "15к"/"15k" → 15000, "1.2к" → 1200.
-- unit — валюта: "RUB" (руб/₽/р по умолчанию для русского), "USD" ($), "EUR" (€).
-- confidence — 0..1. Явная цена за явный формат («пост 15000») → 0.9+. Цена есть, но формат неясен → 0.4–0.6. Двусмысленно (число может быть не ценой, а охватом/числом подписчиков) → ≤ 0.3, НО ВСЁ РАВНО ВЕРНИ ТОЧКУ (оператор проверит). Никогда не выбрасывай неоднозначное молча.
-- rawSnippet — ДОСЛОВНЫЙ фрагмент исходного текста, из которого взята цена (5–15 слов). Обязательно verbatim, не перефразируй.
+1) placement_offers — массив структурированных размещений. Каждое:
+- kind — тип: post, story, reels, shorts, video, integration, offsite_review, package, other.
+- platform — площадка: telegram, youtube, instagram, vk, tiktok (или null, если не указана).
+- price — ЧИСЛО (цена), без валюты и пробелов. "47 000" → 47000, "15к"/"15k" → 15000, "1.2к" → 1200. null, если цена не указана.
+- currency — "RUB" (руб/₽/р по умолчанию для русского), "USD" ($), "EUR" (€).
+- attributes — массив типизированных атрибутов { key, value, confidence, rawSnippet }. Допустимые key из активного реестра: duration (enum day/week/month/permanent — "сутки"→day, "месяц"→month), delete_policy (enum deleted/permanent — "без удаления"→permanent), includes (список строк — "входит ...", "+ доп пост"), tax (строка — НАЛОГ как атрибут, напр. "налог 6%"; НИКОГДА не делай налог отдельным размещением или ценой), notes (строка — прочие условия: "первый слот", "60-120 секунд").
+- confidence — 0..1. Явное размещение с ценой → 0.9+. Неясный формат → 0.4–0.6. Пакет/двусмысленно → kind='package' или 'other' с НИЗКИМ confidence (≤0.5), но ВСЁ РАВНО верни (не выбрасывай).
+- rawSnippet — ДОСЛОВНЫЙ фрагмент-источник (verbatim, не перефразируй).
+
+2) attribute_proposals — если в тексте есть коммерчески значимое условие, которого НЕТ в активном реестре атрибутов (duration, delete_policy, includes, tax, notes, platform, kind, price, currency), НЕ добавляй его как attribute, а предложи: { suggestedKey, suggestedType (string/number/boolean/enum/string_list), applicableKinds, enumValues?, evidence: [verbatim], confidence, rationale }.
+
+3) data_points — ЛЕГАСИ-представление (нужно во время раскатки): то же самое как "rate.<формат>" латиницей (rate.post, rate.story, rate.reels, rate.video, rate.integration; иначе rate.other), value — ЧИСЛО, unit — валюта, confidence, rawSnippet verbatim. Верни data_points ПАРАЛЛЕЛЬНО с placement_offers.
 
 ПРАВИЛА:
-- Не выдумывай цены, которых нет в тексте.
-- Если в тексте несколько форматов с ценами — верни по точке на каждый.
-- Если цена «пакетом» (пост+сторис за общую сумму) — верни одну точку rate.other с rawSnippet и confidence ≤ 0.5, опиши в note.
-- Если прайса нет вообще — верни пустой data_points и заполни note.
+- Не выдумывай цены/условия, которых нет в тексте.
+- Несколько размещений с ценами — верни по объекту на каждое. "пост на сутки" и "пост на месяц" — это ДВА РАЗНЫХ размещения (разный duration), не объединяй.
+- Налог — это attribute tax на размещении, а не отдельное размещение/цена.
+- Если прайса нет вообще — верни пустые массивы и заполни note.
 
-Возвращай только JSON: { data_points: [{ field, value, unit?, confidence, rawSnippet }], note? }.`;
+Возвращай только JSON: { data_points: [...], placement_offers: [...], attribute_proposals: [...], note? }.`;
 
 const FALLBACK_USER = `Канал: {{channel_title}} (язык: {{language}})
 
@@ -67,7 +81,7 @@ const FALLBACK_USER = `Канал: {{channel_title}} (язык: {{language}})
 Структурированный снимок (если есть):
 {{structured_snapshot}}
 
-Верни JSON со всеми упомянутыми ценами как data_points. Сохрани verbatim rawSnippet.`;
+Верни JSON: data_points (легаси), placement_offers (структурированные размещения), attribute_proposals (новые атрибуты вне реестра). Сохрани verbatim rawSnippet.`;
 
 export const rateCardExtractor: Agent<RateCardExtractorInput, RateCardExtractorOutput> = {
   name: 'rate_card_extractor',
@@ -152,9 +166,32 @@ export const rateCardExtractor: Agent<RateCardExtractorInput, RateCardExtractorO
     // context even though it is deterministic in the source text. Recover those
     // rows locally and let them supersede generic rows with the same price or
     // snippet.
+    // Structured placement offers (entity-style-rate-cards). Build deterministic
+    // offers from the source text and MERGE them with the LLM's
+    // `placement_offers`: deterministic specific offers supersede generic LLM
+    // ones with the same platform+kind+duration+price+snippet. Then validate
+    // every offer's attributes against the active registry — unknown keys are
+    // moved into `attribute_proposals` rather than kept as active attributes.
+    const placementResult = mergePlacementOffers(
+      out.placement_offers,
+      extractPlacementOffersFromText(sourceText),
+    );
+    const attributeProposals = collectAttributeProposals(
+      out.attribute_proposals,
+      placementResult.unknownAttributes,
+    );
+    const placementOut = {
+      placement_offers: placementResult.offers,
+      attribute_proposals: attributeProposals,
+    };
+
     const deterministic = extractRateCardDataPointsFromText(sourceText);
     if (deterministic.length === 0) {
-      return { data_points, ...(out.note !== undefined ? { note: out.note } : {}) };
+      return {
+        data_points,
+        ...placementOut,
+        ...(out.note !== undefined ? { note: out.note } : {}),
+      };
     }
 
     const deterministicPrices = new Set(deterministic.map((dp) => String(dp.value)));
@@ -183,7 +220,102 @@ export const rateCardExtractor: Agent<RateCardExtractorInput, RateCardExtractorO
 
     return {
       data_points: [...deterministic, ...remainingModelPoints],
+      ...placementOut,
       ...(out.note !== undefined ? { note: out.note } : {}),
     };
   },
 };
+
+// ---------------------------------------------------------------------------
+// Placement-offer post-processing helpers (entity-style-rate-cards 2.2).
+// ---------------------------------------------------------------------------
+
+const PLACEMENT_DEDUPE = (offer: PlacementOfferDraft): string => {
+  const duration = offer.attributes.find((a) => a.key === 'duration')?.value ?? '';
+  return `${(offer.platform ?? '').toLowerCase()}:${offer.kind.toLowerCase()}:${String(
+    duration,
+  ).toLowerCase()}:${offer.price ?? ''}:${offer.rawSnippet.trim().toLowerCase()}`;
+};
+
+/**
+ * Merge LLM-emitted placement offers with deterministic ones. Deterministic
+ * offers (parsed from the verbatim source text) supersede LLM ones with the
+ * same platform+kind+duration+price+rawSnippet key, or a generic LLM offer
+ * (kind other/package, or no platform) that a specific deterministic offer
+ * covers by price. Every offer's attributes are validated against the active
+ * registry; unknown keys are stripped from the offer and surfaced for proposal.
+ */
+function mergePlacementOffers(
+  llmOffers: PlacementOfferDraft[],
+  deterministicOffers: PlacementOfferDraft[],
+): { offers: PlacementOfferDraft[]; unknownAttributes: PlacementOfferDraft['attributes'] } {
+  const detKeys = new Set(deterministicOffers.map(PLACEMENT_DEDUPE));
+  const detPrices = new Set(
+    deterministicOffers
+      .filter((o) => typeof o.price === 'number')
+      .map((o) => String(o.price)),
+  );
+  const detSnippets = new Set(
+    deterministicOffers.map((o) => o.rawSnippet.trim().toLowerCase()).filter(Boolean),
+  );
+
+  const remainingLlm = llmOffers.filter((o) => {
+    if (detKeys.has(PLACEMENT_DEDUPE(o))) return false;
+    const snippet = o.rawSnippet.trim().toLowerCase();
+    if (snippet && detSnippets.has(snippet)) return false;
+    // Generic LLM offer the deterministic pass already covered by price.
+    const generic = o.kind === 'other' || o.kind === 'package' || !o.platform;
+    if (generic && typeof o.price === 'number' && detPrices.has(String(o.price))) return false;
+    return true;
+  });
+
+  // Deterministic offers first (they are the more specific/structured rows).
+  const merged = [...deterministicOffers, ...remainingLlm];
+
+  const unknownAttributes: PlacementOfferDraft['attributes'] = [];
+  const validatedOffers = merged.map((offer) => {
+    const v = validateOfferAttributes(offer, PLACEMENT_ATTRIBUTE_REGISTRY_V1);
+    unknownAttributes.push(...v.unknown);
+    // Keep only valid (active, applicable, well-typed) attributes on the offer.
+    return { ...offer, attributes: v.valid };
+  });
+
+  return { offers: validatedOffers, unknownAttributes };
+}
+
+/**
+ * Build the final `attribute_proposals` list: the LLM's proposals plus
+ * synthesized proposals for any unknown attribute keys that leaked onto offers.
+ * Deduped by suggestedKey (case-insensitive).
+ */
+function collectAttributeProposals(
+  llmProposals: PlacementAttributeProposalDraft[],
+  unknownAttributes: PlacementOfferDraft['attributes'],
+): PlacementAttributeProposalDraft[] {
+  const byKey = new Map<string, PlacementAttributeProposalDraft>();
+  for (const p of llmProposals) {
+    byKey.set(p.suggestedKey.trim().toLowerCase(), p);
+  }
+  for (const attr of unknownAttributes) {
+    const key = attr.key.trim().toLowerCase();
+    if (!key || byKey.has(key)) continue;
+    const suggestedType: PlacementAttributeProposalDraft['suggestedType'] = Array.isArray(
+      attr.value,
+    )
+      ? 'string_list'
+      : typeof attr.value === 'number'
+        ? 'number'
+        : typeof attr.value === 'boolean'
+          ? 'boolean'
+          : 'string';
+    byKey.set(key, {
+      suggestedKey: attr.key,
+      suggestedType,
+      applicableKinds: [],
+      evidence: attr.rawSnippet ? [attr.rawSnippet] : [],
+      confidence: attr.confidence,
+      rationale: 'Attribute key not in active placement registry; routed to review.',
+    });
+  }
+  return [...byKey.values()];
+}

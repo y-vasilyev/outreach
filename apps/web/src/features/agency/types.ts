@@ -17,6 +17,30 @@ export interface SocialProfileLink {
   handle?: string;
 }
 
+// Structured placement offer (entity-style-rate-cards). Mirrors
+// packages/shared/src/schemas/placement-offer.ts (PlacementOffer/PlacementAttribute).
+export type PlacementAttributeValue = string | number | boolean | string[];
+
+export interface PlacementAttribute {
+  key: string;
+  value: PlacementAttributeValue;
+  confidence: number;
+  rawSnippet: string;
+}
+
+export interface PlacementOffer {
+  kind: string;
+  platform: string | null;
+  price: number | null;
+  currency: string;
+  attributes: PlacementAttribute[];
+  confidence: number;
+  rawSnippet: string;
+  sourceMessageId: string | null;
+  extractedBy: string;
+  capturedAt: string | null;
+}
+
 export interface Audience {
   age?: Record<string, number>;
   gender?: Record<string, number>;
@@ -57,6 +81,7 @@ export interface BloggerProfile {
   formats: string[];
   audience: Audience;
   rateCards: RateCard[];
+  placementOffers?: PlacementOffer[];
   reach: number | null;
   avgViews: number | null;
   capturedAt: string | null;

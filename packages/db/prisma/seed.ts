@@ -2,7 +2,12 @@ import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { encryptJson } from '../src/crypto.js';
 import { defaultAgentSeeds } from './agents.seed.js';
-import { resolveCapabilityMap, FEATURE_FLAG_KEYS, FEATURE_FLAG_DEFAULTS } from '@nosquare/shared';
+import {
+  resolveCapabilityMap,
+  FEATURE_FLAG_KEYS,
+  FEATURE_FLAG_DEFAULTS,
+  PLACEMENT_ATTRIBUTE_REGISTRY_V1,
+} from '@nosquare/shared';
 
 // AJTBD scaffold for the demo campaign. Kept inline (no shared import)
 // so this seed has no compile-time coupling to the shared zod schema —
@@ -432,6 +437,8 @@ async function main() {
     object_storage: 'Хранение медиа/сырья в S3 (нужен S3_*)',
     blogger_matching: 'Подбор блогеров под бриф',
     channel_discovery: 'Дискавери каналов по нише через Yandex Search',
+    structured_placement_offers:
+      'Структурированные офферы размещений (типизированные атрибуты вместо плоских rate.<format>)',
   };
   for (const key of FEATURE_FLAG_KEYS) {
     const description = FLAG_DESCRIPTIONS[key] ?? '';
@@ -442,6 +449,32 @@ async function main() {
     });
   }
   console.log(`✓ feature_flag: ${FEATURE_FLAG_KEYS.length} flags ensured`);
+
+  // Active placement attribute registry (entity-style-rate-cards). Seeds the v1
+  // attributes as status='active' rows — the active registry extraction/planning
+  // validate against. Idempotent: one active row per key; re-seed refreshes the
+  // definition but never resurrects an operator-rejected/edited key.
+  for (const entry of PLACEMENT_ATTRIBUTE_REGISTRY_V1) {
+    const existing = await prisma.placementAttribute.findFirst({
+      where: { key: entry.key, status: 'active' },
+      select: { id: true },
+    });
+    const data = {
+      key: entry.key,
+      valueType: entry.valueType,
+      description: entry.description,
+      applicableKinds: entry.applicableKinds,
+      enumValues: entry.enumValues ?? [],
+      requiredForKinds: entry.requiredForKinds,
+      status: 'active' as const,
+    };
+    if (existing) {
+      await prisma.placementAttribute.update({ where: { id: existing.id }, data });
+    } else {
+      await prisma.placementAttribute.create({ data });
+    }
+  }
+  console.log(`✓ placement_attribute: ${PLACEMENT_ATTRIBUTE_REGISTRY_V1.length} active attributes ensured`);
 
   // Capability → endpoint/model map (agency-sourcing-matching M3, task 3.1).
   // The builder picks a tier (cheap/medium/strong) per role and binds it to

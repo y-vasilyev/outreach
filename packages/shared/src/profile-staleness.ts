@@ -23,9 +23,11 @@
  * by latest-usable-observation, not by the chosen value's age.
  *
  * Usability mirrors `rollUpProfileFields`'s value filters (numeric for
- * rate/reach/avgViews, non-empty share record for audience, non-empty
- * string list for topics/languages/formats), so a fresh-but-unusable point
- * (e.g. `rate.post = "договорная"`) does NOT mark the section fresh.
+ * rate/reach/avgViews — or a usable structured `placement.offer` for
+ * rateCards, non-empty share record for audience, non-empty string list for
+ * topics/languages/formats), so a fresh-but-unusable point (e.g.
+ * `rate.post = "договорная"`, or an empty/inactive offer proposal) does NOT
+ * mark the section fresh.
  *
  * Read-only, no DB or worker dependencies — workers, API, and the admin UI
  * can call this and arrive at the same answer. TTLs live here so retuning
@@ -73,6 +75,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * classifier.
  */
 export function classifyProfileField(field: string): ProfileFreshnessCategory | null {
+  // Structured placement offers (entity-style-rate-cards) roll up into the
+  // rateCards/formats sections, mirroring legacy `rate.<format>`.
+  if (field === 'placement.offer') return 'rateCards';
   if (field.startsWith('rate.')) return 'rateCards';
   if (field === 'audience.geo' || field === 'audience.age' || field === 'audience.gender') {
     return 'audience';
@@ -133,6 +138,32 @@ function isNonEmptyStringList(v: unknown): boolean {
 }
 
 /**
+ * True when a `placement.offer` value (a structured PlacementOffer JSON object)
+ * is *usable* — it carries a numeric price OR at least one meaningful term
+ * (attributes / non-empty kind). An offer that is only an empty/inactive
+ * proposal (no price, no terms, blank kind) must NOT mark the section fresh.
+ * Validated structurally here (no zod) to keep this module dependency-free and
+ * mirror how `isFiniteNumeric` etc. inline rollup's filters.
+ */
+function isUsablePlacementOffer(v: unknown): boolean {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  const offer = v as Record<string, unknown>;
+  if (typeof offer.price === 'number' && Number.isFinite(offer.price)) return true;
+  // Meaningful terms: any attribute with a non-empty value.
+  if (Array.isArray(offer.attributes)) {
+    for (const a of offer.attributes) {
+      if (!a || typeof a !== 'object') continue;
+      const val = (a as Record<string, unknown>).value;
+      if (typeof val === 'string' && val.trim().length > 0) return true;
+      if (typeof val === 'number' && Number.isFinite(val)) return true;
+      if (typeof val === 'boolean') return true;
+      if (Array.isArray(val) && val.some((x) => String(x ?? '').trim().length > 0)) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * True when this data point's `value` would actually be picked up by
  * `rollUpProfileFields` for the given category. Used to keep section
  * freshness aligned with what's displayed.
@@ -143,6 +174,8 @@ export function isContributingValue(
 ): boolean {
   switch (category) {
     case 'rateCards':
+      // A legacy `rate.<format>` numeric OR a usable structured placement offer.
+      return isFiniteNumeric(value) || isUsablePlacementOffer(value);
     case 'reach':
     case 'avgViews':
       return isFiniteNumeric(value);
@@ -250,7 +283,8 @@ export function computeProfileFreshness(
     const ms = toMillis(dp.capturedAt);
     if (ms == null) continue;
     bump(cat, ms);
-    // Rate cards also contribute to the displayed formats union.
+    // Rate cards (legacy `rate.<format>` and structured `placement.offer`) also
+    // contribute to the displayed formats union (mirrors rollup's formats union).
     if (cat === 'rateCards') bump('formats', ms);
   }
 

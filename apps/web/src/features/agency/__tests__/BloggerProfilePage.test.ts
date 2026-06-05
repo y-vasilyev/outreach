@@ -20,8 +20,9 @@ import { api } from '../../../lib/api';
 const apiGet = api.get as unknown as ReturnType<typeof vi.fn>;
 
 const routerPush = vi.fn();
+const routeState = { id: 'p_live' };
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ params: { id: 'p_live' } }),
+  useRoute: () => ({ params: { id: routeState.id } }),
   useRouter: () => ({ push: routerPush }),
   RouterLink: { name: 'RouterLink', template: '<a><slot /></a>' },
 }));
@@ -44,7 +45,11 @@ const rateCards = [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  routeState.id = 'p_live';
   apiGet.mockImplementation(async (path: string) => {
+    if (path === '/blogger-profiles/p_offers') {
+      return profileWithOffers;
+    }
     if (path === '/blogger-profiles/p_live') {
       return {
         id: 'p_live',
@@ -95,6 +100,73 @@ beforeEach(() => {
   });
 });
 
+const profileWithOffers = {
+  id: 'p_offers',
+  channelId: 'chan_offers',
+  displayName: '@offers',
+  socialLinks: [],
+  topics: [],
+  languages: ['ru'],
+  formats: ['telegram_post_day', 'telegram_post_month', 'offsite_review'],
+  audience: {},
+  rateCards: [
+    { format: 'telegram_post_day', price: 13000, currency: 'RUB' },
+    { format: 'telegram_post_month', price: 21000, currency: 'RUB' },
+    { format: 'offsite_review', price: 30000, currency: 'RUB' },
+  ],
+  placementOffers: [
+    {
+      kind: 'post',
+      platform: 'telegram',
+      price: 13000,
+      currency: 'RUB',
+      attributes: [{ key: 'duration', value: 'day', confidence: 1, rawSnippet: 'на сутки' }],
+      confidence: 0.9,
+      rawSnippet: 'пост на сутки 13000',
+      sourceMessageId: 'm_offers',
+      extractedBy: 'rate_card_extractor',
+      capturedAt: NOW,
+    },
+    {
+      kind: 'post',
+      platform: 'telegram',
+      price: 21000,
+      currency: 'RUB',
+      attributes: [
+        { key: 'duration', value: 'month', confidence: 1, rawSnippet: 'на месяц' },
+        { key: 'tax', value: 'налог 6%', confidence: 0.8, rawSnippet: '+ налог 6%' },
+      ],
+      confidence: 0.9,
+      rawSnippet: 'пост на месяц 21000 + налог 6%',
+      sourceMessageId: 'm_offers',
+      extractedBy: 'rate_card_extractor',
+      capturedAt: NOW,
+    },
+    {
+      kind: 'offsite_review',
+      platform: null,
+      price: 30000,
+      currency: 'RUB',
+      attributes: [
+        { key: 'delete_policy', value: 'permanent', confidence: 0.9, rawSnippet: 'без удаления' },
+        { key: 'includes', value: ['доп пост'], confidence: 0.7, rawSnippet: '' },
+      ],
+      confidence: 0.85,
+      rawSnippet: 'выездной обзор 30000 без удаления',
+      sourceMessageId: 'm_offers',
+      extractedBy: 'rate_card_extractor',
+      capturedAt: NOW,
+    },
+  ],
+  reach: null,
+  avgViews: null,
+  capturedAt: NOW,
+  createdAt: NOW,
+  updatedAt: NOW,
+  dataPoints: [],
+  mediaAssets: [],
+};
+
 describe('BloggerProfilePage', () => {
   it('renders real multi-platform quote prices in the profile card', async () => {
     const { wrapper } = mountWithApp(BloggerProfilePage, {
@@ -123,5 +195,48 @@ describe('BloggerProfilePage', () => {
     expect(text).toContain('rate.telegram_photo_post');
     expect(text).not.toContain('tiktok');
     expect(text).not.toContain('tax');
+  });
+
+  it('falls back to the legacy rate-card table when there are no structured offers', async () => {
+    const { wrapper } = mountWithApp(BloggerProfilePage, {
+      global: { stubs: { MediaKitDownload: { template: '<button>Скачать</button>' } } },
+    });
+    await flushPromises();
+
+    const text = wrapper.text();
+    // No structured "Размещения" card when placementOffers is absent.
+    expect(text).not.toContain('Размещения');
+    // Legacy "Прайс" table still renders.
+    expect(text).toContain('Прайс (9)');
+  });
+
+  it('renders structured placement offers with terms and source snippets', async () => {
+    routeState.id = 'p_offers';
+    const { wrapper } = mountWithApp(BloggerProfilePage, {
+      global: { stubs: { MediaKitDownload: { template: '<button>Скачать</button>' } } },
+    });
+    await flushPromises();
+
+    const text = wrapper.text();
+    // Structured offers card present with all three offers.
+    expect(text).toContain('Размещения (3)');
+    // Kind + platform + price+currency rendered.
+    expect(text).toContain('Пост');
+    expect(text).toContain('Выездной обзор');
+    expect(text).toContain('telegram');
+    expect(text).toContain('RUB');
+    // Distinct day vs month prices both present (no collapse).
+    expect(text).toContain('13');
+    expect(text).toContain('21');
+    expect(text).toContain('30');
+    // Typed terms rendered with localized labels.
+    expect(text).toContain('Срок');
+    expect(text).toContain('month');
+    expect(text).toContain('Налог');
+    expect(text).toContain('налог 6%');
+    expect(text).toContain('Удаление');
+    expect(text).toContain('Входит');
+    // Source snippet shown as the audit affordance back to the message.
+    expect(text).toContain('пост на месяц 21000 + налог 6%');
   });
 });

@@ -15,7 +15,13 @@ import FreshnessPanel from './FreshnessPanel.vue';
 import { api, ApiError } from '../../lib/api';
 import { isFeatureOff } from '../../lib/featureGate';
 import { formatCompact, formatDateTime } from '../../lib/format';
-import type { BloggerProfile, ProfileDataPoint, MediaAsset } from './types';
+import type {
+  BloggerProfile,
+  PlacementAttribute,
+  PlacementOffer,
+  ProfileDataPoint,
+  MediaAsset,
+} from './types';
 
 const route = useRoute();
 const router = useRouter();
@@ -53,6 +59,60 @@ const standardKv = computed<KvItem[]>(() => {
 
 const dataPoints = computed<ProfileDataPoint[]>(() => profile.value?.dataPoints ?? []);
 const mediaAssets = computed<MediaAsset[]>(() => profile.value?.mediaAssets ?? []);
+// Structured placement offers (entity-style-rate-cards). When present they are
+// the source of truth for commercial terms; the legacy "Прайс" table is the
+// fallback for profiles with no structured offers.
+const placementOffers = computed<PlacementOffer[]>(() => profile.value?.placementOffers ?? []);
+
+const PLACEMENT_KIND_RU: Record<string, string> = {
+  post: 'Пост',
+  story: 'Сторис',
+  reels: 'Reels',
+  shorts: 'Shorts',
+  video: 'Видео',
+  integration: 'Интеграция',
+  offsite_review: 'Выездной обзор',
+  package: 'Пакет',
+  other: 'Другое',
+};
+
+const PLACEMENT_ATTR_RU: Record<string, string> = {
+  duration: 'Срок',
+  delete_policy: 'Удаление',
+  includes: 'Входит',
+  tax: 'Налог',
+  notes: 'Примечания',
+};
+
+function offerKindLabel(o: PlacementOffer): string {
+  return PLACEMENT_KIND_RU[o.kind] ?? o.kind;
+}
+
+function offerPriceLabel(o: PlacementOffer): string {
+  if (o.price == null) return 'по запросу';
+  return `${formatCompact(o.price)} ${o.currency}`;
+}
+
+function attrLabel(key: string): string {
+  return PLACEMENT_ATTR_RU[key] ?? key;
+}
+
+function attrValue(a: PlacementAttribute): string {
+  if (Array.isArray(a.value)) return a.value.join(', ');
+  return String(a.value);
+}
+
+// Attributes other than promoted/price fields, in a stable display order.
+function offerTerms(o: PlacementOffer): PlacementAttribute[] {
+  const order = ['duration', 'delete_policy', 'includes', 'tax', 'notes'];
+  return [...o.attributes]
+    .filter((a) => a.key !== 'price' && a.key !== 'currency' && a.key !== 'kind' && a.key !== 'platform')
+    .sort((a, b) => {
+      const ia = order.indexOf(a.key);
+      const ib = order.indexOf(b.key);
+      return (ia === -1 ? order.length : ia) - (ib === -1 ? order.length : ib);
+    });
+}
 
 function assetLabel(a: MediaAsset): string {
   const kind = a.kind === 'media_kit' ? 'Медиа-кит' : a.kind === 'screenshot' ? 'Скриншот' : a.kind;
@@ -145,7 +205,56 @@ function renderValue(v: unknown): string {
       </div>
     </div>
 
-    <!-- Rate cards -->
+    <!-- Structured placement offers (entity-style-rate-cards). Each offer is a
+         commercial object with typed terms; the raw source snippet is the audit
+         affordance back to the original message (mirrors the data-points table). -->
+    <div v-if="placementOffers.length" class="card" style="margin-top: 12px;">
+      <div class="card-head">
+        <Icon name="flag" :size="12" /><span>Размещения ({{ placementOffers.length }})</span>
+        <span class="muted-2" style="margin-left: 6px;">структурированные коммерческие условия</span>
+      </div>
+      <div class="card-body" style="display: flex; flex-direction: column; gap: 10px;">
+        <div
+          v-for="(o, i) in placementOffers"
+          :key="i"
+          style="border: 1px solid var(--border, #2a2a2a); border-radius: 8px; padding: 10px;"
+        >
+          <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <Tag>{{ offerKindLabel(o) }}</Tag>
+              <span v-if="o.platform" class="muted-2" style="font-size: 12px;">{{ o.platform }}</span>
+            </div>
+            <span class="cell-strong mono">{{ offerPriceLabel(o) }}</span>
+          </div>
+          <div v-if="offerTerms(o).length" style="margin-top: 8px; display: flex; flex-direction: column; gap: 3px;">
+            <div
+              v-for="a in offerTerms(o)"
+              :key="a.key"
+              style="display: flex; gap: 8px; font-size: 12px;"
+            >
+              <span class="muted-2" style="min-width: 92px;">{{ attrLabel(a.key) }}</span>
+              <span>{{ attrValue(a) }}</span>
+            </div>
+          </div>
+          <div style="margin-top: 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <ConfBar :value="o.confidence" />
+            <span class="mono muted-2" style="font-size: 11px;">{{ Math.round(o.confidence * 100) }}%</span>
+            <span
+              v-if="o.rawSnippet"
+              class="muted-2"
+              style="font-size: 11.5px; font-style: italic;"
+              :title="o.sourceMessageId ? `Источник: ${o.sourceMessageId}` : undefined"
+            >«{{ o.rawSnippet }}»</span>
+            <span v-else-if="o.sourceMessageId" class="muted-2" style="font-size: 11px;">
+              источник: {{ o.sourceMessageId }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Rate cards (legacy fallback when there are no structured offers, and the
+         compatibility view of derived cards otherwise). -->
     <div class="card" style="margin-top: 12px;">
       <div class="card-head"><Icon name="flag" :size="12" /><span>Прайс ({{ profile.rateCards.length }})</span></div>
       <div class="card-body">

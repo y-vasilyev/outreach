@@ -667,6 +667,10 @@ model BloggerProfile {
   // audience: { age, gender, geo } }. Source of truth is dataPoints.
   audience   Json      @default("{}")
   rateCards  Json      @default("[]") @map("rate_cards")
+  // Structured placement offers (entity-style-rate-cards). Rolled up from
+  // `placement.offer` ProfileDataPoint rows; `rateCards`/`formats` are derived
+  // from these for compatibility. Shape mirrors `PlacementOfferZ[]` in shared.
+  placementOffers Json @default("[]") @map("placement_offers")
   reach      Int?
   avgViews   Int?      @map("avg_views")
   capturedAt DateTime? @map("captured_at")
@@ -699,6 +703,38 @@ model ProfileDataPoint {
 
   @@index([profileId, field])
   @@map("profile_data_point")
+}
+
+// Placement attribute registry + LLM proposals (entity-style-rate-cards).
+// One row per attribute key. `status=active` rows form the active registry
+// (seeded from PLACEMENT_ATTRIBUTE_REGISTRY_V1 + operator-approved proposals).
+// `status=proposed` rows are inactive drafts emitted by extraction, surfaced
+// for operator review; approval flips them to `active`. The shared v1 constant
+// is the seed source + fallback when this table is empty.
+model PlacementAttribute {
+  id              String   @id @default(cuid())
+  key             String
+  // 'string' | 'number' | 'boolean' | 'enum' | 'string_list'
+  valueType       String   @map("value_type")
+  description     String   @default("")
+  applicableKinds String[] @default([]) @map("applicable_kinds")
+  enumValues      String[] @default([]) @map("enum_values")
+  requiredForKinds String[] @default([]) @map("required_for_kinds")
+  // 'active' | 'proposed' | 'rejected'
+  status          String   @default("proposed")
+  // Proposal provenance + review metadata (empty for seeded active rows).
+  evidence        Json     @default("[]")
+  confidence      Decimal  @default(0)
+  rationale       String   @default("")
+  sourceMessageId String?  @map("source_message_id")
+  proposedByRunId String?  @map("proposed_by_run_id")
+  reviewedById    String?  @map("reviewed_by_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([key, status])
+  @@map("placement_attribute")
 }
 
 // Files bloggers send (media kits, stat screenshots) and raw payload

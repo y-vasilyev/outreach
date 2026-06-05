@@ -39,6 +39,10 @@ describe('classifyProfileField', () => {
     expect(classifyProfileField('rate')).toBeNull(); // bare `rate` without `.<fmt>`
   });
 
+  it('classifies a structured placement.offer as rateCards', () => {
+    expect(classifyProfileField('placement.offer')).toBe('rateCards');
+  });
+
   it('narrows audience to the dims rollup actually renders', () => {
     // rollUpProfileFields renders only audience.geo|age|gender today, so an
     // unrendered audience.<other> must not count toward audience freshness.
@@ -70,6 +74,32 @@ describe('isContributingValue', () => {
     expect(isContributingValue('topics', '')).toBe(false);
     expect(isContributingValue('topics', [])).toBe(false);
     expect(isContributingValue('topics', ['  '])).toBe(false);
+  });
+
+  it('treats a usable placement offer as contributing to rateCards', () => {
+    // Numeric price → usable.
+    expect(
+      isContributingValue('rateCards', { kind: 'post', price: 21000, attributes: [] }),
+    ).toBe(true);
+    // No price but meaningful terms → usable.
+    expect(
+      isContributingValue('rateCards', {
+        kind: 'integration',
+        price: null,
+        attributes: [{ key: 'notes', value: 'без удаления', confidence: 1, rawSnippet: '' }],
+      }),
+    ).toBe(true);
+  });
+
+  it('does NOT treat an empty/inactive offer proposal as contributing', () => {
+    expect(isContributingValue('rateCards', { kind: 'post', price: null, attributes: [] })).toBe(false);
+    expect(
+      isContributingValue('rateCards', {
+        kind: 'post',
+        price: null,
+        attributes: [{ key: 'notes', value: '', confidence: 1, rawSnippet: '' }],
+      }),
+    ).toBe(false);
   });
 });
 
@@ -183,6 +213,30 @@ describe('computeProfileFreshness', () => {
     );
     // Rate card is newer → wins.
     expect(f.formats.ageDays).toBe(5);
+  });
+
+  it('counts a fresh usable placement.offer toward BOTH rateCards and formats', () => {
+    const f = computeProfileFreshness(
+      [
+        {
+          field: 'placement.offer',
+          value: { kind: 'post', price: 21000, attributes: [{ key: 'duration', value: 'month', confidence: 1, rawSnippet: '' }] },
+          capturedAt: daysAgo(7),
+        },
+      ],
+      NOW,
+    );
+    expect(f.rateCards).toEqual({ stale: false, ageDays: 7 });
+    expect(f.formats).toEqual({ stale: false, ageDays: 7 });
+  });
+
+  it('ignores an empty/inactive placement.offer proposal for freshness', () => {
+    const f = computeProfileFreshness(
+      [{ field: 'placement.offer', value: { kind: 'post', price: null, attributes: [] }, capturedAt: daysAgo(1) }],
+      NOW,
+    );
+    expect(f.rateCards).toEqual({ stale: true, ageDays: null });
+    expect(f.formats).toEqual({ stale: true, ageDays: null });
   });
 
   it('ignores audience.<other> dims that rollup does not render', () => {

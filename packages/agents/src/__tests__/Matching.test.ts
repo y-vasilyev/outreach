@@ -7,8 +7,11 @@ import {
   scoreProfile,
   relevantRates,
   budgetScore,
+  structuredPlacementScore,
+  parseBriefPlacementWants,
   type AdBrief,
   type MatchableProfile,
+  type PlacementOffer,
 } from '@nosquare/shared';
 
 /**
@@ -187,5 +190,166 @@ describe('budget-aware ranking', () => {
     );
     expect(s.score).toBeGreaterThanOrEqual(0);
     expect(s.score).toBeLessThanOrEqual(1);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Structured placement offers (entity-style-rate-cards, task 5.1/5.2) */
+/* ------------------------------------------------------------------ */
+
+function mkOffer(over: Partial<PlacementOffer> = {}): PlacementOffer {
+  return {
+    kind: 'post',
+    platform: 'telegram',
+    price: 10000,
+    currency: 'RUB',
+    attributes: [],
+    confidence: 0.9,
+    rawSnippet: '',
+    sourceMessageId: null,
+    extractedBy: 'llm',
+    capturedAt: null,
+    ...over,
+  };
+}
+
+function attr(key: string, value: PlacementOffer['attributes'][number]['value']) {
+  return { key, value, confidence: 1, rawSnippet: '' };
+}
+
+describe('structured placement matching', () => {
+  // Brief wants a long-lived Telegram post.
+  const brief = mkBrief({ topic: 'крипта', formats: ['telegram пост месяц'], geo: [] });
+
+  const longLived = mkProfile({
+    id: 'long',
+    topics: ['крипта'],
+    formats: ['telegram_post_day', 'telegram_post_month'],
+    reach: 50000,
+    placementOffers: [
+      mkOffer({ price: 13000, attributes: [attr('duration', 'day')] }),
+      mkOffer({ price: 21000, attributes: [attr('duration', 'month')] }),
+    ],
+  });
+  const oneDayOnly = mkProfile({
+    id: 'day',
+    topics: ['крипта'],
+    formats: ['telegram_post_day'],
+    reach: 50000,
+    placementOffers: [mkOffer({ price: 13000, attributes: [attr('duration', 'day')] })],
+  });
+
+  it('ranks a long-lived post above a one-day post (flag on)', () => {
+    const ranked = rankProfiles(brief, [oneDayOnly, longLived], { useStructuredOffers: true });
+    expect(ranked[0]?.profileId).toBe('long');
+    expect(ranked[0]!.score).toBeGreaterThan(ranked[1]!.score);
+  });
+
+  it('cites the placement terms that drove selection in the rationale', () => {
+    const s = scoreProfile(brief, longLived, { useStructuredOffers: true });
+    // Mentions structured terms (telegram / пост / месяц) not just a flat format.
+    expect(s.rationale).toMatch(/условия:/);
+    expect(s.rationale).toMatch(/telegram/);
+    expect(s.rationale).toMatch(/месяц/);
+  });
+
+  it('permanent delete_policy counts as long-lived even without duration=month', () => {
+    const permanent = mkProfile({
+      id: 'perm',
+      topics: ['крипта'],
+      reach: 50000,
+      placementOffers: [
+        mkOffer({ price: 15000, attributes: [attr('duration', 'day'), attr('delete_policy', 'permanent')] }),
+      ],
+    });
+    const ranked = rankProfiles(brief, [oneDayOnly, permanent], { useStructuredOffers: true });
+    expect(ranked[0]?.profileId).toBe('perm');
+  });
+
+  it('falls back to legacy rateCards when a profile has no offers (flag on)', () => {
+    const legacy = mkProfile({
+      id: 'legacy',
+      topics: ['крипта'],
+      formats: ['пост'],
+      rateCards: [{ format: 'пост', price: 8000, currency: 'RUB' }],
+    });
+    const legacyBrief = mkBrief({ topic: 'крипта', budget: 20000, formats: ['пост'] });
+    const s = scoreProfile(legacyBrief, legacy, { useStructuredOffers: true });
+    // Legacy rationale shape (форматы / бюджет with the rate-card price).
+    expect(s.rationale).toMatch(/форматы:|бюджет:/);
+    expect(s.rationale).toMatch(/8000/);
+  });
+
+  it('flag off → structured offers ignored, byte-identical legacy behavior', () => {
+    // Same profile scored with the flag off must equal a no-offers profile.
+    const withOffers = mkProfile({
+      id: 'p',
+      topics: ['крипта'],
+      formats: ['пост'],
+      rateCards: [{ format: 'пост', price: 8000, currency: 'RUB' }],
+      placementOffers: [mkOffer({ price: 21000, attributes: [attr('duration', 'month')] })],
+    });
+    const withoutOffers = mkProfile({
+      id: 'p',
+      topics: ['крипта'],
+      formats: ['пост'],
+      rateCards: [{ format: 'пост', price: 8000, currency: 'RUB' }],
+    });
+    const b = mkBrief({ topic: 'крипта', budget: 20000, formats: ['пост'] });
+    const a = scoreProfile(b, withOffers); // default opts: flag off
+    const c = scoreProfile(b, withoutOffers);
+    expect(a.score).toBe(c.score);
+    expect(a.rationale).toBe(c.rationale);
+  });
+
+  it('over-budget structured offer is excluded by the prefilter', () => {
+    const pricey = mkProfile({
+      id: 'pricey',
+      topics: ['крипта'],
+      placementOffers: [mkOffer({ price: 50000, attributes: [attr('duration', 'month')] })],
+    });
+    const budgetBrief = mkBrief({ topic: 'крипта', budget: 10000, formats: ['telegram пост месяц'] });
+    const decision = isShortlisted(budgetBrief, pricey, { useStructuredOffers: true });
+    expect(decision.ok).toBe(false);
+    expect(decision.reason).toMatch(/budget/);
+  });
+
+  it('offsite review with included deliverables: rationale lists the deliverables', () => {
+    // Spec scenario: selected because it offers an offsite review that includes
+    // a permanent post and event announcement → rationale mentions those terms.
+    const reviewBrief = mkBrief({ topic: 'крипта', formats: ['обзор анонс'] });
+    const reviewer = mkProfile({
+      id: 'reviewer',
+      topics: ['крипта'],
+      placementOffers: [
+        mkOffer({
+          kind: 'offsite_review',
+          platform: null,
+          price: 30000,
+          attributes: [attr('delete_policy', 'permanent'), attr('includes', ['анонс мероприятия'])],
+        }),
+      ],
+    });
+    const s = scoreProfile(reviewBrief, reviewer, { useStructuredOffers: true });
+    expect(s.rationale).toMatch(/выездной обзор/);
+    expect(s.rationale).toMatch(/анонс/);
+  });
+
+  it('parseBriefPlacementWants extracts platform/kind/duration/deliverables', () => {
+    const wants = parseBriefPlacementWants(
+      mkBrief({ formats: ['telegram пост месяц'], notes: 'нужен анонс без удаления' }),
+    );
+    expect(wants.platform).toBe('telegram');
+    expect(wants.kind).toBe('post');
+    expect(wants.minDurationRank).toBeGreaterThan(1);
+    expect(wants.wantsPermanent).toBe(true);
+    expect(wants.deliverables).toContain('анонс');
+  });
+
+  it('structuredPlacementScore picks the longest-lived relevant offer as best', () => {
+    const res = structuredPlacementScore(brief, longLived.placementOffers ?? []);
+    expect(res.hasRelevant).toBe(true);
+    expect(res.best?.durationLabel).toBe('month');
+    expect(res.bestSummary).toMatch(/месяц/);
   });
 });

@@ -110,6 +110,7 @@ describe('GET /feature-flags', () => {
         'channel_discovery',
         'data_collection_hud',
         'object_storage',
+        'structured_placement_offers',
       ],
     );
     const ct = body.find((f) => f.key === 'campaign_types')!;

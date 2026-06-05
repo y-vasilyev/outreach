@@ -15,8 +15,12 @@ import {
   resolveEffectiveHudTargets,
   resolveEffectivePlannerTargets,
   getTarget,
+  loadActiveRegistry,
+  activeRequiredAttributeKeys,
+  PlacementOfferZ,
   type CampaignAjtbd,
   type CampaignSchedule,
+  type PlacementOffer,
 } from '@nosquare/shared';
 import { handleProfileExtract } from './profile-extract.js';
 import { Errors } from '@nosquare/shared/errors';
@@ -276,6 +280,7 @@ async function handoffOnAgencyDisabled(
 interface DataCollectionPlannerOut {
   next_data_point?: string;
   target_field?: string;
+  next_attribute_key?: string;
   reply: string;
   goal_satisfied: boolean;
   rationale: string;
@@ -412,6 +417,62 @@ async function collectedAgencyTargets(
   if (!profile) return [];
   const dataPoints = profile.dataPoints.map((d) => ({ field: d.field, value: d.value }));
   return targets.filter((t) => targetCollected(t, dataPoints));
+}
+
+/**
+ * Parse the rolled-up `BloggerProfile.placementOffers` JSON column into
+ * validated structured offers (entity-style-rate-cards, Section 4). Defensive
+ * boundary parse — the column is written by the rollup from validated data
+ * points, so invalid entries are simply dropped.
+ */
+function parsePlacementOffers(value: unknown): PlacementOffer[] {
+  const arr = Array.isArray(value) ? value : [];
+  const out: PlacementOffer[] = [];
+  for (const item of arr) {
+    const parsed = PlacementOfferZ.safeParse(item);
+    if (parsed.success) out.push(parsed.data);
+  }
+  return out;
+}
+
+/**
+ * Build the planner's structured-offer inputs (entity-style-rate-cards,
+ * Section 4.1). Behind the `structured_placement_offers` flag: loads the
+ * channel's rolled-up placement offers and computes the active required
+ * attribute keys (v1 registry ∪ DB `status='active'` rows). Flag off / no
+ * channel ⇒ empty arrays, so the planner behaves exactly as today.
+ */
+async function buildPlannerPlacementInputs(
+  channelId: string | null | undefined,
+): Promise<{ placement_offers: PlacementOffer[]; required_attribute_keys: string[] }> {
+  if (!getFeatureFlags().get('structured_placement_offers') || !channelId) {
+    return { placement_offers: [], required_attribute_keys: [] };
+  }
+  const prisma = getPrisma();
+  const [profile, attrRows] = await Promise.all([
+    prisma.bloggerProfile.findUnique({
+      where: { channelId },
+      select: { placementOffers: true },
+    }),
+    // Active registry = v1 constant merged with operator-approved DB rows.
+    prisma.placementAttribute.findMany({
+      where: { status: 'active' },
+      select: {
+        key: true,
+        valueType: true,
+        description: true,
+        applicableKinds: true,
+        enumValues: true,
+        requiredForKinds: true,
+        status: true,
+      },
+    }),
+  ]);
+  const registry = loadActiveRegistry(attrRows);
+  return {
+    placement_offers: profile ? parsePlacementOffers(profile.placementOffers) : [],
+    required_attribute_keys: activeRequiredAttributeKeys(registry),
+  };
 }
 
 // `profile-extract` is now invoked SYNCHRONOUSLY from `handleOnInbound`
@@ -703,7 +764,14 @@ export async function handleOnInbound(data: { conversationId?: string }): Promis
           let plannerTargetField: string | null = null;
           if (isAgencyConversation(conv.campaign)) {
             const targets = agencyPlannerTargetKeys(conv.campaign);
-            const collected = await collectedAgencyTargets(conv.contact.channelId, targets);
+            const [collected, placementInputs] = await Promise.all([
+              collectedAgencyTargets(conv.contact.channelId, targets),
+              // Structured placement offers + active required attributes for
+              // focused follow-ups (entity-style-rate-cards, Section 4.1).
+              // Empty behind the `structured_placement_offers` flag ⇒ planner
+              // keeps today's behaviour.
+              buildPlannerPlacementInputs(conv.contact.channelId),
+            ]);
             const planner = await runAgentSafe<DataCollectionPlannerOut>(
               'data_collection_planner',
               {
@@ -711,6 +779,8 @@ export async function handleOnInbound(data: { conversationId?: string }): Promis
                 collected_data_points: collected,
                 history_tail: historyTail,
                 last_inbound: last.text,
+                placement_offers: placementInputs.placement_offers,
+                required_attribute_keys: placementInputs.required_attribute_keys,
               },
               { conversationId: conv.id },
             );

@@ -2,11 +2,16 @@ import { getPrisma } from '@nosquare/db';
 import {
   buildBloggerProfilePresentation,
   computeProfileFreshness,
+  derivePlacementFormatKey,
   Errors,
   extractRateCardDataPointsFromText,
   hasOnlyGenericRateCards,
+  placementOffersToFormats,
+  placementOffersToRateCards,
+  PlacementOfferZ,
   rateCardsFromDataPoints,
   RateCardZ,
+  type PlacementOffer,
   type RateCard,
   type SocialProfileLink,
 } from '@nosquare/shared';
@@ -40,6 +45,54 @@ function parseRateCards(value: unknown): RateCard[] {
     if (parsed.success) out.push(parsed.data);
   }
   return out;
+}
+
+/**
+ * Parse the stored `BloggerProfile.placementOffers` Json column into validated
+ * structured offers (entity-style-rate-cards). Invalid entries are dropped —
+ * the column is rolled up by the worker from validated `placement.offer` data
+ * points, so this is a defensive boundary parse.
+ */
+function parsePlacementOffers(value: unknown): PlacementOffer[] {
+  const arr = Array.isArray(value) ? value : [];
+  const out: PlacementOffer[] = [];
+  for (const item of arr) {
+    const parsed = PlacementOfferZ.safeParse(item);
+    if (parsed.success) out.push(parsed.data);
+  }
+  return out;
+}
+
+/**
+ * Merge structured-offer-derived rate cards/formats with the legacy ones,
+ * mirroring `rollUpProfileFields`: structured offers are the source of truth and
+ * win over a legacy card mapping to the same derived format key, but distinct
+ * legacy cards with no structured equivalent are preserved. Two distinct offers
+ * (day vs month post) stay two cards.
+ */
+function mergeStructuredRates(
+  offers: PlacementOffer[],
+  legacy: { rateCards: RateCard[]; formats: string[] },
+): { rateCards: RateCard[]; formats: string[] } {
+  if (offers.length === 0) return legacy;
+  const structuredRateCards = placementOffersToRateCards(offers);
+  const structuredFormatKeys = new Set(offers.map((o) => derivePlacementFormatKey(o)));
+  const rateCards: RateCard[] = [...structuredRateCards];
+  for (const card of legacy.rateCards) {
+    if (structuredFormatKeys.has(card.format)) continue;
+    rateCards.push(card);
+  }
+  const formats: string[] = [];
+  for (const f of placementOffersToFormats(offers)) {
+    if (!formats.includes(f)) formats.push(f);
+  }
+  for (const f of legacy.formats) {
+    if (!formats.includes(f)) formats.push(f);
+  }
+  for (const card of rateCards) {
+    if (!formats.includes(card.format)) formats.push(card.format);
+  }
+  return { rateCards, formats };
 }
 
 function collectSourceMessageIds(dataPoints: ProfileDataPointSource[]): string[] {
@@ -100,6 +153,7 @@ function withPresentation<T extends {
   channelId: string | null;
   formats: string[];
   rateCards: unknown;
+  placementOffers?: unknown;
 }>(
   profile: T,
   opts: {
@@ -107,7 +161,13 @@ function withPresentation<T extends {
     dataPoints: ProfileDataPointSource[];
     messagesById: Map<string, string>;
   },
-): T & { displayName: string | null; socialLinks: SocialProfileLink[]; rateCards: RateCard[]; formats: string[] } {
+): T & {
+  displayName: string | null;
+  socialLinks: SocialProfileLink[];
+  rateCards: RateCard[];
+  formats: string[];
+  placementOffers: PlacementOffer[];
+} {
   const texts = sourceTexts(opts.dataPoints, opts.messagesById);
   const messageTexts = fullMessageTexts(opts.dataPoints, opts.messagesById);
   const presentation = buildBloggerProfilePresentation({
@@ -116,13 +176,20 @@ function withPresentation<T extends {
     channel: opts.channel,
     texts,
   });
-  const rates = refinedRates(profile, messageTexts);
+  const legacyRates = refinedRates(profile, messageTexts);
+  // Structured placement offers are the source of truth for commercial terms
+  // when present (entity-style-rate-cards). They're rolled up onto the profile
+  // column by the worker; the legacy text-repair path above stays as a fallback
+  // for profiles that predate structured extraction.
+  const placementOffers = parsePlacementOffers(profile.placementOffers);
+  const rates = mergeStructuredRates(placementOffers, legacyRates);
   return {
     ...profile,
     displayName: presentation.displayName,
     socialLinks: presentation.socialLinks,
     rateCards: rates.rateCards,
     formats: rates.formats,
+    placementOffers,
   };
 }
 
