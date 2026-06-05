@@ -160,7 +160,7 @@ function parsePrice(raw: string): number | null {
     .replace(/\s/g, '')
     .replace(',', '.')
     .toLowerCase();
-  const m = /^(\d+(?:\.\d+)?)(к|k)?$/.exec(normalized);
+  const m = /^(\d+(?:\.\d+)?)(к|k|тыс\.?|тысяч[а-яё]*)?$/.exec(normalized);
   if (!m) return null;
   const n = Number(m[1]);
   if (!Number.isFinite(n)) return null;
@@ -210,10 +210,44 @@ function canonicalFormat(label: string, platform: string | null): string {
   return platform ? `${prefix}other` : 'other';
 }
 
-const PRICE_WITH_CURRENCY_RE_SOURCE = String.raw`((?:\d{1,3}(?:[\s\u00a0]\d{3})+|\d+)(?:[.,]\d+)?\s*(?:к|k)?)(?:\s*(₽|руб\.?|р\.?|rub|usd|\$|eur|€))?`;
+const PRICE_WITH_CURRENCY_RE_SOURCE = String.raw`((?:\d{1,3}(?:[\s\u00a0]\d{3})+|\d+)(?:[.,]\d+)?\s*(?:к|k|тыс\.?|тысяч[а-яё]*)?)(?:\s*(₽|рубл[а-яё]*|руб\.?|р\.?|rub|usd|\$|eur|€))?`;
 
 function cleanRawSnippet(raw: string): string {
   return raw.replace(/^[^\p{L}\p{N}]+/u, '').trim();
+}
+
+/**
+ * A format-bearing price stated in prose: "стоимость/цена/прайс [<adj>…]
+ * <format> <price>" — e.g. "стоимость рекламного поста 50 тыс рублей",
+ * "цена сторис — 8000". Requires an explicit price word (стоимость/цена/стоит/
+ * прайс) so a bare "пост 50000" (which may be a view count, not a rate) is NOT
+ * misread. The format word may be declined ("поста") and platform-prefixed by
+ * the caller via `canonicalFormat`.
+ */
+interface LabeledFormatPrice {
+  formatLabel: string;
+  price: number;
+  currency: string;
+  rawSnippet: string;
+}
+
+const LABELED_FORMAT_PRICE_RE_SOURCE = String.raw`(?:стоимост[а-яё]*|цена|стоит|прайс)\s+(?:[A-Za-zА-Яа-яЁё-]+\s+){0,3}?((?:фото|видео)?\s?-?\s?(?:пост|сторис|stories|story|рилс|reels|видео|video|интеграц[а-яё]*|кружок|клип|clips?|shorts|шортс))[а-яё]*\s*(?:[:—–-]\s*)?`;
+
+function extractLabeledFormatPrices(line: string): LabeledFormatPrice[] {
+  // Group layout: 1 = format word, 2 = price token, 3 = currency.
+  const re = new RegExp(LABELED_FORMAT_PRICE_RE_SOURCE + PRICE_WITH_CURRENCY_RE_SOURCE, 'giu');
+  const out: LabeledFormatPrice[] = [];
+  for (const m of line.matchAll(re)) {
+    const price = parsePrice(m[2] ?? '');
+    if (price == null) continue;
+    out.push({
+      formatLabel: (m[1] ?? '').trim(),
+      price,
+      currency: parseCurrency(m[3]),
+      rawSnippet: cleanRawSnippet(m[0] ?? ''),
+    });
+  }
+  return out;
 }
 
 function pushRateDataPoint(
@@ -304,7 +338,20 @@ export function extractRateCardDataPointsFromText(text: string): ProfileDataPoin
     const linePlatform = platformFromInlineText(line) ?? platform;
     extractInlineRateDataPointsFromLine(line, linePlatform, out, seen);
 
-    const m = /^(.+?)\s+[—–]\s+((?:\d{1,3}(?:[\s\u00a0]\d{3})+|\d+)(?:[.,]\d+)?\s*(?:к|k)?)(?:\s*(₽|руб\.?|р\.?|rub|usd|\$|eur|€))?\s*$/i.exec(line);
+    // Prose "стоимость <format> <price>" phrasing (e.g. "стоимость рекламного
+    // поста 50 тыс рублей") — not a table row and not "пост на сутки".
+    for (const lp of extractLabeledFormatPrices(line)) {
+      const lf = canonicalFormat(lp.formatLabel, linePlatform);
+      pushRateDataPoint(out, seen, {
+        format: lf,
+        price: lp.price,
+        currency: lp.currency,
+        confidence: GENERIC_RATE_FORMATS.has(lf) ? 0.8 : 0.92,
+        rawSnippet: lp.rawSnippet,
+      });
+    }
+
+    const m = /^(.+?)\s+[—–]\s+((?:\d{1,3}(?:[\s\u00a0]\d{3})+|\d+)(?:[.,]\d+)?\s*(?:к|k|тыс\.?|тысяч[а-яё]*)?)(?:\s*(₽|рубл[а-яё]*|руб\.?|р\.?|rub|usd|\$|eur|€))?\s*$/i.exec(line);
     if (!m) continue;
     const label = m[1]!.trim();
     if (/налог|бонус|статистик|скидк/i.test(label)) continue;
@@ -545,7 +592,7 @@ function extractTableOffersFromLine(
   platform: string | null,
   acc: OfferAccumulator,
 ): void {
-  const m = /^(.+?)\s+[—–]\s+((?:\d{1,3}(?:[\s ]\d{3})+|\d+)(?:[.,]\d+)?\s*(?:к|k)?)(?:\s*(₽|руб\.?|р\.?|rub|usd|\$|eur|€))?\s*$/i.exec(
+  const m = /^(.+?)\s+[—–]\s+((?:\d{1,3}(?:[\s ]\d{3})+|\d+)(?:[.,]\d+)?\s*(?:к|k|тыс\.?|тысяч[а-яё]*)?)(?:\s*(₽|рубл[а-яё]*|руб\.?|р\.?|rub|usd|\$|eur|€))?\s*$/i.exec(
     line,
   );
   if (!m) return;
@@ -593,6 +640,42 @@ function extractTableOffersFromLine(
  * Returns drafts only — the worker stamps provenance on persist.
  * Reused by Section 5 matching if it needs structured terms from raw text.
  */
+/**
+ * Build offers from prose "стоимость <format> <price>" phrasing — e.g.
+ * "стоимость рекламного поста 50 тыс рублей". Carries line-level
+ * delete_policy / includes / tax onto the offer like the inline builder.
+ */
+function extractLabeledOffersFromLine(
+  line: string,
+  platform: string | null,
+  acc: OfferAccumulator,
+): void {
+  const matches = extractLabeledFormatPrices(line);
+  if (matches.length === 0) return;
+  const tax = taxFromText(line);
+  const lineDeletePolicy = deletePolicyFromText(line);
+  const lineIncludes = includesFromText(line);
+  for (const lp of matches) {
+    const format = canonicalFormat(lp.formatLabel, platform);
+    const kind = kindFromFormat(format);
+    const attributes: PlacementAttribute[] = [];
+    const duration = durationFromText(line);
+    if (duration && kind === 'post') attributes.push(makeAttr('duration', duration, lp.rawSnippet, 0.8));
+    if (lineDeletePolicy) attributes.push(makeAttr('delete_policy', lineDeletePolicy, line, 0.8));
+    if (lineIncludes.length > 0) attributes.push(makeAttr('includes', lineIncludes, line, 0.8));
+    if (tax) attributes.push(makeAttr('tax', tax, tax, 0.8));
+    pushOffer(acc, {
+      kind,
+      platform,
+      price: lp.price,
+      currency: lp.currency,
+      attributes,
+      confidence: 0.9,
+      rawSnippet: lp.rawSnippet,
+    });
+  }
+}
+
 export function extractPlacementOffersFromText(text: string): PlacementOfferDraft[] {
   const acc: OfferAccumulator = { offers: [], seen: new Set<string>() };
   let platform: string | null = null;
@@ -607,6 +690,7 @@ export function extractPlacementOffersFromText(text: string): PlacementOfferDraf
     }
     const linePlatform = platformFromInlineText(line) ?? platform;
     extractInlineOffersFromLine(line, linePlatform, acc);
+    extractLabeledOffersFromLine(line, linePlatform, acc);
     extractTableOffersFromLine(line, linePlatform, acc);
   }
 

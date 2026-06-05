@@ -168,6 +168,64 @@ describe('handleProfileExtract — structured placement offers', () => {
     expect(proposalData.valueType).toBe('number');
   });
 
+  it('persists structured-only extraction (no legacy data_points) instead of dropping it', async () => {
+    // Regression: the worker short-circuited on `drafts.length === 0` BEFORE
+    // reading placement_offers/attribute_proposals, so an extractor that
+    // correctly returned only a structured offer (e.g. "пост 50000 + условия")
+    // with no legacy `data_points` persisted NOTHING.
+    mocks.flagState.structured_placement_offers = true;
+    mocks.runAgentSafe.mockImplementation(async (name: string) => {
+      if (name === 'rate_card_extractor') {
+        return {
+          data_points: [], // structured-only — no legacy rows
+          placement_offers: [
+            {
+              kind: 'post',
+              platform: null,
+              price: 50000,
+              currency: 'RUB',
+              attributes: [],
+              confidence: 0.9,
+              rawSnippet: 'стоимость рекламного поста 50 тыс рублей',
+            },
+          ],
+          attribute_proposals: ATTRIBUTE_PROPOSALS,
+        };
+      }
+      return { data_points: [] };
+    });
+
+    const result = await handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1' });
+
+    // The early-return path was NOT taken: the profile was upserted/rolled up.
+    expect(mocks.prisma.bloggerProfile.upsert).toHaveBeenCalledTimes(1);
+    expect(mocks.prisma.bloggerProfile.update).toHaveBeenCalledTimes(1);
+    expect(result).not.toMatchObject({ dataPoints: 0 });
+
+    const created = mocks.prisma.profileDataPoint.create.mock.calls.map(
+      (c) => (c[0] as { data: { field: string } }).data,
+    );
+    const offerRows = created.filter((d) => d.field === 'placement.offer');
+    expect(offerRows).toHaveLength(1);
+    // The unknown-attribute proposal was persisted too.
+    expect(mocks.prisma.placementAttribute.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('still short-circuits when there is genuinely nothing to persist', async () => {
+    mocks.flagState.structured_placement_offers = true;
+    mocks.runAgentSafe.mockResolvedValue({
+      data_points: [],
+      placement_offers: [],
+      attribute_proposals: [],
+    });
+
+    await handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1' });
+
+    expect(mocks.prisma.bloggerProfile.upsert).not.toHaveBeenCalled();
+    expect(mocks.prisma.profileDataPoint.create).not.toHaveBeenCalled();
+    expect(mocks.prisma.placementAttribute.create).not.toHaveBeenCalled();
+  });
+
   it('is idempotent: skips existing placement.offer rows and proposals on re-run', async () => {
     mocks.flagState.structured_placement_offers = true;
     // Simulate everything already persisted.

@@ -181,15 +181,16 @@ export async function handleProfileExtract(data: {
     drafts.push({ extractedBy: 'audience_stats_extractor', draft: dp });
   }
 
-  if (drafts.length === 0) {
-    return { ok: true, channelId, dataPoints: 0 };
-  }
-
   // Structured placement offers (entity-style-rate-cards). Behind the
   // `structured_placement_offers` flag: when off, behavior is unchanged
   // (legacy data_points only). When on, we ALSO dual-write the extractor's
   // placement_offers as `placement.offer` ProfileDataPoint rows and its
   // attribute_proposals as `placement_attribute` rows (status='proposed').
+  //
+  // NOTE: computed BEFORE the empty-short-circuit below. The extractor can
+  // legitimately return ONLY structured offers (e.g. "пост 50000 + условия")
+  // with no legacy `data_points` — short-circuiting on `drafts.length === 0`
+  // alone would silently drop that extraction.
   const structuredOffersEnabled = getFeatureFlags().get('structured_placement_offers');
   const placementOfferDrafts: PlacementOfferDraft[] = structuredOffersEnabled
     ? (rate?.placement_offers ?? [])
@@ -197,6 +198,14 @@ export async function handleProfileExtract(data: {
   const attributeProposals: PlacementAttributeProposalDraft[] = structuredOffersEnabled
     ? (rate?.attribute_proposals ?? [])
     : [];
+
+  if (
+    drafts.length === 0 &&
+    placementOfferDrafts.length === 0 &&
+    attributeProposals.length === 0
+  ) {
+    return { ok: true, channelId, dataPoints: 0 };
+  }
 
   // Ensure the catalog profile exists (keyed by channelId), then persist all
   // data points and re-roll the standardized fields — in one transaction so a
