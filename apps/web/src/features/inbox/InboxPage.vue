@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { useQuery } from '@tanstack/vue-query';
+import { useQuery, useQueryClient } from '@tanstack/vue-query';
 import ConversationList from './ConversationList.vue';
 import ConversationView from './ConversationView.vue';
 import ContextPanel from './ContextPanel.vue';
 import InboxFilters from './InboxFilters.vue';
 import EmptyState from '../../components/EmptyState.vue';
 import { api } from '../../lib/api';
+import { useRoom } from '../../lib/socket';
 import type { ConversationListItem, Suggestion, ConversationDetail } from './types';
 import {
   hasAnyFilter,
@@ -18,18 +19,22 @@ import {
 
 const route = useRoute();
 const router = useRouter();
+const qc = useQueryClient();
 
 const showContext = ref(true);
 
 const conversationId = computed(() => (route.params.conversationId as string | undefined) ?? undefined);
 const filters = computed<InboxFiltersT>(() => parseInboxFilters(route.query));
+const campaignRoom = computed(() =>
+  filters.value.campaignId ? `campaign:${filters.value.campaignId}` : null,
+);
 
 const { data: conversations } = useQuery({
   // The queryKey carries the filter object so React Query re-fetches
   // whenever the URL filters change — single source of truth.
   queryKey: ['conversations', filters],
   queryFn: () => api.get<ConversationListItem[]>('/conversations', { params: { ...filters.value } }),
-  refetchInterval: 30_000,
+  refetchInterval: 5_000,
 });
 
 const list = computed<ConversationListItem[]>(() => conversations.value ?? []);
@@ -95,6 +100,10 @@ function updateFilters(patch: Partial<InboxFiltersT>): void {
 }
 
 const showEmpty = computed(() => list.value.length === 0 && hasAnyFilter(filters.value));
+
+useRoom(() => campaignRoom.value, 'message.new', () => {
+  qc.invalidateQueries({ queryKey: ['conversations'] });
+});
 </script>
 
 <template>

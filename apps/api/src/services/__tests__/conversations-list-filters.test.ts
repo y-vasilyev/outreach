@@ -49,6 +49,16 @@ describe('conversationsService.list — filter composition', () => {
     expect(getWhere()).toEqual({});
   });
 
+  it('orders active inbox by latest inbound, then latest outbound, then creation time', async () => {
+    await conversationsService.list({});
+    const call = mocks.prisma.conversation.findMany.mock.calls[0]?.[0];
+    expect(call?.orderBy).toEqual([
+      { lastInboundAt: 'desc' },
+      { lastOutboundAt: 'desc' },
+      { createdAt: 'desc' },
+    ]);
+  });
+
   it('campaignId narrows the query', async () => {
     await conversationsService.list({ campaignId: 'camp-1' });
     expect(getWhere()).toEqual({ campaignId: 'camp-1' });
@@ -102,5 +112,30 @@ describe('conversationsService.list — filter composition', () => {
       q: undefined,
     });
     expect(getWhere()).toEqual({});
+  });
+
+  it('marks a row unread when the latest inbound is newer than lastReadAt', async () => {
+    const unreadAt = new Date('2026-06-05T10:00:00Z');
+    mocks.prisma.conversation.findMany.mockResolvedValue([
+      {
+        id: 'conv-unread',
+        lastInboundAt: unreadAt,
+        lastReadAt: new Date('2026-06-05T09:59:00Z'),
+        createdAt: new Date('2026-06-05T09:00:00Z'),
+      },
+      {
+        id: 'conv-read',
+        lastInboundAt: unreadAt,
+        lastReadAt: new Date('2026-06-05T10:01:00Z'),
+        createdAt: new Date('2026-06-05T09:00:00Z'),
+      },
+    ]);
+    mocks.prisma.message.findMany.mockResolvedValue([]);
+    mocks.prisma.suggestion.groupBy.mockResolvedValue([]);
+
+    const rows = await conversationsService.list({});
+
+    expect(rows.find((r) => r.id === 'conv-unread')?.unread).toBe(1);
+    expect(rows.find((r) => r.id === 'conv-read')?.unread).toBe(0);
   });
 });

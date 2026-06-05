@@ -88,11 +88,11 @@ export const conversationsService = {
         tgAccount: { select: { id: true, label: true } },
         campaign: { select: { id: true, name: true } },
       },
-      orderBy: [{ lastInboundAt: 'desc' }, { createdAt: 'desc' }],
+      orderBy: [{ lastInboundAt: 'desc' }, { lastOutboundAt: 'desc' }, { createdAt: 'desc' }],
       take: filters.limit ?? 100,
     });
 
-    if (rows.length === 0) return rows;
+    if (rows.length === 0) return [];
 
     // Per-conversation aggregates (latest message + pending suggestions count)
     // — kept in two grouped queries instead of N+1 lookups.
@@ -118,11 +118,16 @@ export const conversationsService = {
 
     return rows.map((r) => {
       const last = lastByConv.get(r.id);
+      const unread =
+        r.lastInboundAt && (!r.lastReadAt || r.lastInboundAt.getTime() > r.lastReadAt.getTime())
+          ? 1
+          : 0;
       return {
         ...r,
         lastMessageText: last?.text ?? null,
         lastMessageAt: last?.createdAt?.toISOString() ?? null,
         pendingSuggestions: pendingByConv.get(r.id) ?? 0,
+        unread,
       };
     });
   },

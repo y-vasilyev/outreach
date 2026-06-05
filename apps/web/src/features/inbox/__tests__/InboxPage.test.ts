@@ -10,6 +10,9 @@ vi.mock('../../../lib/api', () => ({ api: { get: vi.fn() } }));
 import { api } from '../../../lib/api';
 const apiGet = api.get as unknown as ReturnType<typeof vi.fn>;
 
+const socketMocks = vi.hoisted(() => ({ useRoom: vi.fn() }));
+vi.mock('../../../lib/socket', () => ({ useRoom: socketMocks.useRoom }));
+
 // Router doubles. We surface a mutable `routeState` so tests can update
 // the route between assertions (e.g. simulate navigation).
 const routeState = ref<{
@@ -29,6 +32,7 @@ import InboxPage from '../InboxPage.vue';
 
 beforeEach(() => {
   apiGet.mockReset();
+  socketMocks.useRoom.mockReset();
   routerPush.mockReset();
   routerReplace.mockReset();
   routeState.value = { name: 'inbox', params: {}, query: {} };
@@ -99,6 +103,20 @@ describe('InboxPage — URL filter state', () => {
       campaignId: 'camp-1',
       status: 'active',
     });
+  });
+
+  it('subscribes to the active campaign room so inbound replies refresh the list', async () => {
+    routeState.value = {
+      name: 'inbox',
+      params: {},
+      query: { campaignId: 'camp-1' },
+    };
+    mountWithApp(InboxPage, { global: { stubs } });
+    await flushPromises();
+
+    const messageRoomCall = socketMocks.useRoom.mock.calls.find((c) => c[1] === 'message.new');
+    expect(messageRoomCall).toBeTruthy();
+    expect(messageRoomCall![0]()).toBe('campaign:camp-1');
   });
 
   it('auto-selects the first conversation via router.replace preserving query', async () => {

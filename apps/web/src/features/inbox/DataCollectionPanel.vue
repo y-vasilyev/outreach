@@ -51,9 +51,10 @@ interface HudResponse {
 const qc = useQueryClient();
 const flags = useFlags();
 const room = computed(() => `conversation:${props.conversationId}`);
+const conversationId = computed(() => props.conversationId);
 
 const { data, error } = useQuery<HudResponse>({
-  queryKey: ['conversation-data-collection', () => props.conversationId],
+  queryKey: ['conversation-data-collection', conversationId],
   queryFn: () =>
     api.get<HudResponse>(`/conversations/${props.conversationId}/data-collection`),
   // Never issue the request when the feature is off — the public /config
@@ -70,13 +71,16 @@ const { data, error } = useQuery<HudResponse>({
   retry: (failureCount, err) => !isFeatureOff(err) && failureCount < 2,
 });
 
-// Render nothing when the feature flag is off (server returns 404),
-// the conversation has no campaign-resolved targets, or the response
-// has not arrived yet.
+// Render nothing while the flag is off or the response has not arrived yet.
+// Once the flag is on and the endpoint responds, show either target rows or a
+// setup hint so an agency operator can tell why the HUD has no checklist.
 const flagOff = computed(() => error.value && isFeatureOff(error.value));
 const targets = computed<HudTarget[]>(() => data.value?.targets ?? []);
 const show = computed(
   () => !flagOff.value && targets.value.length > 0,
+);
+const showEmpty = computed(
+  () => !flagOff.value && flags.value.dataCollectionHud && !!data.value && targets.value.length === 0,
 );
 
 // Subscribe to the per-target patch event and merge into the cached
@@ -177,12 +181,15 @@ function draftQuestion(target: HudTarget): void {
 </script>
 
 <template>
-  <div v-if="show" class="hud">
+  <div v-if="show || showEmpty" class="hud">
     <div class="hud-header">
       <Icon name="sparkle" :size="12" />
       <span>Сбор данных</span>
     </div>
-    <ul class="hud-list">
+    <div v-if="showEmpty" class="hud-empty">
+      Для этой кампании не настроены target data points.
+    </div>
+    <ul v-else class="hud-list">
       <li v-for="target in targets" :key="target.key" class="hud-row">
         <div class="hud-row-head">
           <span class="hud-label" :title="target.description_for_operator">{{ target.label }}</span>
@@ -246,6 +253,11 @@ function draftQuestion(target: HudTarget): void {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+.hud-empty {
+  font-size: 11.5px;
+  color: var(--ink-3);
+  line-height: 1.45;
 }
 .hud-row {
   display: flex;

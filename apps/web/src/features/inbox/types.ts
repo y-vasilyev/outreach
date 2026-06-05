@@ -49,6 +49,7 @@ export interface ConversationListItem {
   lastMessageText?: string;
   lastMessageAt?: string;
   lastInboundAt?: string | null;
+  lastOutboundAt?: string | null;
   /** When the operator last acked the conversation (open or new-inbound trigger). */
   lastReadAt?: string | null;
   unread?: number;

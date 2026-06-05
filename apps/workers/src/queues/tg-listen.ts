@@ -262,8 +262,10 @@ export function startTgListenWorker() {
         data: { lastInboundAt: new Date(data.receivedAt) },
       });
 
-      // 5. Realtime push to anyone watching this conversation.
-      await publishRealtime(`conversation:${conv.id}`, {
+      // 5. Realtime push to anyone watching this conversation, and to the
+      // campaign room so the filtered inbox list can bubble fresh replies
+      // without waiting for polling.
+      const messageEvent = {
         type: 'message.new',
         conversationId: conv.id,
         message: {
@@ -274,7 +276,11 @@ export function startTgListenWorker() {
           attachments,
           createdAt: message.createdAt.toISOString(),
         },
-      });
+      } as const;
+      await publishRealtime(`conversation:${conv.id}`, messageEvent);
+      if (conv.campaignId) {
+        await publishRealtime(`campaign:${conv.campaignId}`, messageEvent);
+      }
       logger.info(
         { conversationId: conv.id, messageId: message.id },
         'tg-listen: published message.new to realtime',

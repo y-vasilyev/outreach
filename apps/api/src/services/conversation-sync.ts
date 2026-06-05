@@ -108,6 +108,7 @@ async function syncOneFresh(conversationId: string, now: number): Promise<SyncRe
       id: true,
       tgAccountId: true,
       contactId: true,
+      campaignId: true,
       contact: {
         select: {
           id: true,
@@ -316,7 +317,7 @@ async function syncOneFresh(conversationId: string, now: number): Promise<SyncRe
   // underscore — that's the Prisma DB shape only).
   for (const m of fresh) {
     const attachments = attachmentsFromHistoryMedia(m.media);
-    emitToRoom(`conversation:${conv.id}`, {
+    const messageEvent = {
       type: 'message.new',
       conversationId: conv.id,
       message: {
@@ -327,7 +328,11 @@ async function syncOneFresh(conversationId: string, now: number): Promise<SyncRe
         attachments,
         createdAt: m.sentAt,
       },
-    });
+    } as const;
+    emitToRoom(`conversation:${conv.id}`, messageEvent);
+    if (conv.campaignId) {
+      emitToRoom(`campaign:${conv.campaignId}`, messageEvent);
+    }
   }
 
   // Bounded suggestion regeneration: enqueue agent-run on_inbound for

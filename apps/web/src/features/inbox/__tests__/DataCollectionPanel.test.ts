@@ -54,4 +54,12 @@ describe('DataCollectionPanel query gating', () => {
     await flushPromises();
     expect(apiGet).toHaveBeenCalledWith('/conversations/c1/data-collection');
   });
+
+  it('shows a setup hint instead of disappearing when the flag is on but no targets resolve', async () => {
+    flagState.value.dataCollectionHud = true;
+    const { wrapper } = mountWithApp(DataCollectionPanel, { props: { conversationId: 'c1' } });
+    await flushPromises();
+    expect(wrapper.text()).toContain('Сбор данных');
+    expect(wrapper.text()).toContain('не настроены target data points');
+  });
 });

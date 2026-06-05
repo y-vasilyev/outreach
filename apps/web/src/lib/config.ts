@@ -33,15 +33,18 @@ const DEFAULT_FLAGS: AppFlags = {
 };
 
 /**
- * Fetch the config once (long-lived cache) and expose the flags. Until it
- * resolves — or if it fails — flags default to OFF so nothing agency-specific
- * is shown to a legacy operator by accident.
+ * Fetch the public config and expose the flags. Until it resolves — or if it
+ * fails — flags default to OFF so nothing agency-specific is shown to a legacy
+ * operator by accident. The snapshot is refreshed periodically because flags
+ * may be flipped from another tab/process while an operator keeps the inbox
+ * open.
  */
 export function useFlags() {
   const { data } = useQuery({
     queryKey: ['config'],
     queryFn: () => api.get<ConfigResponse>('/config'),
-    staleTime: Infinity,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
     retry: false,
   });
   return computed<AppFlags>(() => data.value?.flags ?? DEFAULT_FLAGS);

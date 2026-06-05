@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import Avatar from '../../components/Avatar.vue';
 import Tag from '../../components/Tag.vue';
 import Pill from '../../components/Pill.vue';
 import Icon from '../../components/Icon.vue';
 import { initials, truncate } from '../../lib/format';
-import { avatarColor } from '../../lib/state';
+import { avatarColor, type PillClass } from '../../lib/state';
 import type { ConversationListItem } from './types';
 
 const props = defineProps<{
@@ -15,10 +15,27 @@ const props = defineProps<{
 
 const emit = defineEmits<{ (e: 'pick', id: string): void }>();
 
+type QuickFilterId = 'all' | 'ai' | 'op' | 'meets';
+
 interface Tab {
-  id: 'all' | 'ai' | 'op' | 'meets';
+  id: QuickFilterId;
   icon: 'list' | 'sparkle' | 'user' | 'flag';
   count: number;
+}
+
+interface ListStage {
+  state?: string;
+  label?: string;
+  cls?: PillClass;
+}
+
+const activeFilter = ref<QuickFilterId>('all');
+
+function matchesQuickFilter(item: ConversationListItem, filter: QuickFilterId): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'ai') return (item.pendingSuggestions ?? 0) > 0;
+  if (filter === 'op') return item.mode === 'manual';
+  return false;
 }
 
 const tabs = computed<Tab[]>(() => [
@@ -28,35 +45,71 @@ const tabs = computed<Tab[]>(() => [
   { id: 'meets', icon: 'flag', count: 0 },
 ]);
 
-// Local quick-filter pill (all/ai/op/meets) — counts reflect whatever
-// `props.items` was passed in, i.e. already narrowed by the inbox-level
-// filters (`InboxFilters`). Clicking these tabs is still decorative;
-// wiring them into a real client-side post-filter is a follow-up.
-const activeFilter = computed(() => 'all');
+// Local quick-filter pill (all/ai/op/meets) runs as a client-side post-filter
+// over `props.items`, which is already narrowed by inbox-level URL/API filters.
+const visibleItems = computed(() => props.items.filter((item) => matchesQuickFilter(item, activeFilter.value)));
+
+function toMillis(value?: string | null): number {
+  if (!value) return 0;
+  const t = Date.parse(value);
+  return Number.isFinite(t) ? t : 0;
+}
+
+function hasUnreadInbound(item: ConversationListItem): boolean {
+  if ((item.unread ?? 0) > 0) return true;
+  const inbound = toMillis(item.lastInboundAt);
+  if (!inbound) return false;
+  const read = toMillis(item.lastReadAt);
+  return !read || inbound > read;
+}
+
+function isWaitingForReply(item: ConversationListItem): boolean {
+  const outbound = toMillis(item.lastOutboundAt);
+  if (!outbound) return false;
+  const inbound = toMillis(item.lastInboundAt);
+  return !inbound || outbound > inbound;
+}
+
+function listStage(item: ConversationListItem): ListStage {
+  if (item.status !== 'active') return { state: item.status };
+  if (hasUnreadInbound(item)) return { state: 'replied' };
+  if ((item.pendingSuggestions ?? 0) > 0) return { state: 'ai_suggesting' };
+  if (item.mode === 'manual') return { state: 'needs_op' };
+  if (isWaitingForReply(item)) return { label: 'ждём ответ', cls: 'ghost' };
+  return { label: 'нет касаний', cls: 'ghost' };
+}
 </script>
 
 <template>
   <div class="inbox-list" style="display: flex; flex-direction: column; min-height: 0; height: 100%; background: var(--paper-2); border-right: 1px solid var(--line);">
     <div style="height: var(--topbar); padding: 0 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); flex: none;">
       <span style="font-weight: 600; font-size: 13px;">Inbox</span>
-      <span class="kbd">{{ items.length }}</span>
+      <span class="kbd">{{ visibleItems.length }}</span>
       <div style="flex: 1;" />
       <button class="btn ghost icon-only sm" title="Фильтр"><Icon name="filter" :size="12" /></button>
       <button class="btn ghost icon-only sm" title="Новый"><Icon name="plus" :size="12" /></button>
     </div>
     <div style="padding: 6px 8px; display: flex; gap: 4px; flex: none; border-bottom: 1px solid var(--line); overflow-x: auto; white-space: nowrap;">
-      <button v-for="t in tabs" :key="t.id" :class="['chip', activeFilter === t.id ? 'applied accent' : '']" :title="t.id">
+      <button
+        v-for="t in tabs"
+        :key="t.id"
+        type="button"
+        :class="['chip', activeFilter === t.id ? 'applied accent' : '']"
+        :title="t.id"
+        :aria-pressed="activeFilter === t.id"
+        @click="activeFilter = t.id"
+      >
         <Icon :name="t.icon" :size="11" />
         <span class="v">{{ t.count }}</span>
       </button>
     </div>
     <div style="overflow: auto; flex: 1;">
-      <template v-if="items.length === 0">
+      <template v-if="visibleItems.length === 0">
         <div class="center"><span style="color: var(--ink-3); font-size: 12px;">Диалогов нет</span></div>
       </template>
       <template v-else>
         <div
-          v-for="t in items"
+          v-for="t in visibleItems"
           :key="t.id"
           @click="emit('pick', t.id)"
           :style="{
@@ -102,8 +155,11 @@ const activeFilter = computed(() => 'all');
             </div>
             <div style="margin-top: 5px; display: flex; gap: 6px; align-items: center;">
               <Pill :state="t.status" />
-              <Pill v-if="t.mode === 'manual'" :state="'needs_op'" />
-              <Pill v-else-if="(t.pendingSuggestions ?? 0) > 0" :state="'ai_suggesting'" />
+              <Pill
+                :state="listStage(t).state"
+                :label="listStage(t).label"
+                :cls="listStage(t).cls"
+              />
             </div>
           </div>
         </div>
