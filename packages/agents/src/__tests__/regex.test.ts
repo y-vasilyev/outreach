@@ -159,6 +159,36 @@ describe('runRegexCandidates — role inference', () => {
   });
 });
 
+describe('runRegexCandidates — bot contact type', () => {
+  it('promotes a *_bot handle to type "bot" when context says ads', () => {
+    const cands = runRegexCandidates('По рекламе писать только в бота: @hadeout_bot');
+    const c = cands.find((x) => x.raw_value === '@hadeout_bot');
+    expect(c?.type).toBe('bot');
+    expect(c?.role_hint).toBe('ad_manager');
+    expect(c?.deny_reason).toBeUndefined();
+  });
+
+  it('promotes a t.me/<bot> link to type "bot" when context says ads', () => {
+    const cands = runRegexCandidates('Реклама и интеграции — t.me/hadeout_bot');
+    const c = cands.find((x) => x.type === 'bot');
+    expect(c).toBeDefined();
+    expect(c?.raw_value).toContain('hadeout_bot');
+  });
+
+  it('does NOT promote a *_bot handle without an ad/business signal', () => {
+    const cands = runRegexCandidates('Поддержка: @support_bot');
+    const c = cands.find((x) => x.raw_value === '@support_bot');
+    expect(c?.type).toBe('tg_username');
+    expect(c?.role_hint).toBe('bot');
+  });
+
+  it('leaves non-bot ad handles as tg_username', () => {
+    const cands = runRegexCandidates('По рекламе пишите @ads_vasya');
+    const c = cands.find((x) => x.raw_value === '@ads_vasya');
+    expect(c?.type).toBe('tg_username');
+  });
+});
+
 describe('runRegexCandidates — deny filter', () => {
   it('marks self-handle (Telegram username form)', () => {
     const cands = runRegexCandidates(

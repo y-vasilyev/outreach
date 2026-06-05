@@ -35,23 +35,31 @@ const TG_USER_RE = /^@?([a-zA-Z][\w]{4,31})$/;
 const TG_LINK_RE = /^(?:https?:\/\/)?t\.me\/(.+)$/i;
 const PHONE_RE = /^\+?\d[\d\s().-]{6,18}$/;
 const URL_RE = /^https?:\/\/.+/i;
+/** A Telegram handle that ends in `bot`/`_bot` — an ad/intake bot. */
+const BOT_HANDLE_RE = /_?bot$/i;
 
 /**
  * Auto-detect the contact type from a free-form value the operator pasted.
  * Mirrors what `ContactExtractor` does on regex candidates so manual entries
  * line up with extracted ones (same `(type, value)` key, hence dedupe works).
  */
-function detectContactType(raw: string): ContactType {
+export function detectContactType(raw: string): ContactType {
   const t = raw.trim();
   if (!t) return 'other';
   if (EMAIL_RE.test(t)) return 'email';
   if (TG_LINK_RE.test(t)) {
-    // t.me/username → tg_username; t.me/+abc, t.me/joinchat/… → tg_link
+    // t.me/username → tg_username (or `bot` if the handle is a bot);
+    // t.me/+abc, t.me/joinchat/… → tg_link
     const tail = t.replace(TG_LINK_RE, '$1');
-    if (/^[a-zA-Z][\w]{4,31}$/.test(tail)) return 'tg_username';
+    if (/^[a-zA-Z][\w]{4,31}$/.test(tail)) {
+      return BOT_HANDLE_RE.test(tail) ? 'bot' : 'tg_username';
+    }
     return 'tg_link';
   }
-  if (TG_USER_RE.test(t)) return 'tg_username';
+  if (TG_USER_RE.test(t)) {
+    const handle = t.replace(/^@/, '');
+    return BOT_HANDLE_RE.test(handle) ? 'bot' : 'tg_username';
+  }
   if (PHONE_RE.test(t)) return 'tg_phone';
   if (URL_RE.test(t)) return 'website';
   return 'other';
@@ -61,13 +69,21 @@ function detectContactType(raw: string): ContactType {
  * Normalise the value to the same canonical form as the extractor uses, so the
  * `(channelId, type, value)` unique key dedupes manual + extracted entries.
  */
-function normalizeContactValue(type: ContactType, raw: string): string {
+export function normalizeContactValue(type: ContactType, raw: string): string {
   const t = raw.trim();
   switch (type) {
     case 'tg_username': {
       const m = t.match(/^(?:@|https?:\/\/t\.me\/)?([a-zA-Z][\w]{4,31})$/);
       return m?.[1] ? m[1].toLowerCase() : t.replace(/^@/, '').toLowerCase();
     }
+    case 'bot':
+      // Ad-intake bot: reached by its @handle. Strip scheme/t.me//@ so the
+      // dedupe key matches whatever shape the operator pasted.
+      return t
+        .replace(/^https?:\/\//i, '')
+        .replace(/^t\.me\//i, '')
+        .replace(/^@/, '')
+        .toLowerCase();
     case 'tg_link':
       return t.replace(/^https?:\/\//i, '').replace(/\/$/, '');
     case 'tg_phone':
@@ -88,8 +104,11 @@ function normalizeContactValue(type: ContactType, raw: string): string {
  * Reachability follows the type: TG-channel types are reachable via outreach,
  * everything else is operator-handled (manual outreach via inbox).
  */
-function reachabilityForType(type: ContactType): 'reachable_tg' | 'manual' | 'unreachable' {
-  if (type === 'tg_username' || type === 'tg_link' || type === 'tg_phone') return 'reachable_tg';
+export function reachabilityForType(type: ContactType): 'reachable_tg' | 'manual' | 'unreachable' {
+  // `bot` is DM-reachable in Telegram; the campaign dispatcher excludes it
+  // from automated sends, not its reachability.
+  if (type === 'tg_username' || type === 'tg_link' || type === 'tg_phone' || type === 'bot')
+    return 'reachable_tg';
   if (type === 'email' || type === 'website' || type === 'web_form') return 'manual';
   return 'unreachable';
 }

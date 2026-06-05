@@ -7,6 +7,7 @@ export const ContactTypeZ = z.enum([
   'email',
   'website',
   'web_form',
+  'bot',
   'other',
 ]);
 

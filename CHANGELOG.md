@@ -6,6 +6,18 @@ All operator-visible changes worth noting between releases.
 
 ### Added
 
+- **`bot` contact type** (openspec change `add-bot-contact-type`). Some bloggers
+  publish only an advertising bot as their business contact (e.g. «по рекламе —
+  @hadeout_bot»). These are now captured as a first-class `bot` contact type
+  instead of being dropped or mislabeled as a plain username. The extractor
+  classifies a `*_bot` handle as `bot` only when the surrounding text shows it's
+  an ad/intake channel; service bots without ad context are still ignored. Bot
+  contacts are TG-reachable and show a distinct icon in the contacts list, with
+  `bot` available in the type filter, create dialog, and edit drawer. They are
+  deliberately **excluded from automated campaign dispatch** — an ad bot expects
+  a /start/menu flow, not a human-framed opener — so operators reach them
+  manually from the inbox.
+
 - **Structured placement offers** (openspec change `entity-style-rate-cards`).
   Blogger quotes are now extracted as structured commercial offers — each with
   a stable `kind` plus typed attributes (platform, duration, deletion policy,

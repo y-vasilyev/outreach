@@ -248,14 +248,20 @@ channel (
 -- КОНТАКТЫ (производные от канала)
 contact (
   id, channel_id FK,
-  type ENUM(tg_username|tg_phone|tg_link|email|website|web_form|other),
+  type ENUM(tg_username|tg_phone|tg_link|email|website|web_form|other|bot),
+  -- `bot` — рекламный бот-приёмник (напр. «по рекламе — @hadeout_bot»):
+  -- явно опубликованный business/ad contact. Извлекается только когда контекст
+  -- говорит о приёме рекламы/заявок; иначе служебный *_bot отбрасывается.
+  -- type axis (как писать) ортогонален role_guess.bot (кто/что за контактом).
   value TEXT,                      -- нормализованное (@username без @, email без пробелов)
   raw_value TEXT,                  -- как было в описании
   label TEXT NULL,                 -- "по рекламе", "manager", "PR" — кусок текста рядом
   role_guess ENUM(owner|ad_manager|generic|bot|unknown),
   confidence NUMERIC,              -- 0..1
   extracted_by ENUM(regex|llm|both),
-  reachability ENUM(reachable_tg|manual|unreachable),  -- по типу
+  reachability ENUM(reachable_tg|manual|unreachable),  -- по типу; bot → reachable_tg,
+                                   -- но кампания-диспетчер НЕ авто-отправляет ботам
+                                   -- (нужен /start/меню) — только ручной/assisted аутрич
   status ENUM(new|qualified|disqualified|contacted|active|finished|invalid|blocked),
   tags TEXT[],
   -- если type=tg_username и удалось зарезолвить
@@ -386,7 +392,7 @@ audit_log (
 - `channel.status=extracted`. Если 0 контактов — `failed_no_contacts` (видно в админке, можно ручным контактом дополнить).
 
 ### 4. Резолв TG-контактов
-- Для всех новых `contact.type=tg_username`/`tg_link` — задача через парсер-аккаунт: `users.resolve` → `tg_user_id`. Если резолв упал (нет такого юзера / приватность) — `status=invalid`.
+- Для всех новых `contact.type=tg_username`/`tg_link`/`bot` — задача через парсер-аккаунт: `users.resolve` → `tg_user_id`. Если резолв упал (нет такого юзера / приватность) — `status=invalid`.
 - Только зарезолвленные доходят до отправки.
 
 ### 5. Кампания

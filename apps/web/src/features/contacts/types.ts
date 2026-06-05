@@ -5,6 +5,7 @@ export type ContactType =
   | 'email'
   | 'website'
   | 'web_form'
+  | 'bot'
   | 'other';
 
 export type ContactRole = 'owner' | 'ad_manager' | 'generic' | 'bot' | 'unknown';

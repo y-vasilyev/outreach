@@ -7,6 +7,7 @@ export type ContactType =
   | 'email'
   | 'website'
   | 'web_form'
+  | 'bot'
   | 'other';
 export type RoleGuess = 'owner' | 'ad_manager' | 'generic' | 'bot' | 'unknown';
 export type Reachability = 'reachable_tg' | 'manual' | 'unreachable';

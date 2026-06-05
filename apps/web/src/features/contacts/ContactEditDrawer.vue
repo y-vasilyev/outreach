@@ -52,6 +52,7 @@ const TYPES = [
   { value: 'tg_username', label: 'tg_username' },
   { value: 'tg_link', label: 'tg_link' },
   { value: 'tg_phone', label: 'tg_phone' },
+  { value: 'bot', label: 'bot' },
   { value: 'email', label: 'email' },
   { value: 'website', label: 'website' },
   { value: 'web_form', label: 'web_form' },

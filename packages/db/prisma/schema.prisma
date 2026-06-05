@@ -81,6 +81,7 @@ enum ContactType {
   website
   web_form
   other
+  bot
 
   @@map("contact_type")
 }

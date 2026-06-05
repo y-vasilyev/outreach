@@ -27,6 +27,7 @@ interface ContactExtractorOut {
       | 'phone'
       | 'website'
       | 'web_form'
+      | 'bot'
       | 'other';
     value: string;
     raw_value: string;
@@ -38,7 +39,7 @@ interface ContactExtractorOut {
   no_contacts_reason?: string;
 }
 
-function mapContactType(t: string): 'tg_username' | 'tg_phone' | 'tg_link' | 'email' | 'website' | 'web_form' | 'other' {
+function mapContactType(t: string): 'tg_username' | 'tg_phone' | 'tg_link' | 'email' | 'website' | 'web_form' | 'bot' | 'other' {
   switch (t) {
     case 'tg_username':
     case 'tg_phone':
@@ -46,6 +47,7 @@ function mapContactType(t: string): 'tg_username' | 'tg_phone' | 'tg_link' | 'em
     case 'email':
     case 'website':
     case 'web_form':
+    case 'bot':
     case 'other':
       return t;
     case 'phone':
@@ -174,7 +176,7 @@ export function startContactExtractWorker() {
         // so the same inferDenyReason works on LLM output as on regex output.
         const reason = inferDenyReason(
           // Map back to RegexCandidateType (web_form → website for filter purposes).
-          c.type === 'web_form' ? 'website' : (c.type as 'tg_username' | 'tg_link' | 'email' | 'phone' | 'website' | 'other'),
+          c.type === 'web_form' ? 'website' : (c.type as 'tg_username' | 'tg_link' | 'email' | 'phone' | 'website' | 'bot' | 'other'),
           c.raw_value || c.value,
           c.rationale ?? '',
           channelHandle,
@@ -216,8 +218,13 @@ export function startContactExtractWorker() {
           preservedManual += 1;
           continue;
         }
+        // A `bot` (ad-intake Telegram bot) is DM-reachable just like a
+        // username; the campaign dispatcher is what keeps it out of
+        // automated sends, not its reachability.
         const reachability =
-          type === 'tg_username' || type === 'tg_link' ? 'reachable_tg' : 'manual';
+          type === 'tg_username' || type === 'tg_link' || type === 'bot'
+            ? 'reachable_tg'
+            : 'manual';
         try {
           await prisma.contact.upsert({
             where: { channelId_type_value: { channelId, type, value } },

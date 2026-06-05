@@ -49,6 +49,7 @@ export type RegexCandidateType =
   | 'email'
   | 'phone'
   | 'website'
+  | 'bot'
   | 'other';
 
 export type RoleHint = 'owner' | 'ad_manager' | 'bot' | 'generic' | 'unknown';
@@ -101,14 +102,29 @@ export function runRegexCandidates(
     matchStart: number,
     matchEnd: number,
   ) => {
-    const key = `${type}::${raw.toLowerCase()}`;
+    const snippet = makeSnippet(text, matchStart, matchEnd);
+    // An ad/intake bot (handle ends in _bot/bot) that the surrounding text
+    // points to for ads/заявки is a first-class `bot` contact, not a
+    // tg_username. We only promote when there's an advertising signal —
+    // otherwise the handle stays a regular candidate (and a service bot with
+    // no ad context keeps its `bot` role_hint, which the LLM drops).
+    const botHandle = raw
+      .replace(/^https?:\/\//i, '')
+      .replace(/^t\.me\//i, '')
+      .replace(/^@/, '');
+    const effectiveType: RegexCandidateType =
+      (type === 'tg_username' || type === 'tg_link') &&
+      BOT_HANDLE_RE.test(`@${botHandle}`) &&
+      hasAny(snippet.toLowerCase(), AD_MANAGER_RU, AD_MANAGER_EN)
+        ? 'bot'
+        : type;
+    const key = `${effectiveType}::${raw.toLowerCase()}`;
     if (seen.has(key)) return;
     seen.add(key);
-    const snippet = makeSnippet(text, matchStart, matchEnd);
-    const role_hint = inferRoleFromContext(snippet, type, raw);
-    const deny_reason = inferDenyReason(type, raw, snippet, channelHandle);
+    const role_hint = inferRoleFromContext(snippet, effectiveType, raw);
+    const deny_reason = inferDenyReason(effectiveType, raw, snippet, channelHandle);
     out.push({
-      type,
+      type: effectiveType,
       raw_value: raw,
       context_snippet: snippet,
       role_hint,

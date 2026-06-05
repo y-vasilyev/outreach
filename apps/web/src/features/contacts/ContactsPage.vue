@@ -214,6 +214,7 @@ const tabsList = computed(() => [
 const typeOptions = [
   { value: 'tg_username', label: 'tg_username' },
   { value: 'tg_link', label: 'tg_link' },
+  { value: 'bot', label: 'bot' },
   { value: 'email', label: 'email' },
   { value: 'website', label: 'website' },
   { value: 'web_form', label: 'web_form' },
@@ -248,6 +249,7 @@ const sourceOptions = [
 const typeIcon: Record<string, IconName> = {
   tg_username: 'send',
   tg_link: 'link',
+  bot: 'bot',
   email: 'mail',
   website: 'globe',
   web_form: 'globe',

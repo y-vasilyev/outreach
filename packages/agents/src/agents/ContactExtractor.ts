@@ -5,7 +5,7 @@ import { invokeJson, readParams } from './_runtime.js';
 import { ConfidenceCoerced } from './_coerce.js';
 
 export const contactCandidateSchema = z.object({
-  type: z.enum(['tg_username', 'tg_link', 'email', 'phone', 'website', 'other']),
+  type: z.enum(['tg_username', 'tg_link', 'email', 'phone', 'website', 'bot', 'other']),
   raw_value: z.string(),
   context_snippet: z.string(),
   /** Deterministic role hint from regex.ts. LLM may override but should explain why. */
@@ -37,6 +37,7 @@ export const extractedContactSchema = z.object({
     'phone',
     'website',
     'web_form',
+    'bot',
     'other',
   ]),
   value: z.string(),
@@ -71,10 +72,13 @@ const FALLBACK_SYSTEM = `Ты ищешь в описании и постах к�
 - Дисклеймеры «не размещаю рекламу», «без рекламы» — handle рядом с такой фразой → не контакт.
 - @username из чужих email-адресов (foo@example.com — это email, а не tg).
 
+Тип контакта bot — отдельный тип:
+- Если handle оканчивается на _bot/bot И рядом сказано, что именно ТУДА писать по рекламе/сотрудничеству/заявкам (например «по рекламе — @hadeout_bot», «заявки в бот», «прайс в боте»), это рекламный бот-приёмник → ставь type="bot" (role_guess обычно ad_manager). Это валидный контакт для аутрича.
+- Если handle оканчивается на _bot/bot, но контекст НЕ говорит о приёме рекламы/заявок — это служебный/сторонний бот, НЕ извлекай его (role bot, дропни).
+
 Как определять роль:
 - ad_manager — рядом слова: реклама, коллаб, сотрудничество, интеграция, размещение, partnership, ads, promo, business. ПРИОРИТЕТ для аутрича.
 - owner — рядом слова: автор, основатель, создатель, founder, owner, «пишу я», «веду канал».
-- bot — handle оканчивается на _bot/bot и контекст НЕ говорит о приёме рекламы.
 - generic — общий контакт (поддержка, связь по любым вопросам).
 - unknown — нет сигнала; ставь confidence ≤ 0.4.
 
@@ -178,6 +182,8 @@ export function normalizeValue(type: ExtractedContact['type'], value: string): s
   let v = value.trim();
   switch (type) {
     case 'tg_username':
+    // An ad-intake bot is reached by its @handle just like a username.
+    case 'bot':
       // Strip leading @ and any t.me/ prefix that snuck in.
       v = v.replace(/^https?:\/\/t\.me\//i, '');
       v = v.replace(/^@/, '');

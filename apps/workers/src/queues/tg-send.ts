@@ -148,7 +148,12 @@ export function startTgSendWorker() {
       //      contact, so the prompt no longer hallucinates a name.
       // We only resolve for TG-reachable contact types and skip if already
       // populated.
-      if (!conv.contact.tgUserId && (conv.contact.type === 'tg_username' || conv.contact.type === 'tg_link')) {
+      if (
+        !conv.contact.tgUserId &&
+        (conv.contact.type === 'tg_username' ||
+          conv.contact.type === 'tg_link' ||
+          conv.contact.type === 'bot')
+      ) {
         try {
           const resolved = await handle.resolveUser(target);
           await prisma.contact.update({

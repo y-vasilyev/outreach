@@ -16,6 +16,18 @@ import { buildContactPromptInput } from '../services/agent-input.js';
 import { ensureContactTgProfile } from '../services/contact-profile.js';
 import { rolloverTgAccountDailyCounters } from '../services/tg-account-limits.js';
 
+/**
+ * Base contact filter shared by both acceptance branches of the dispatcher.
+ * A contact must be physically TG-reachable AND not a `bot`: an ad-intake
+ * bot is `reachable_tg` so operators can DM it, but it expects a /start/menu
+ * flow rather than a human-framed opener, so it is never auto-dispatched.
+ * Exported as a pure value so the exclusion is unit-testable.
+ */
+export const AUTO_DISPATCH_BASE_WHERE = {
+  reachability: 'reachable_tg' as const,
+  type: { not: 'bot' as const },
+};
+
 interface OpenerOut {
   // `variantKey` is populated by the composer's deterministic post-process
   // (`assignVariantKeys`) — always non-empty (alphabetical fallback when the
@@ -150,7 +162,7 @@ export function startCampaignDispatcher() {
         // contact when it already has messages or a usable opening
         // suggestion; a failed/empty opener run should be retried.
         const where: Prisma.ContactWhereInput = {
-          reachability: 'reachable_tg',
+          ...AUTO_DISPATCH_BASE_WHERE,
           ...((filter.platforms && filter.platforms.length > 0) ||
           (filter.languages && filter.languages.length > 0) ||
           (filter.topics && filter.topics.length > 0)
