@@ -31,7 +31,7 @@ export type ChannelStatus =
   | 'failed';
 
 export type ConversationMode = 'auto' | 'semi_auto' | 'assisted' | 'manual';
-export type ConversationStatus = 'active' | 'paused' | 'done' | 'failed';
+export type ConversationStatus = 'active' | 'paused' | 'done' | 'failed' | 'archived';
 export type MessageDirection = 'in' | 'out';
 export type MessageSender = 'contact' | 'ai' | 'operator' | 'system';
 export type MessageStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'received';

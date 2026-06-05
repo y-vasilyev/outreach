@@ -151,6 +151,10 @@ enum ConversationStatus {
   paused
   done
   failed
+  // Operator parked an off-target ("нецелевка") chat out of the working
+  // inbox. Reversible (→ active); hidden from the default inbox list but
+  // reachable via the status filter. Appended last → additive enum ADD VALUE.
+  archived
 
   @@map("conversation_status")
 }

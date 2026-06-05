@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { QualityDecisionZ } from './ajtbd.js';
 
-export const ConversationStatusZ = z.enum(['active', 'paused', 'done', 'failed']);
+export const ConversationStatusZ = z.enum(['active', 'paused', 'done', 'failed', 'archived']);
 export const ConversationModeZ = z.enum(['auto', 'semi_auto', 'assisted', 'manual']);
 
 export const ConversationZ = z.object({

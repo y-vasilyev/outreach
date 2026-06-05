@@ -65,6 +65,17 @@ export interface ModeChangedEvent {
   mode: ConversationMode;
 }
 
+/**
+ * Emitted when an operator hard-deletes an off-target conversation. The inbox
+ * uses it to drop the row (and navigate away if it was the open thread)
+ * without waiting for the next refetch. Broadcast on both the conversation
+ * room and (when bound) the campaign room.
+ */
+export interface ConversationDeletedEvent {
+  type: 'conversation.deleted';
+  conversationId: string;
+}
+
 export interface ChannelProgressEvent {
   type: 'channel.progress';
   channelId: string;
@@ -174,6 +185,7 @@ export type RealtimeEvent =
   | SuggestionApprovedEvent
   | StatusChangedEvent
   | ModeChangedEvent
+  | ConversationDeletedEvent
   | ChannelProgressEvent
   | CampaignTickEvent
   | DashboardEvent

@@ -68,7 +68,8 @@ describe('GET /conversations — HTTP contract', () => {
     });
     expect(res.statusCode).toBe(200);
     const where = prismaMock.conversation.findMany.mock.calls[0]?.[0]?.where;
-    expect(where).toEqual({ campaignId: 'camp-1' });
+    // Default-hides archived chats alongside the campaign filter.
+    expect(where).toEqual({ campaignId: 'camp-1', status: { not: 'archived' } });
   });
 
   it('rejects overlong q with 400 (Zod boundary) and never hits Prisma', async () => {
@@ -92,7 +93,9 @@ describe('GET /conversations — HTTP contract', () => {
       headers: { authorization: `Bearer ${tokenFor(app, 'operator')}` },
     });
     expect(res.statusCode).toBe(200);
-    expect(prismaMock.conversation.findMany.mock.calls[0]?.[0]?.where).toEqual({});
+    expect(prismaMock.conversation.findMany.mock.calls[0]?.[0]?.where).toEqual({
+      status: { not: 'archived' },
+    });
   });
 
   it('unauthenticated request is rejected with 401', async () => {

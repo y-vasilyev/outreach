@@ -10,13 +10,13 @@ import type { LocationQuery } from 'vue-router';
  */
 export interface InboxFilters {
   campaignId?: string;
-  status?: 'active' | 'paused' | 'done' | 'failed';
+  status?: 'active' | 'paused' | 'done' | 'failed' | 'archived';
   mode?: 'auto' | 'semi_auto' | 'assisted' | 'manual';
   assignedOperatorId?: string;
   q?: string;
 }
 
-const STATUS = new Set(['active', 'paused', 'done', 'failed']);
+const STATUS = new Set(['active', 'paused', 'done', 'failed', 'archived']);
 const MODE = new Set(['auto', 'semi_auto', 'assisted', 'manual']);
 
 function readString(v: unknown): string | undefined {

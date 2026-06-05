@@ -76,7 +76,10 @@ export const conversationsService = {
     const prisma = getPrisma();
     const rows = await prisma.conversation.findMany({
       where: {
-        ...(filters.status && { status: filters.status }),
+        // Archived ("нецелевка") chats are parked out of the working inbox:
+        // hidden by default, but visible when the operator explicitly filters
+        // by `status=archived`.
+        ...(filters.status ? { status: filters.status } : { status: { not: 'archived' as const } }),
         ...(filters.mode && { mode: filters.mode }),
         ...(filters.campaignId && { campaignId: filters.campaignId }),
         ...(filters.assignedOperatorId && { assignedOperatorId: filters.assignedOperatorId }),
@@ -363,9 +366,35 @@ export const conversationsService = {
     return c;
   },
 
-  async setStatus(id: string, status: 'active' | 'paused' | 'done' | 'failed') {
+  async setStatus(id: string, status: 'active' | 'paused' | 'done' | 'failed' | 'archived') {
     const prisma = getPrisma();
-    return prisma.conversation.update({ where: { id }, data: { status } });
+    const c = await prisma.conversation.update({ where: { id }, data: { status } });
+    // Keep the inbox list in sync for clients listening on the campaign room
+    // (archive/unarchive moves the chat in/out of the default view).
+    emitToRoom(`conversation:${id}`, { type: 'status.changed', conversationId: id, status });
+    return c;
+  },
+
+  /**
+   * Hard-delete an off-target conversation. Removes the thread, its messages
+   * and any pending suggestions (both cascade). `agent_run.conversation_id` is
+   * `SetNull`, so LLM cost accounting is preserved. Irreversible — the UI
+   * guards this behind a confirm dialog; archiving is the reversible default.
+   */
+  async remove(id: string): Promise<{ id: string; deleted: true }> {
+    const prisma = getPrisma();
+    const conv = await prisma.conversation.findUnique({
+      where: { id },
+      select: { id: true, campaignId: true },
+    });
+    if (!conv) throw Errors.notFound('conversation', id);
+    await prisma.conversation.delete({ where: { id } });
+    logger.info({ conversationId: id }, 'conversation deleted by operator');
+    emitToRoom(`conversation:${id}`, { type: 'conversation.deleted', conversationId: id });
+    if (conv.campaignId) {
+      emitToRoom(`campaign:${conv.campaignId}`, { type: 'conversation.deleted', conversationId: id });
+    }
+    return { id, deleted: true };
   },
 
   async sendOperatorMessage(input: {

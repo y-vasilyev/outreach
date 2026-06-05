@@ -44,7 +44,7 @@ export interface QualityDecision {
 export interface ConversationListItem {
   id: string;
   contact?: ConversationContact;
-  status: 'active' | 'paused' | 'done' | 'failed';
+  status: 'active' | 'paused' | 'done' | 'failed' | 'archived';
   mode: ConversationMode;
   lastMessageText?: string;
   lastMessageAt?: string;

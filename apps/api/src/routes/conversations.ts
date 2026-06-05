@@ -77,7 +77,7 @@ export async function conversationsRoutes(app: FastifyInstance) {
     const body = z
       .object({
         mode: z.enum(['auto', 'semi_auto', 'assisted', 'manual']).optional(),
-        status: z.enum(['active', 'paused', 'done', 'failed']).optional(),
+        status: z.enum(['active', 'paused', 'done', 'failed', 'archived']).optional(),
       })
       .parse(req.body);
     // Migration shim — when LEGACY_AUTO_MEANS_SEMI_AUTO=1 the API
@@ -92,6 +92,17 @@ export async function conversationsRoutes(app: FastifyInstance) {
     if (mode) await conversationsService.setMode(params.id, mode);
     if (body.status) await conversationsService.setStatus(params.id, body.status);
     return conversationsService.get(params.id);
+  });
+
+  /**
+   * Hard-delete an off-target conversation (and its messages / pending
+   * suggestions). Irreversible — the UI guards it behind a confirm dialog;
+   * archiving (`PATCH … { status: 'archived' }`) is the reversible default.
+   * Admin/operator only.
+   */
+  app.delete('/conversations/:id', { preHandler: [app.requireRole(['admin', 'operator'])] }, async (req) => {
+    const params = z.object({ id: z.string() }).parse(req.params);
+    return conversationsService.remove(params.id);
   });
 
   app.post('/conversations/:id/suggestions/:sid/approve', { preHandler: [app.requireRole(['admin', 'operator'])] }, async (req) => {

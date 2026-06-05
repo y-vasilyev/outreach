@@ -44,9 +44,11 @@ function getWhere(): Record<string, unknown> {
 }
 
 describe('conversationsService.list — filter composition', () => {
-  it('no filters → empty where clause', async () => {
+  it('no filters → default-hides archived chats', async () => {
+    // Archived ("нецелевка") chats are parked out of the working inbox: the
+    // default list excludes them; an explicit status filter overrides this.
     await conversationsService.list({});
-    expect(getWhere()).toEqual({});
+    expect(getWhere()).toEqual({ status: { not: 'archived' } });
   });
 
   it('orders active inbox by latest inbound, then latest outbound, then creation time', async () => {
@@ -61,7 +63,7 @@ describe('conversationsService.list — filter composition', () => {
 
   it('campaignId narrows the query', async () => {
     await conversationsService.list({ campaignId: 'camp-1' });
-    expect(getWhere()).toEqual({ campaignId: 'camp-1' });
+    expect(getWhere()).toEqual({ campaignId: 'camp-1', status: { not: 'archived' } });
   });
 
   it('status and mode combine conjunctively', async () => {
@@ -69,15 +71,21 @@ describe('conversationsService.list — filter composition', () => {
     expect(getWhere()).toEqual({ status: 'active', mode: 'manual' });
   });
 
+  it('an explicit status=archived filter overrides the default hide', async () => {
+    await conversationsService.list({ status: 'archived' });
+    expect(getWhere()).toEqual({ status: 'archived' });
+  });
+
   it('assignedOperatorId is honoured (deep-link path)', async () => {
     await conversationsService.list({ assignedOperatorId: 'op-7' });
-    expect(getWhere()).toEqual({ assignedOperatorId: 'op-7' });
+    expect(getWhere()).toEqual({ assignedOperatorId: 'op-7', status: { not: 'archived' } });
   });
 
   it('q produces an OR across contact value / handle / title with insensitive contains', async () => {
     await conversationsService.list({ q: 'acme' });
     const where = getWhere();
     expect(where).toEqual({
+      status: { not: 'archived' },
       OR: [
         { contact: { value: { contains: 'acme', mode: 'insensitive' } } },
         { contact: { channel: { handle: { contains: 'acme', mode: 'insensitive' } } } },
@@ -96,7 +104,7 @@ describe('conversationsService.list — filter composition', () => {
 
   it('unknown campaignId still produces the same scoped query (DB returns empty)', async () => {
     await conversationsService.list({ campaignId: 'does-not-exist' });
-    expect(getWhere()).toEqual({ campaignId: 'does-not-exist' });
+    expect(getWhere()).toEqual({ campaignId: 'does-not-exist', status: { not: 'archived' } });
     // No filter dropped, no error thrown — service just trusts the DB
     // to return [], matching spec scenario "Unknown campaignId returns
     // an empty list, not an error".
@@ -111,7 +119,7 @@ describe('conversationsService.list — filter composition', () => {
       mode: undefined,
       q: undefined,
     });
-    expect(getWhere()).toEqual({});
+    expect(getWhere()).toEqual({ status: { not: 'archived' } });
   });
 
   it('marks a row unread when the latest inbound is newer than lastReadAt', async () => {

@@ -47,6 +47,7 @@ const M: Record<string, PillSpec> = {
   paused: { cls: 'warn', txt: 'paused' },
   running: { cls: 'ok', txt: 'running' },
   done: { cls: 'ghost', txt: 'done' },
+  archived: { cls: 'ghost', txt: 'архив' },
 
   // tg_account
   idle: { cls: 'ghost', txt: 'idle' },

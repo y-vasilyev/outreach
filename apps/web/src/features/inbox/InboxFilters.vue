@@ -29,6 +29,7 @@ const STATUS_OPTIONS: Array<{ value: NonNullable<InboxFilters['status']>; label:
   { value: 'paused', label: 'Пауза' },
   { value: 'done', label: 'Завершён' },
   { value: 'failed', label: 'Ошибка' },
+  { value: 'archived', label: 'Архив' },
 ];
 const MODE_OPTIONS: Array<{ value: NonNullable<InboxFilters['mode']>; label: string }> = [
   { value: 'auto', label: 'Auto' },

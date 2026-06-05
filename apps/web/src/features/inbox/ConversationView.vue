@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import Avatar from '../../components/Avatar.vue';
 import Tag from '../../components/Tag.vue';
@@ -7,6 +8,7 @@ import Pill from '../../components/Pill.vue';
 import Icon from '../../components/Icon.vue';
 import Spinner from '../../components/Spinner.vue';
 import Dropdown from '../../components/Dropdown.vue';
+import ConfirmDialog from '../../components/ConfirmDialog.vue';
 import MessageBubble from './MessageBubble.vue';
 import SuggestionStrip from './SuggestionStrip.vue';
 import { useRoom } from '../../lib/socket';
@@ -26,6 +28,8 @@ const emit = defineEmits<{ (e: 'toggleContext'): void }>();
 const cId = computed(() => props.conversation.id);
 const room = computed(() => `conversation:${cId.value}`);
 const qc = useQueryClient();
+const router = useRouter();
+const route = useRoute();
 
 const { data: details } = useQuery({
   queryKey: ['conversation', cId],
@@ -141,11 +145,34 @@ useRoom(() => room.value, 'quality.gate', (event: unknown) => {
 });
 
 const statusMut = useMutation({
-  mutationFn: (status: 'active' | 'paused' | 'done' | 'failed') =>
+  mutationFn: (status: 'active' | 'paused' | 'done' | 'failed' | 'archived') =>
     api.patch<void>(`/conversations/${cId.value}`, { status }),
-  onSuccess: () => {
+  onSuccess: (_v, status) => {
     qc.invalidateQueries({ queryKey: ['conversation', cId.value] });
     qc.invalidateQueries({ queryKey: ['conversations'] });
+    if (status === 'archived') toast.success('Чат в архиве', 'Скрыт из инбокса. Виден через фильтр «Архив».');
+    else if (status === 'active') toast.success('Чат возвращён в инбокс');
+  },
+  onError: (e: Error) => toast.error('Не удалось изменить статус', e.message),
+});
+
+const isArchived = computed(() => c.value.status === 'archived');
+
+// Hard delete is irreversible (drops messages + pending suggestions), so it's
+// guarded by a confirm dialog. Archiving is the reversible default.
+const showDeleteConfirm = ref(false);
+const deleteMut = useMutation({
+  mutationFn: () => api.del<{ id: string; deleted: true }>(`/conversations/${cId.value}`),
+  onSuccess: () => {
+    showDeleteConfirm.value = false;
+    qc.invalidateQueries({ queryKey: ['conversations'] });
+    toast.success('Чат удалён');
+    // The open thread no longer exists — leave it, preserving inbox filters.
+    router.push({ name: 'inbox', query: { ...route.query } });
+  },
+  onError: (e: Error) => {
+    showDeleteConfirm.value = false;
+    toast.error('Не удалось удалить', e.message);
   },
 });
 
@@ -206,6 +233,16 @@ const dropdownItems = computed(() => [
   { divider: true, label: '' },
   { label: 'Поставить на паузу', icon: 'pause_circle' as const, onClick: () => statusMut.mutate('paused') },
   { label: 'Закрыть как done', icon: 'check_circle' as const, onClick: () => statusMut.mutate('done') },
+  isArchived.value
+    ? { label: 'Вернуть из архива', icon: 'inbox' as const, onClick: () => statusMut.mutate('active') }
+    : { label: 'В архив (нецелевка)', icon: 'inbox' as const, onClick: () => statusMut.mutate('archived') },
+  { divider: true, label: '' },
+  {
+    label: 'Удалить чат',
+    icon: 'trash' as const,
+    variant: 'danger' as const,
+    onClick: () => { showDeleteConfirm.value = true; },
+  },
 ]);
 
 // Quality-gate banner: surfaced in the conversation header when the
@@ -428,4 +465,15 @@ onBeforeUnmount(() => window.removeEventListener('inbox:draft-request', onDraftR
       <div v-if="c.lastInboundAt" style="display: none;">last inbound: {{ formatRelative(c.lastInboundAt) }}</div>
     </div>
   </div>
+
+  <ConfirmDialog
+    :open="showDeleteConfirm"
+    title="Удалить чат?"
+    description="Диалог, его сообщения и неотправленные подсказки будут удалены безвозвратно. Если просто мешает нецелевой контакт — лучше «В архив»: чат скроется из инбокса, но останется доступен."
+    confirm-label="Удалить"
+    destructive
+    :loading="deleteMut.isPending.value"
+    @close="showDeleteConfirm = false"
+    @confirm="deleteMut.mutate()"
+  />
 </template>
