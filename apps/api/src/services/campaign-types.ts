@@ -3,6 +3,7 @@ import {
   Errors,
   CampaignAjtbdZ,
   BUILTIN_CAMPAIGN_TYPE_KEYS,
+  resolveTargetForGoalKey,
   type CreateCampaignTypeInput,
   type UpdateCampaignTypeInput,
 } from '@nosquare/shared';
@@ -112,6 +113,28 @@ export const campaignTypesService = {
         });
       }
     }
+    if (type.key === 'agency_sourcing') {
+      return normalizeAgencyGoal(goalObj);
+    }
     return goalObj;
   },
 };
+
+function normalizeAgencyGoal(goal: Record<string, unknown>): object {
+  const raw = goal.target_data_points;
+  if (!Array.isArray(raw)) return goal;
+
+  const targetDataPoints: string[] = [];
+  const seen = new Set<string>();
+  for (const value of raw) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const canonical = resolveTargetForGoalKey(trimmed)?.key ?? trimmed;
+    if (seen.has(canonical)) continue;
+    seen.add(canonical);
+    targetDataPoints.push(canonical);
+  }
+
+  return { ...goal, target_data_points: targetDataPoints };
+}

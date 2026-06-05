@@ -191,9 +191,31 @@ function readGoalTargetKeys(goal: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   const out: string[] = [];
   for (const x of raw) {
-    if (typeof x === 'string' && x.length > 0) out.push(x);
+    if (typeof x !== 'string') continue;
+    const key = x.trim();
+    if (key.length > 0) out.push(key);
   }
   return out;
+}
+
+/**
+ * Campaign UI historically allowed operators to type concrete
+ * `ProfileDataPoint.field` roots such as `rate.post` even though the HUD and
+ * planner registry is keyed by target names such as `rate_card`. Accept those
+ * field-shaped values as aliases so already-saved campaigns keep resolving
+ * without a data migration.
+ */
+export function resolveTargetForGoalKey(key: string): DataCollectionTarget | undefined {
+  const normalized = key.trim();
+  if (!normalized) return undefined;
+
+  const exact = getTarget(normalized) ?? getTarget(normalized.toLowerCase());
+  if (exact) return exact;
+
+  const matches = Object.values(DATA_COLLECTION_TARGETS).filter((target) =>
+    profileFieldMatchesTarget(normalized, target),
+  );
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 /**
@@ -215,13 +237,13 @@ export function resolveEffectiveHudTargets(
   const seen = new Set<string>();
   const out: DataCollectionTarget[] = [];
   for (const key of source) {
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const t = getTarget(key);
+    const t = resolveTargetForGoalKey(key);
     if (!t) {
       if (declared.length > 0 && onUnknown) onUnknown(key);
       continue;
     }
+    if (seen.has(t.key)) continue;
+    seen.add(t.key);
     out.push(t);
   }
   return out;

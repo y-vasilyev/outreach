@@ -140,6 +140,28 @@ describe('GET /conversations/:id/data-collection', () => {
     expect((rateCard?.freshness as { stale: boolean }).stale).toBe(false);
   });
 
+  it('resolves field-shaped campaign target data points instead of rendering an empty HUD', async () => {
+    flagState.current.data_collection_hud = true;
+    prismaMock.conversation.findUnique.mockResolvedValue({
+      id: 'conv-1',
+      contact: { channelId: 'ch-1' },
+      campaign: {
+        goal: { target_data_points: ['rate.post', 'views.avg', 'audience.geo.ru'] },
+        type: { key: 'agency_sourcing' },
+      },
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/conversations/conv-1/data-collection',
+      headers: { authorization: `Bearer ${tokenFor(app, 'viewer')}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { targets: Array<{ key: string }> };
+    expect(body.targets.map((t) => t.key)).toEqual(['rate_card', 'reach', 'geo']);
+  });
+
   it('classifies an aged ProfileDataPoint as stale', async () => {
     flagState.current.data_collection_hud = true;
     prismaMock.bloggerProfile.findUnique.mockResolvedValue({

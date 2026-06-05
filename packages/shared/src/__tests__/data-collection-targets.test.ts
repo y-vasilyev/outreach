@@ -110,6 +110,27 @@ describe('data-collection-targets', () => {
       expect(dropped).toEqual(['unknown_key']);
     });
 
+    it('accepts ProfileDataPoint field keys as aliases for registry targets', () => {
+      const dropped: string[] = [];
+      const hud = resolveEffectiveHudTargets(
+        {
+          goal: {
+            target_data_points: [
+              'rate.post',
+              'views.avg',
+              'audience.gender',
+              'audience.geo.ru',
+              'rate_card',
+              'unknown_key',
+            ],
+          },
+        },
+        (k) => dropped.push(k),
+      ).map((t) => t.key);
+      expect(hud).toEqual(['rate_card', 'reach', 'audience_demographics', 'geo']);
+      expect(dropped).toEqual(['unknown_key']);
+    });
+
     it('planner targets exclude manual_only', () => {
       const hud = resolveEffectiveHudTargets({
         goal: { target_data_points: ['rate_card', 'deals_contact'] },

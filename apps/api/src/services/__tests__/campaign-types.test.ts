@@ -43,6 +43,24 @@ describe('campaignTypesService.validateGoal', () => {
     expect(goal).toMatchObject({ target_data_points: ['reach', 'rate_card'] });
   });
 
+  it('normalizes legacy field-shaped agency target data points on save', () => {
+    const goal = campaignTypesService.validateGoal(agency, {
+      target_data_points: [
+        'rate.post',
+        'views.avg',
+        'audience.gender',
+        'audience.geo.ru',
+        'rate_card',
+        'unknown_key',
+      ],
+      client_brief: 'X',
+    });
+    expect(goal).toMatchObject({
+      target_data_points: ['rate_card', 'reach', 'audience_demographics', 'geo', 'unknown_key'],
+      client_brief: 'X',
+    });
+  });
+
   it('rejects an agency goal missing a required field (400, names the field)', () => {
     try {
       campaignTypesService.validateGoal(agency, { client_brief: 'X' });
