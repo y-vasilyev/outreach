@@ -28,6 +28,10 @@ vi.mock('@nosquare/platforms', () => ({
   YandexSearchClient: class {
     search = mocks.searchResults;
   },
+  buildDiscoverySearchQueries: (query: string, opts: { platform?: string } = {}) =>
+    opts.platform
+      ? [`site:${opts.platform}.example ${query}`]
+      : [`site:t.me ${query}`, `site:instagram.com ${query}`],
   extractCandidates: (...args: unknown[]) => mocks.candidates(...args),
 }));
 
@@ -63,6 +67,8 @@ describe('discoveryService.search', () => {
 
     const res = await discoveryService.search({ query: 'финтех', limit: 20 }, 'u1');
 
+    expect(mocks.searchResults).toHaveBeenCalledWith('site:t.me финтех');
+    expect(mocks.searchResults).toHaveBeenCalledWith('site:instagram.com финтех');
     expect(res).toMatchObject({ query: 'финтех', created: 1, enqueued: 1, alreadyKnown: 1 });
     expect(mocks.prisma.channel.create).toHaveBeenCalledTimes(1);
     expect(mocks.prisma.channel.create).toHaveBeenCalledWith(
@@ -108,6 +114,16 @@ describe('discoveryService.search', () => {
     const res = await discoveryService.search({ query: 'q', limit: 2 }, null);
     expect(res.created).toBe(2);
     expect(mocks.prisma.channel.create).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses a platform-scoped Yandex query when a platform filter is provided', async () => {
+    mocks.candidates.mockReturnValue([]);
+
+    await discoveryService.search({ query: 'еда', platform: 'telegram', limit: 20 }, null);
+
+    expect(mocks.searchResults).toHaveBeenCalledTimes(1);
+    expect(mocks.searchResults).toHaveBeenCalledWith('site:telegram.example еда');
+    expect(mocks.candidates).toHaveBeenCalledWith(expect.any(Array), { platform: 'telegram' });
   });
 
   it('throws a clear error when the yandex_search integration is missing', async () => {

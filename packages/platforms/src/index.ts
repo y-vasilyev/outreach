@@ -23,6 +23,7 @@ export {
   extractCandidates,
   type DiscoveredCandidate,
 } from './discovery/extractCandidates.js';
+export { buildDiscoverySearchQueries } from './discovery/searchQueries.js';
 export {
   ScrapeCreatorsClient,
   type ScrapeCreatorsClientOptions,

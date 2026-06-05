@@ -35,6 +35,10 @@ vi.mock('@nosquare/platforms', () => ({
   YandexSearchClient: class {
     search = mocks.search;
   },
+  buildDiscoverySearchQueries: (query: string, opts: { platform?: string } = {}) =>
+    opts.platform
+      ? [`site:${opts.platform}.example ${query}`]
+      : [`site:t.me ${query}`, `site:instagram.com ${query}`],
   extractCandidates: (...args: unknown[]) => mocks.candidates(...args),
 }));
 
@@ -97,11 +101,13 @@ describe('handleDiscoveryBatch', () => {
     // Niche 1 → one new candidate. Niche 2 → throw. Niche 3 → empty.
     mocks.search
       .mockResolvedValueOnce([{ url: 'https://t.me/x', title: 't1', snippet: 's1' }])
+      .mockResolvedValueOnce([])
       .mockRejectedValueOnce(new Error('yandex 503'))
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
     mocks.candidates
       .mockReturnValueOnce([{ platform: 'telegram', handle: 'x', url: 'https://t.me/x', title: 't1' }])
-      .mockReturnValueOnce([])
       .mockReturnValueOnce([]);
 
     await handleDiscoveryBatch({ batchId: 'batch_1' });
@@ -179,11 +185,11 @@ describe('handleDiscoveryBatch', () => {
         ],
       },
     });
-    mocks.search.mockResolvedValueOnce([]);
+    mocks.search.mockResolvedValue([]);
     mocks.candidates.mockReturnValueOnce([]);
     await handleDiscoveryBatch({ batchId: 'batch_resume' });
     // Only the second niche was searched.
-    expect(mocks.search).toHaveBeenCalledTimes(1);
+    expect(mocks.search).toHaveBeenCalledTimes(2);
     const updates = mocks.prisma.discoveryBatch.update.mock.calls as Array<unknown[]>;
     const last = updates[updates.length - 1]![0] as {
       data: { status: string; summary: { totals: { processed: number; created: number } } };
@@ -192,6 +198,29 @@ describe('handleDiscoveryBatch', () => {
     // Totals reflect both n1 (preserved) and n2 (just processed).
     expect(last.data.summary.totals.created).toBe(3);
     expect(last.data.summary.totals.processed).toBe(2);
+  });
+
+  it('uses a platform-scoped Yandex query for batch niches with a platform filter', async () => {
+    mocks.prisma.discoveryBatch.findUnique.mockResolvedValue({
+      id: 'batch_platform',
+      status: 'pending',
+      queries: ['еда'],
+      platform: 'telegram',
+      limitPerQuery: 20,
+      createdById: null,
+      summary: {
+        totals: { queries: 1, processed: 0, created: 0, alreadyKnown: 0, errored: 0 },
+        queries: [{ query: 'еда', done: false, candidates: [], created: 0, alreadyKnown: 0 }],
+      },
+    });
+    mocks.search.mockResolvedValue([]);
+    mocks.candidates.mockReturnValueOnce([]);
+
+    await handleDiscoveryBatch({ batchId: 'batch_platform' });
+
+    expect(mocks.search).toHaveBeenCalledTimes(1);
+    expect(mocks.search).toHaveBeenCalledWith('site:telegram.example еда');
+    expect(mocks.candidates).toHaveBeenCalledWith(expect.any(Array), { platform: 'telegram' });
   });
 
   it('marks the batch failed when an unexpected post-claim error throws (outer catch)', async () => {

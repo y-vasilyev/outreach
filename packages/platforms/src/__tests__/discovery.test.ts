@@ -7,6 +7,7 @@ import {
   type YandexSearchResult,
 } from '../discovery/YandexSearchClient.js';
 import { extractCandidates } from '../discovery/extractCandidates.js';
+import { buildDiscoverySearchQueries } from '../discovery/searchQueries.js';
 
 const SAMPLE_XML = `<?xml version="1.0" encoding="utf-8"?>
 <yandexsearch><response><results><grouping><group>
@@ -84,6 +85,22 @@ describe('extractCandidates', () => {
     );
     expect(c).toEqual([
       expect.objectContaining({ platform: 'telegram', handle: 'duped_channel' }),
+    ]);
+  });
+});
+
+describe('buildDiscoverySearchQueries', () => {
+  it('turns a niche into social-site searches for all supported platforms', () => {
+    expect(buildDiscoverySearchQueries('  финтех   блогеры  ')).toEqual([
+      'site:t.me финтех блогеры',
+      'site:instagram.com финтех блогеры',
+      'site:youtube.com финтех блогеры',
+    ]);
+  });
+
+  it('narrows the search to the requested platform', () => {
+    expect(buildDiscoverySearchQueries('еда', { platform: 'telegram' })).toEqual([
+      'site:t.me еда',
     ]);
   });
 });

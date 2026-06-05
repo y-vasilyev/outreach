@@ -6,7 +6,11 @@ import {
   type DiscoveryBatchSummary,
   type DiscoveryBatchPerQuery,
 } from '@nosquare/shared';
-import { YandexSearchClient, extractCandidates } from '@nosquare/platforms';
+import {
+  YandexSearchClient,
+  buildDiscoverySearchQueries,
+  extractCandidates,
+} from '@nosquare/platforms';
 import type { Platform } from '@nosquare/shared';
 
 import { getRedis } from '../redis.js';
@@ -204,7 +208,10 @@ async function handleDiscoveryBatch(data: { batchId: string }): Promise<void> {
       continue;
     }
     try {
-      const results = await client.search(query);
+      const searchQueries = buildDiscoverySearchQueries(query, {
+        ...(platform ? { platform } : {}),
+      });
+      const results = (await Promise.all(searchQueries.map((q) => client.search(q)))).flat();
       const candidates = extractCandidates(
         results,
         platform ? { platform } : {},

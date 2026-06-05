@@ -1,7 +1,11 @@
 import { getPrisma, decryptJson } from '@nosquare/db';
 import { Errors } from '@nosquare/shared';
 import type { DiscoverySearchInput, DiscoveryResult } from '@nosquare/shared';
-import { YandexSearchClient, extractCandidates } from '@nosquare/platforms';
+import {
+  YandexSearchClient,
+  buildDiscoverySearchQueries,
+  extractCandidates,
+} from '@nosquare/platforms';
 
 import { getQueues } from '../queues.js';
 
@@ -39,7 +43,10 @@ export const discoveryService = {
       folderId: cfg.folderId,
       ...(cfg.baseUrl ? { baseUrl: cfg.baseUrl } : {}),
     });
-    const results = await client.search(input.query);
+    const searchQueries = buildDiscoverySearchQueries(input.query, {
+      ...(input.platform ? { platform: input.platform } : {}),
+    });
+    const results = (await Promise.all(searchQueries.map((q) => client.search(q)))).flat();
     const candidates = extractCandidates(
       results,
       input.platform ? { platform: input.platform } : {},
