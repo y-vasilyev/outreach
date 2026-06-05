@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
 import { bootstrapAuth, useAuth } from '../lib/auth';
+import { isChunkLoadError, recoverFromChunkError } from '../lib/chunkReload';
 
 const routes: RouteRecordRaw[] = [
   {
@@ -156,6 +157,13 @@ const routes: RouteRecordRaw[] = [
 export const router = createRouter({
   history: createWebHistory(),
   routes,
+});
+
+// A navigation that fails because its lazy route chunk no longer exists (stale
+// tab after a redeploy) is recovered with a single guarded reload — same path
+// as the `vite:preloadError` handler in main.ts.
+router.onError((err) => {
+  if (isChunkLoadError(err)) recoverFromChunkError();
 });
 
 router.beforeEach(async (to) => {

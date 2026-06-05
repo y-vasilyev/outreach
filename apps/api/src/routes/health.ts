@@ -20,6 +20,9 @@ export async function healthRoutes(app: FastifyInstance) {
         objectStorage: snap.object_storage,
         bloggerMatching: snap.blogger_matching,
         channelDiscovery: snap.channel_discovery,
+        // Exposed so the web can gate the inbox data-collection HUD query and
+        // avoid a per-conversation 404 while the flag is off.
+        dataCollectionHud: snap.data_collection_hud,
       },
     };
   });

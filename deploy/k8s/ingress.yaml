@@ -1,16 +1,61 @@
-# Single-host ingress for outreach.su.
+# Single-host ingress for outreach.su, split across TWO Ingress objects.
 #
-# Routing (order matters in path-based matching with `use-regex`):
-#   /socket.io     → api-service:4000  (long-lived WS, path preserved)
-#   /api(/|$)(.*)  → api-service:4000  (REST; `/api` prefix is stripped via
-#                                       rewrite-target — the api mounts
-#                                       routes at root, see
-#                                       apps/api/src/index.ts and
-#                                       apps/web/src/lib/api.ts getBaseUrl())
-#   /              → web-service:80    (Vue SPA static bundle)
+# Why two objects: nginx-ingress annotations are scoped to the whole Ingress
+# object, not per-path. The REST route needs `rewrite-target: /$2` (+ use-regex)
+# to strip the `/api` prefix, but that annotation rewrites EVERY path in the
+# object. The `/socket.io` path has no `$2` capture group, so it would be
+# rewritten to `/` and never reach the socket.io server — killing realtime and
+# triggering an endless client reconnect loop. We therefore keep socket.io in
+# its own annotation-free object (`outreach-ws`) so its path reaches the api
+# untouched, and leave REST + SPA in the rewrite-bearing object (`outreach`).
 #
-# TLS: cert-manager (already installed in-cluster) issues a Let's Encrypt
-# cert for outreach.su; the `ClusterIssuer` is named `letsencrypt`.
+# Routing across both objects (nginx-ingress merges rules per host):
+#   /socket.io     → api:4000   (long-lived WS, path preserved, NO rewrite)
+#   /api(/|$)(.*)  → api:4000   (REST; `/api` prefix stripped via rewrite-target)
+#   /              → web:80     (Vue SPA static bundle)
+#
+# TLS: cert-manager (already installed in-cluster) issues a Let's Encrypt cert
+# for outreach.su; the `ClusterIssuer` is named `letsencrypt`. Both objects
+# reference the same `tls-outreach-su` secret.
+---
+# Socket.IO — dedicated object WITHOUT rewrite-target/use-regex so the
+# `/socket.io` path is forwarded verbatim. Carries the long WS timeouts.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: outreach-ws
+  namespace: outreach
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # Socket.IO uses a long-lived WS upgrade. Default nginx timeouts (60s)
+    # would force a reconnect storm on every minute of idle. 1h matches the
+    # socket.io-server ping interval defaults comfortably.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - outreach.su
+      secretName: tls-outreach-su
+  rules:
+    - host: outreach.su
+      http:
+        paths:
+          # No rewrite — the api mounts socket.io at /socket.io. Prefix match
+          # is more specific than the SPA `/` catch-all, so it wins.
+          - path: /socket.io
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  number: 4000
+---
+# REST + SPA — rewrite-bearing object. The `rewrite-target: /$2` here is safe
+# because every path below supplies a `$2` capture group.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -31,11 +76,6 @@ metadata:
     nginx.ingress.kubernetes.io/hsts-max-age: "31536000"
     nginx.ingress.kubernetes.io/hsts-include-subdomains: "true"
     nginx.ingress.kubernetes.io/hsts-preload: "false"
-    # Socket.IO uses a long-lived WS upgrade. Default nginx timeouts (60s)
-    # would force a reconnect storm on every minute of idle. 1h matches
-    # the socket.io-server ping interval defaults comfortably.
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
     # Required so the regex capture in /api(/|$)(.*) below works for the
     # rewrite-target.
     nginx.ingress.kubernetes.io/use-regex: "true"
@@ -50,15 +90,6 @@ spec:
     - host: outreach.su
       http:
         paths:
-          # Socket.IO. No rewrite needed — the api also mounts it at /socket.io.
-          # Listed FIRST so it wins against /api when the rewrite group eats it.
-          - path: /socket.io
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: api
-                port:
-                  number: 4000
           # REST. `/api/foo` → `/foo` (rewrite-target /$2 strips the prefix).
           - path: /api(/|$)(.*)
             pathType: ImplementationSpecific

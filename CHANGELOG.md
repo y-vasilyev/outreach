@@ -4,6 +4,23 @@ All operator-visible changes worth noting between releases.
 
 ## Unreleased
 
+### Fixed
+
+- **Production console errors — realtime restored & noise removed**
+  (openspec change `fix-prod-console-errors`). Three production-only
+  defects fixed: (1) the inbox WebSocket (`wss://outreach.su/socket.io/`)
+  failed in an endless reconnect loop — the k8s Ingress applied its
+  `/api`-prefix `rewrite-target` to every path, stripping `/socket.io`
+  to `/`; socket.io now lives in its own annotation-free Ingress object so
+  realtime (live messages, suggestions, status, HUD updates) works again.
+  (2) Lazy-loaded pages (e.g. Контакты) could fail after a redeploy with a
+  misleading `text/html` MIME error — the static server now returns a real
+  404 for a missing hashed chunk instead of the SPA shell, and the web app
+  reloads once to pull the fresh bundle. (3) The inbox no longer spams
+  per-conversation `data-collection` 404s while `data_collection_hud` is
+  off — the public `/config` snapshot now exposes the flag and the panel
+  skips the request entirely when it is off.
+
 ### Added
 
 - **Inbox — data-collection HUD (behind `data_collection_hud` flag)** —

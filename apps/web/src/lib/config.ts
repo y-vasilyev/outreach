@@ -16,6 +16,7 @@ export interface AppFlags {
   objectStorage: boolean;
   bloggerMatching: boolean;
   channelDiscovery: boolean;
+  dataCollectionHud: boolean;
 }
 
 interface ConfigResponse {
@@ -28,6 +29,7 @@ const DEFAULT_FLAGS: AppFlags = {
   objectStorage: false,
   bloggerMatching: false,
   channelDiscovery: false,
+  dataCollectionHud: false,
 };
 
 /**

@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/vue-query';
 
 import Icon from '../../components/Icon.vue';
 import { api } from '../../lib/api';
+import { useFlags } from '../../lib/config';
 import { isFeatureOff } from '../../lib/featureGate';
 import { formatRelative } from '../../lib/format';
 import { useRoom } from '../../lib/socket';
@@ -48,12 +49,18 @@ interface HudResponse {
 }
 
 const qc = useQueryClient();
+const flags = useFlags();
 const room = computed(() => `conversation:${props.conversationId}`);
 
 const { data, error } = useQuery<HudResponse>({
   queryKey: ['conversation-data-collection', () => props.conversationId],
   queryFn: () =>
     api.get<HudResponse>(`/conversations/${props.conversationId}/data-collection`),
+  // Never issue the request when the feature is off — the public /config
+  // snapshot gates it, so no per-conversation 404 hits the console. The
+  // isFeatureOff guard below stays as defense-in-depth for the race where the
+  // flag flips between the /config fetch and navigation.
+  enabled: () => flags.value.dataCollectionHud,
   // 30s poll covers any missed WS event (delivery is best-effort —
   // the flag-gated emitter early-returns when off, so consumers must
   // tolerate gaps).
