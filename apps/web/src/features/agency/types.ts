@@ -55,6 +55,56 @@ export interface MediaAsset {
   createdAt: string;
 }
 
+export interface BloggerPostMetrics {
+  views?: number;
+  likes?: number;
+  comments?: number;
+  shares?: number;
+  forwards?: number;
+  reactions?: number;
+  saves?: number;
+  engagementRate?: number;
+}
+
+export type PostMetricFreshnessState = 'fresh' | 'stale' | 'unavailable' | 'pending';
+
+export interface PostMetricFreshness {
+  state: PostMetricFreshnessState;
+  ageDays: number | null;
+}
+
+export interface BloggerPostInsight {
+  id: string;
+  profileId: string;
+  channelId: string | null;
+  platform: string;
+  externalPostId: string;
+  url: string | null;
+  publishedAt: string | null;
+  textSnippet: string;
+  mediaKind: 'post' | 'story' | 'reels' | 'shorts' | 'video' | 'other';
+  metrics: BloggerPostMetrics;
+  metricCapturedAt: string | null;
+  source: 'scrapecreators' | 'telegram_public_parse' | 'manual_import';
+  sourceRawRef?: string | null;
+  freshness: PostMetricFreshness;
+  performanceScore: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface CatalogFit {
+  score: number;
+  source: 'deterministic' | 'match_result' | 'llm_rerank';
+  rationale: string;
+  positiveSignals: string[];
+  gaps: string[];
+  evidencePostIds: string[];
+  scoreBreakdown: Record<string, number>;
+}
+
+export type PostInsightRefreshStatus = 'idle' | 'pending' | 'refreshing' | 'failed' | 'unsupported';
+
 export type ProfileFreshnessCategory =
   | 'rateCards'
   | 'audience'
@@ -85,6 +135,12 @@ export interface BloggerProfile {
   reach: number | null;
   avgViews: number | null;
   capturedAt: string | null;
+  postInsightRefreshStatus: PostInsightRefreshStatus;
+  postInsightRefreshError?: string | null;
+  postInsightRefreshedAt?: string | null;
+  topPostsPreview?: BloggerPostInsight[];
+  postInsights?: BloggerPostInsight[];
+  fit?: CatalogFit;
   createdAt: string;
   updatedAt: string;
   // detail-only relations / list-only counts
@@ -149,6 +205,7 @@ export interface MatchCandidate {
   score: number;
   rationale: string;
   rerankedByLlm: boolean;
+  fit?: Omit<CatalogFit, 'source'>;
 }
 
 export interface MatchResponse {

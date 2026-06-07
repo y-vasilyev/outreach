@@ -80,6 +80,8 @@ export class TelegramAdapter implements PlatformAdapter {
       date: p.dateIso,
       text: p.text,
       urls: p.urls,
+      mediaKind: 'post',
+      metrics: p.metrics,
     }));
 
     return {

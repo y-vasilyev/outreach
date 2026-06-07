@@ -61,6 +61,11 @@ export interface RecentPost {
   dateIso: string;
   text: string;
   urls: string[];
+  metrics?: {
+    views?: number;
+    forwards?: number;
+    reactions?: number;
+  };
 }
 
 export interface ResolvedUser {

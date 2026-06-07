@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { BloggerProfileZ } from './blogger-profile.js';
+import { BloggerProfileZ, CatalogFitZ } from './blogger-profile.js';
 
 /**
  * Blogger matching engine (agency-sourcing-matching change). An incoming ad
@@ -35,6 +35,12 @@ export const MatchResultZ = z.object({
   score: z.number().min(0).max(1),
   rationale: z.string().default(''),
   rerankedByLlm: z.boolean().default(false),
+  fitSignals: CatalogFitZ.pick({
+    positiveSignals: true,
+    gaps: true,
+    scoreBreakdown: true,
+  }).default({ positiveSignals: [], gaps: [], scoreBreakdown: {} }),
+  evidencePostIds: z.array(z.string()).default([]),
   createdAt: z.string(),
 });
 
@@ -44,6 +50,7 @@ export const MatchCandidateZ = z.object({
   score: z.number().min(0).max(1),
   rationale: z.string(),
   rerankedByLlm: z.boolean(),
+  fit: CatalogFitZ.omit({ source: true }).optional(),
 });
 
 export const MatchResponseZ = z.object({

@@ -679,14 +679,47 @@ model BloggerProfile {
   reach      Int?
   avgViews   Int?      @map("avg_views")
   capturedAt DateTime? @map("captured_at")
+  postInsightRefreshStatus String   @default("idle") @map("post_insight_refresh_status")
+  postInsightRefreshError  String?  @map("post_insight_refresh_error")
+  postInsightRefreshedAt   DateTime? @map("post_insight_refreshed_at")
   createdAt  DateTime  @default(now()) @map("created_at")
   updatedAt  DateTime  @updatedAt @map("updated_at")
 
   dataPoints   ProfileDataPoint[]
   mediaAssets  MediaAsset[]
   matchResults MatchResult[]
+  postInsights BloggerPostInsight[]
 
   @@map("blogger_profile")
+}
+
+// Public post evidence for catalog relevance/top-post previews. Source data is
+// public channel/post data from ScrapeCreators or Telegram public parsing; raw
+// upstream payloads are not exposed through APIs.
+model BloggerPostInsight {
+  id               String         @id @default(cuid())
+  profileId        String         @map("profile_id")
+  profile          BloggerProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  // Plain reference to Channel.id; no FK to preserve the existing channel graph
+  // cascade semantics.
+  channelId        String?        @map("channel_id")
+  platform         String
+  externalPostId   String         @map("external_post_id")
+  url              String?
+  publishedAt      DateTime?      @map("published_at")
+  textSnippet      String         @default("") @map("text_snippet")
+  mediaKind        String         @default("post") @map("media_kind")
+  metrics          Json           @default("{}")
+  metricCapturedAt DateTime?      @map("metric_captured_at")
+  source           String
+  sourceRawRef     String?        @map("source_raw_ref")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+
+  @@unique([profileId, platform, externalPostId])
+  @@index([profileId, publishedAt])
+  @@index([channelId])
+  @@map("blogger_post_insight")
 }
 
 // One harvested fact with provenance, so the rolled-up profile can be
@@ -797,6 +830,8 @@ model MatchResult {
   score         Decimal        @default(0)
   rationale     String         @default("")
   rerankedByLlm Boolean        @default(false) @map("reranked_by_llm")
+  fitSignals    Json           @default("{}") @map("fit_signals")
+  evidencePostIds String[]     @default([]) @map("evidence_post_ids")
   createdAt     DateTime       @default(now()) @map("created_at")
 
   @@index([briefId])

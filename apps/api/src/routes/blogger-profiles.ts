@@ -20,6 +20,8 @@ export async function bloggerProfilesRoutes(app: FastifyInstance) {
         .object({
           limit: z.coerce.number().int().min(1).max(200).optional(),
           offset: z.coerce.number().int().min(0).optional(),
+          campaignId: z.string().optional(),
+          briefId: z.string().optional(),
         })
         .parse(req.query);
       return bloggerProfilesService.list(q);
@@ -32,6 +34,17 @@ export async function bloggerProfilesRoutes(app: FastifyInstance) {
     async (req) => {
       const params = z.object({ id: z.string() }).parse(req.params);
       return bloggerProfilesService.get(params.id);
+    },
+  );
+
+  app.post(
+    '/blogger-profiles/:id/post-insights/refresh',
+    { preHandler: [app.requireRole(['admin', 'operator'])] },
+    async (req, reply) => {
+      const params = z.object({ id: z.string() }).parse(req.params);
+      const out = await bloggerProfilesService.requestPostInsightRefresh(params.id);
+      reply.code(out.postInsightRefreshStatus === 'pending' ? 202 : 200);
+      return out;
     },
   );
 }

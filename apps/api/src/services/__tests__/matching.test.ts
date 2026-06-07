@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 interface PrismaMock {
   adBrief: { findUnique: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> };
   bloggerProfile: { findMany: ReturnType<typeof vi.fn> };
+  bloggerPostInsight: { findMany: ReturnType<typeof vi.fn> };
   matchResult: { deleteMany: ReturnType<typeof vi.fn>; createMany: ReturnType<typeof vi.fn> };
   $transaction: ReturnType<typeof vi.fn>;
 }
@@ -20,6 +21,7 @@ interface PrismaMock {
 const prismaMock: PrismaMock = {
   adBrief: { findUnique: vi.fn(), create: vi.fn() },
   bloggerProfile: { findMany: vi.fn() },
+  bloggerPostInsight: { findMany: vi.fn() },
   matchResult: { deleteMany: vi.fn(), createMany: vi.fn() },
   $transaction: vi.fn(),
 };
@@ -79,6 +81,7 @@ beforeEach(() => {
   prismaMock.$transaction.mockImplementation(async (ops: unknown[]) => ops);
   prismaMock.matchResult.deleteMany.mockReturnValue({ __op: 'deleteMany' });
   prismaMock.matchResult.createMany.mockImplementation((args: unknown) => ({ __op: 'createMany', args }));
+  prismaMock.bloggerPostInsight.findMany.mockResolvedValue([]);
 });
 
 describe('matchingService.match — deterministic path (no LLM)', () => {
@@ -105,10 +108,48 @@ describe('matchingService.match — deterministic path (no LLM)', () => {
     expect(prismaMock.matchResult.deleteMany).toHaveBeenCalledWith({ where: { briefId: 'brief1' } });
     expect(prismaMock.matchResult.createMany).toHaveBeenCalledTimes(1);
     const createArgs = prismaMock.matchResult.createMany.mock.calls[0]?.[0] as {
-      data: { profileId: string; rerankedByLlm: boolean }[];
+      data: { profileId: string; rerankedByLlm: boolean; fitSignals: unknown; evidencePostIds: string[] }[];
     };
     expect(createArgs.data).toHaveLength(2);
     expect(createArgs.data.every((d) => d.rerankedByLlm === false)).toBe(true);
+    expect(createArgs.data.every((d) => Array.isArray(d.evidencePostIds))).toBe(true);
+    expect(createArgs.data[0]!.fitSignals).toMatchObject({
+      positiveSignals: expect.any(Array),
+      gaps: expect.any(Array),
+      scoreBreakdown: expect.objectContaining({ total: expect.any(Number) }),
+    });
+  });
+
+  it('persists stored post evidence ids in fit metadata when post text matches the brief', async () => {
+    prismaMock.adBrief.findUnique.mockResolvedValue(briefRow({ topic: 'крипта' }));
+    prismaMock.bloggerProfile.findMany.mockResolvedValue([profileRow('a')]);
+    prismaMock.bloggerPostInsight.findMany.mockResolvedValue([
+      {
+        id: 'post_evidence',
+        profileId: 'a',
+        channelId: 'chan_a',
+        platform: 'telegram',
+        externalPostId: '42',
+        url: 'https://t.me/a/42',
+        publishedAt: NOW,
+        textSnippet: 'крипта и финансы',
+        mediaKind: 'post',
+        metrics: { views: 10000 },
+        metricCapturedAt: NOW,
+        source: 'telegram_public_parse',
+        sourceRawRef: 'telegram:a:42',
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    ]);
+
+    const res = await matchingService.match('brief1', { rerank: false });
+    expect(res.candidates[0]!.fit?.evidencePostIds).toEqual(['post_evidence']);
+    expect(res.candidates[0]!.profile.topPostsPreview?.[0]?.id).toBe('post_evidence');
+    const createArgs = prismaMock.matchResult.createMany.mock.calls[0]?.[0] as {
+      data: { evidencePostIds: string[] }[];
+    };
+    expect(createArgs.data[0]!.evidencePostIds).toEqual(['post_evidence']);
   });
 });
 
@@ -150,9 +191,10 @@ describe('matchingService.match — bounded LLM re-rank', () => {
 
     // Persisted flags mirror that split.
     const createArgs = prismaMock.matchResult.createMany.mock.calls[0]?.[0] as {
-      data: { rerankedByLlm: boolean }[];
+      data: { rerankedByLlm: boolean; evidencePostIds: string[]; fitSignals: unknown }[];
     };
     expect(createArgs.data.filter((d) => d.rerankedByLlm)).toHaveLength(10);
+    expect(createArgs.data.every((d) => Array.isArray(d.evidencePostIds) && d.fitSignals)).toBe(true);
   });
 
   it('falls back to deterministic order if the re-rank agent throws', async () => {

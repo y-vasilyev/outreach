@@ -85,6 +85,8 @@ export class YoutubeAdapter implements PlatformAdapter {
       date: v.published_at_iso,
       text: v.title ? `${v.title}\n\n${v.description}` : v.description,
       urls: v.urls,
+      mediaKind: 'video',
+      metrics: v.metrics,
     }));
 
     return {

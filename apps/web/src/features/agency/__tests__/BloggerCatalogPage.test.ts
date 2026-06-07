@@ -13,7 +13,7 @@ vi.mock('../../../lib/api', () => {
       super(message);
     }
   }
-  return { api: { get: vi.fn() }, ApiError };
+  return { api: { get: vi.fn(), post: vi.fn() }, ApiError };
 });
 
 import { api } from '../../../lib/api';
@@ -51,6 +51,34 @@ beforeEach(() => {
         capturedAt: NOW,
         createdAt: NOW,
         updatedAt: NOW,
+        postInsightRefreshStatus: 'idle',
+        topPostsPreview: [
+          {
+            id: 'post1',
+            profileId: 'p1',
+            channelId: 'chan_1',
+            platform: 'telegram',
+            externalPostId: '42',
+            url: 'https://t.me/polyaam/42',
+            publishedAt: NOW,
+            textSnippet: 'стартапы и маркетинг',
+            mediaKind: 'post',
+            metrics: { views: 45000, reactions: 300 },
+            metricCapturedAt: NOW,
+            source: 'telegram_public_parse',
+            freshness: { state: 'fresh', ageDays: 0 },
+            performanceScore: 0.8,
+          },
+        ],
+        fit: {
+          score: 0.82,
+          source: 'deterministic',
+          rationale: 'topic fit',
+          positiveSignals: ['topic match'],
+          gaps: [],
+          evidencePostIds: ['post1'],
+          scoreBreakdown: { total: 0.82 },
+        },
         _count: { dataPoints: 8 },
       },
       {
@@ -69,6 +97,8 @@ beforeEach(() => {
         capturedAt: null,
         createdAt: NOW,
         updatedAt: NOW,
+        postInsightRefreshStatus: 'idle',
+        topPostsPreview: [],
         _count: { dataPoints: 0 },
       },
     ],
@@ -88,9 +118,13 @@ describe('BloggerCatalogPage', () => {
     expect(text).toContain('Нужны данные');
     expect(text).toContain('Профиль');
     expect(text).toContain('Платф.');
+    expect(text).toContain('Fit');
+    expect(text).toContain('Топ-пост');
     expect(text).toContain('@polyaam');
     expect(text).toContain('telegram @polyaam');
     expect(text).toContain('telegram_post_month');
+    expect(text).toContain('82%');
+    expect(text).toContain('45');
     expect(text).toContain('50');
     expect(wrapper.find('.table-wrap table.tbl').exists()).toBe(true);
 

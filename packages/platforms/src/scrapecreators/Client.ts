@@ -31,6 +31,8 @@ export interface InstagramPost {
   taken_at_iso: string;
   caption: string;
   urls: string[];
+  metrics: PublicPostMetrics;
+  media_kind: 'post' | 'story' | 'reels' | 'video' | 'other';
 }
 
 export interface InstagramPostsResult {
@@ -54,6 +56,7 @@ export interface YoutubeVideo {
   title: string;
   description: string;
   urls: string[];
+  metrics: PublicPostMetrics;
 }
 
 export interface YoutubeVideosResult {
@@ -64,6 +67,17 @@ export interface YoutubeVideosResult {
 const DEFAULT_BASE_URL = 'https://api.scrapecreators.com';
 const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_MAX_RETRIES = 3;
+
+export interface PublicPostMetrics {
+  views?: number;
+  likes?: number;
+  comments?: number;
+  shares?: number;
+  forwards?: number;
+  reactions?: number;
+  saves?: number;
+  engagementRate?: number;
+}
 
 // --- zod helpers (passthrough, lenient) ---------------------------------
 
@@ -142,6 +156,59 @@ function asNumber(v: unknown): number | undefined {
     return Number.isFinite(n) ? n : undefined;
   }
   return undefined;
+}
+
+function firstNumber(obj: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const direct = asNumber(getProp(obj, key));
+    if (direct !== undefined) return direct;
+  }
+  return undefined;
+}
+
+function collectPostMetrics(obj: Record<string, unknown>): PublicPostMetrics {
+  const metrics: PublicPostMetrics = {};
+  const views = firstNumber(obj, [
+    'views',
+    'view_count',
+    'viewCount',
+    'video_view_count',
+    'videoViewCount',
+    'play_count',
+    'playCount',
+    'ig_play_count',
+  ]);
+  const likes = firstNumber(obj, ['likes', 'like_count', 'likeCount']);
+  const comments = firstNumber(obj, ['comments', 'comment_count', 'commentCount']);
+  const shares = firstNumber(obj, ['shares', 'share_count', 'shareCount', 'reshare_count']);
+  const saves = firstNumber(obj, ['saves', 'save_count', 'saveCount']);
+  const reactions = firstNumber(obj, ['reactions', 'reaction_count', 'reactionCount']);
+  const engagementRate = firstNumber(obj, [
+    'engagement_rate',
+    'engagementRate',
+    'engagement',
+  ]);
+  if (views !== undefined) metrics.views = views;
+  if (likes !== undefined) metrics.likes = likes;
+  if (comments !== undefined) metrics.comments = comments;
+  if (shares !== undefined) metrics.shares = shares;
+  if (saves !== undefined) metrics.saves = saves;
+  if (reactions !== undefined) metrics.reactions = reactions;
+  if (engagementRate !== undefined) metrics.engagementRate = engagementRate;
+  return metrics;
+}
+
+function instagramMediaKind(obj: Record<string, unknown>): InstagramPost['media_kind'] {
+  const raw = String(
+    asString(getProp(obj, 'media_type')) ??
+      asString(getProp(obj, 'product_type')) ??
+      asString(getProp(obj, 'type')) ??
+      '',
+  ).toLowerCase();
+  if (raw.includes('reel') || raw.includes('clip')) return 'reels';
+  if (raw.includes('story')) return 'story';
+  if (raw.includes('video')) return 'video';
+  return 'post';
 }
 
 function getProp(obj: unknown, key: string): unknown {
@@ -338,6 +405,8 @@ export class ScrapeCreatorsClient {
         taken_at_iso: isoFromMaybe(taken),
         caption,
         urls: extractUrls(caption),
+        metrics: collectPostMetrics(r),
+        media_kind: instagramMediaKind(r),
       };
     });
 
@@ -450,6 +519,7 @@ export class ScrapeCreatorsClient {
         title,
         description,
         urls: extractUrls(`${title}\n${description}`),
+        metrics: collectPostMetrics(r),
       };
     });
 

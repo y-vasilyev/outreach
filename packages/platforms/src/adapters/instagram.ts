@@ -73,6 +73,8 @@ export class InstagramAdapter implements PlatformAdapter {
       date: p.taken_at_iso,
       text: p.caption,
       urls: p.urls,
+      mediaKind: p.media_kind,
+      metrics: p.metrics,
     }));
 
     const links = profile.external_url ? [profile.external_url] : [];

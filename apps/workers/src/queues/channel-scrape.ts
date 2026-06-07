@@ -13,6 +13,10 @@ import { getScrapeCreators } from '../services/scrape-creators.js';
 import { roleRateLimiter } from '../services/role-rate-limiter.js';
 import { logger } from '../logger.js';
 import { publishRealtime } from '../services/realtime-emit.js';
+import {
+  markPostInsightRefreshFailedForChannel,
+  upsertPostInsightsFromSnapshot,
+} from '../services/post-insights.js';
 
 const adapters = {
   telegram: new TelegramAdapter(),
@@ -122,6 +126,14 @@ export function startChannelScrapeWorker() {
           },
         });
 
+        await upsertPostInsightsFromSnapshot({ channelId, snapshot: snap }).catch((err) => {
+          logger.warn(
+            { channelId, err: (err as Error).message },
+            'post insight upsert failed after channel scrape',
+          );
+          return null;
+        });
+
         await publishRealtime(`channel:${channelId}`, {
           type: 'channel.progress',
           channelId,
@@ -134,6 +146,7 @@ export function startChannelScrapeWorker() {
         return { ok: true };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        await markPostInsightRefreshFailedForChannel(channelId, msg);
         await prisma.channel.update({
           where: { id: channelId },
           data: { status: 'failed', lastError: msg },

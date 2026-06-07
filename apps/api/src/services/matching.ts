@@ -1,12 +1,23 @@
-import { getPrisma, type BloggerProfile as DbBloggerProfile, type AdBrief as DbAdBrief } from '@nosquare/db';
+import {
+  getPrisma,
+  type BloggerProfile as DbBloggerProfile,
+  type AdBrief as DbAdBrief,
+  type BloggerPostInsight as DbBloggerPostInsight,
+} from '@nosquare/db';
 import {
   Errors,
+  buildFitBreakdown,
+  computePostMetricFreshness,
+  rankPostInsightsForPreview,
   rankProfiles,
   structuredPlacementScore,
+  BloggerPostMetricsZ,
   RateCardZ,
   AudienceZ,
   PlacementOfferZ,
   type AdBrief,
+  type BloggerPostInsight,
+  type CatalogFit,
   type MatchableProfile,
   type ScoredProfile,
   type RateCard,
@@ -87,6 +98,40 @@ function toMatchable(p: DbBloggerProfile): MatchableProfile {
   };
 }
 
+function serializePostInsight(row: DbBloggerPostInsight): BloggerPostInsight {
+  const metrics = BloggerPostMetricsZ.parse(row.metrics ?? {});
+  const base = {
+    id: row.id,
+    profileId: row.profileId,
+    channelId: row.channelId ?? null,
+    platform: row.platform,
+    externalPostId: row.externalPostId,
+    url: row.url ?? null,
+    publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
+    textSnippet: row.textSnippet,
+    mediaKind: row.mediaKind as BloggerPostInsight['mediaKind'],
+    metrics,
+    metricCapturedAt: row.metricCapturedAt ? row.metricCapturedAt.toISOString() : null,
+    source: row.source as BloggerPostInsight['source'],
+    sourceRawRef: row.sourceRawRef ?? null,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+  return {
+    ...base,
+    freshness: computePostMetricFreshness(base),
+    performanceScore: 0,
+  };
+}
+
+function fitSignalsForPersist(fit: CatalogFit) {
+  return {
+    positiveSignals: fit.positiveSignals,
+    gaps: fit.gaps,
+    scoreBreakdown: fit.scoreBreakdown,
+  };
+}
+
 export interface MatchOptions {
   /** When true, run the bounded LLM re-rank on the top N (default false). */
   rerank?: boolean;
@@ -143,6 +188,16 @@ export const matchingService = {
     });
     const profiles = profilesRows.map(toMatchable);
     const profileById = new Map(profilesRows.map((p) => [p.id, p]));
+    const postRows = await prisma.bloggerPostInsight.findMany({
+      where: { profileId: { in: profilesRows.map((p) => p.id) } },
+      orderBy: [{ metricCapturedAt: 'desc' }, { publishedAt: 'desc' }],
+    });
+    const postsByProfile = new Map<string, BloggerPostInsight[]>();
+    for (const row of postRows) {
+      const arr = postsByProfile.get(row.profileId) ?? [];
+      arr.push(serializePostInsight(row));
+      postsByProfile.set(row.profileId, arr);
+    }
 
     // `structured_placement_offers` rollout: when ON, matching prefers a
     // profile's structured placement offers and falls back to legacy rateCards
@@ -155,6 +210,16 @@ export const matchingService = {
     // Stage 1+2: deterministic prefilter → score → order.
     let ranked: ScoredProfile[] = rankProfiles(brief, profiles, matchOpts);
     const rerankedIds = new Set<string>();
+    const deterministicFit = new Map<string, CatalogFit>();
+    for (const r of ranked) {
+      const profileRow = profileById.get(r.profileId);
+      if (!profileRow) continue;
+      const profile = serializeProfile(profileRow);
+      deterministicFit.set(
+        r.profileId,
+        buildFitBreakdown(brief, profile, r, postsByProfile.get(r.profileId) ?? [], 'deterministic'),
+      );
+    }
 
     // Stage 3 (optional): bounded LLM re-rank of the top N.
     const topN = Math.max(1, opts.topN ?? DEFAULT_RERANK_TOP_N);
@@ -222,7 +287,19 @@ export const matchingService = {
           score: r.score,
           rationale: r.rationale,
         }));
-        for (const r of rerankedHead) rerankedIds.add(r.profileId);
+        for (const r of rerankedHead) {
+          rerankedIds.add(r.profileId);
+          const existing = deterministicFit.get(r.profileId);
+          if (existing) {
+            deterministicFit.set(r.profileId, {
+              ...existing,
+              source: 'llm_rerank',
+              score: r.score,
+              rationale: r.rationale || existing.rationale,
+              scoreBreakdown: { ...existing.scoreBreakdown, total: r.score },
+            });
+          }
+        }
         ranked = [...rerankedHead, ...tail];
       } catch (err) {
         // Re-rank is best-effort: fall back to the deterministic order on any
@@ -249,6 +326,18 @@ export const matchingService = {
                 score: r.score,
                 rationale: r.rationale,
                 rerankedByLlm: rerankedIds.has(r.profileId),
+                fitSignals: fitSignalsForPersist(
+                  deterministicFit.get(r.profileId) ?? {
+                    score: r.score,
+                    source: rerankedIds.has(r.profileId) ? 'llm_rerank' : 'deterministic',
+                    rationale: r.rationale,
+                    positiveSignals: [],
+                    gaps: ['fit metadata unavailable'],
+                    evidencePostIds: [],
+                    scoreBreakdown: { total: r.score },
+                  },
+                ) as never,
+                evidencePostIds: deterministicFit.get(r.profileId)?.evidencePostIds ?? [],
               })),
             }),
           ]
@@ -261,10 +350,25 @@ export const matchingService = {
         const p = profileById.get(r.profileId);
         if (!p) return null;
         return {
-          profile: serializeProfile(p),
+          profile: {
+            ...serializeProfile(p),
+            topPostsPreview: rankPostInsightsForPreview(postsByProfile.get(r.profileId) ?? [], {
+              avgViews: p.avgViews ?? null,
+            }),
+          },
           score: r.score,
           rationale: r.rationale,
           rerankedByLlm: rerankedIds.has(r.profileId),
+          fit: deterministicFit.get(r.profileId)
+            ? {
+                score: deterministicFit.get(r.profileId)!.score,
+                rationale: deterministicFit.get(r.profileId)!.rationale,
+                positiveSignals: deterministicFit.get(r.profileId)!.positiveSignals,
+                gaps: deterministicFit.get(r.profileId)!.gaps,
+                evidencePostIds: deterministicFit.get(r.profileId)!.evidencePostIds,
+                scoreBreakdown: deterministicFit.get(r.profileId)!.scoreBreakdown,
+              }
+            : undefined,
         };
       })
       .filter((c): c is NonNullable<typeof c> => c !== null);
@@ -283,9 +387,13 @@ function serializeProfile(p: DbBloggerProfile) {
     formats: p.formats,
     audience: parseAudience(p.audience),
     rateCards: parseRateCards(p.rateCards),
+    placementOffers: parsePlacementOffers((p as { placementOffers?: unknown }).placementOffers),
     reach: p.reach ?? null,
     avgViews: p.avgViews ?? null,
     capturedAt: p.capturedAt ? p.capturedAt.toISOString() : null,
+    postInsightRefreshStatus: p.postInsightRefreshStatus,
+    postInsightRefreshError: p.postInsightRefreshError ?? null,
+    postInsightRefreshedAt: p.postInsightRefreshedAt ? p.postInsightRefreshedAt.toISOString() : null,
     createdAt: p.createdAt.toISOString(),
     updatedAt: p.updatedAt.toISOString(),
   };

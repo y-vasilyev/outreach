@@ -18,7 +18,7 @@ import { api } from '../../lib/api';
 import { isFeatureOff } from '../../lib/featureGate';
 import { toast } from '../../lib/toast';
 import { formatCompact } from '../../lib/format';
-import type { AdBrief, CreateAdBriefInput, MatchResponse } from './types';
+import type { AdBrief, BloggerPostInsight, CreateAdBriefInput, MatchResponse } from './types';
 
 const router = useRouter();
 
@@ -73,6 +73,20 @@ const candidates = computed(() => result.value?.candidates ?? []);
 
 function profileName(profile: MatchResponse['candidates'][number]['profile']): string {
   return profile.displayName || profile.channelId || profile.id.slice(0, 8);
+}
+
+function evidencePosts(c: MatchResponse['candidates'][number]): BloggerPostInsight[] {
+  const ids = new Set(c.fit?.evidencePostIds ?? []);
+  return (c.profile.topPostsPreview ?? []).filter((post) => ids.has(post.id));
+}
+
+function metricLabel(post: BloggerPostInsight): string {
+  const m = post.metrics;
+  return [
+    m.views != null ? `${formatCompact(m.views)} views` : '',
+    m.likes != null ? `${formatCompact(m.likes)} likes` : '',
+    m.reactions != null ? `${formatCompact(m.reactions)} react` : '',
+  ].filter(Boolean).join(' · ') || 'метрик нет';
 }
 </script>
 
@@ -154,6 +168,36 @@ function profileName(profile: MatchResponse['candidates'][number]['profile']): s
               <span class="muted-2" style="font-size: 11px;">score</span>
             </div>
             <p class="muted" style="font-size: 12.5px; line-height: 1.5; margin: 0 0 10px;">{{ c.rationale || '—' }}</p>
+            <div v-if="c.fit?.positiveSignals.length || c.fit?.gaps.length" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
+              <div>
+                <div class="muted-2" style="font-size: 10.5px; text-transform: uppercase; margin-bottom: 4px;">Сигналы</div>
+                <div v-if="c.fit?.positiveSignals.length" style="display: flex; flex-wrap: wrap; gap: 4px;">
+                  <Tag v-for="s in c.fit.positiveSignals.slice(0, 4)" :key="s">{{ s }}</Tag>
+                </div>
+                <span v-else class="muted-2" style="font-size: 12px;">—</span>
+              </div>
+              <div>
+                <div class="muted-2" style="font-size: 10.5px; text-transform: uppercase; margin-bottom: 4px;">Гэпы</div>
+                <div v-if="c.fit?.gaps.length" style="display: flex; flex-wrap: wrap; gap: 4px;">
+                  <Tag v-for="g in c.fit.gaps.slice(0, 4)" :key="g">{{ g }}</Tag>
+                </div>
+                <span v-else class="muted-2" style="font-size: 12px;">—</span>
+              </div>
+            </div>
+            <div v-if="evidencePosts(c).length" style="margin-bottom: 10px; display: grid; gap: 6px;">
+              <div class="muted-2" style="font-size: 10.5px; text-transform: uppercase;">Посты-доказательства</div>
+              <div
+                v-for="post in evidencePosts(c)"
+                :key="post.id"
+                style="border: 1px solid var(--line); border-radius: 8px; padding: 8px;"
+              >
+                <div style="display: flex; justify-content: space-between; gap: 8px;">
+                  <span class="mono cell-strong" style="font-size: 11.5px;">{{ metricLabel(post) }}</span>
+                  <a v-if="post.url" :href="post.url" target="_blank" rel="noreferrer" class="muted-2" style="font-size: 11px;">post</a>
+                </div>
+                <div class="muted" style="font-size: 12px; margin-top: 4px;">{{ post.textSnippet }}</div>
+              </div>
+            </div>
             <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px;">
               <Tag v-for="t in c.profile.topics.slice(0, 5)" :key="t">{{ t }}</Tag>
             </div>

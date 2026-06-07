@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { useQuery, useQueryClient } from '@tanstack/vue-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { useRouter } from 'vue-router';
 import PageHead from '../../components/PageHead.vue';
 import Tabs from '../../components/Tabs.vue';
@@ -17,8 +17,9 @@ import { api } from '../../lib/api';
 import { isFeatureOff } from '../../lib/featureGate';
 import { avatarColor } from '../../lib/state';
 import { formatCompact, formatRelative, initials } from '../../lib/format';
+import { toast } from '../../lib/toast';
 import type { IconName } from '../../lib/icons';
-import type { BloggerProfile, BloggerProfileList } from './types';
+import type { BloggerPostInsight, BloggerProfile, BloggerProfileList } from './types';
 
 const router = useRouter();
 const qc = useQueryClient();
@@ -28,10 +29,19 @@ const tab = ref<BloggerTab>('all');
 const platformFilter = ref('');
 const langFilter = ref('');
 const formatFilter = ref('');
+const contextType = ref<'none' | 'campaign' | 'brief'>('none');
+const contextId = ref('');
+const sortMode = ref<'updated' | 'relevance' | 'top_posts'>('updated');
+const requirePostMetrics = ref(false);
 
 const { data, isLoading, isFetching, error } = useQuery({
-  queryKey: ['blogger-profiles'],
-  queryFn: () => api.get<BloggerProfileList>('/blogger-profiles?limit=200'),
+  queryKey: ['blogger-profiles', contextType, contextId],
+  queryFn: () => {
+    const params = new URLSearchParams({ limit: '200' });
+    if (contextType.value === 'campaign' && contextId.value.trim()) params.set('campaignId', contextId.value.trim());
+    if (contextType.value === 'brief' && contextId.value.trim()) params.set('briefId', contextId.value.trim());
+    return api.get<BloggerProfileList>(`/blogger-profiles?${params.toString()}`);
+  },
   retry: false,
 });
 
@@ -69,6 +79,14 @@ function hasAudience(p: BloggerProfile): boolean {
   return p.reach != null || p.avgViews != null;
 }
 
+function hasUsablePostMetric(p: BloggerProfile): boolean {
+  return (p.topPostsPreview ?? []).some(
+    (post) =>
+      post.freshness.state === 'fresh' &&
+      Object.values(post.metrics).some((v) => typeof v === 'number' && Number.isFinite(v)),
+  );
+}
+
 const counts = computed(() => ({
   all: items.value.length,
   with_rates: items.value.filter(hasRates).length,
@@ -97,6 +115,13 @@ const filteredItems = computed(() => {
   }
   if (langFilter.value) xs = xs.filter((p) => p.languages.includes(langFilter.value));
   if (formatFilter.value) xs = xs.filter((p) => p.formats.includes(formatFilter.value));
+  if (requirePostMetrics.value) xs = xs.filter(hasUsablePostMetric);
+  xs = [...xs];
+  if (sortMode.value === 'relevance') {
+    xs.sort((a, b) => (b.fit?.score ?? -1) - (a.fit?.score ?? -1));
+  } else if (sortMode.value === 'top_posts') {
+    xs.sort((a, b) => topPostScore(b) - topPostScore(a));
+  }
   return xs;
 });
 
@@ -131,6 +156,46 @@ function socialLabel(link: NonNullable<BloggerProfile['socialLinks']>[number]): 
   return `${link.platform}${link.handle ? ` @${link.handle}` : ''}`;
 }
 
+function topPostScore(p: BloggerProfile): number {
+  return Math.max(0, ...(p.topPostsPreview ?? []).map((post) => post.performanceScore));
+}
+
+function postMetricLabel(post: BloggerPostInsight): string {
+  const m = post.metrics;
+  const parts = [
+    m.views != null ? `${formatCompact(m.views)} views` : '',
+    m.likes != null ? `${formatCompact(m.likes)} likes` : '',
+    m.reactions != null ? `${formatCompact(m.reactions)} react` : '',
+    m.forwards != null ? `${formatCompact(m.forwards)} fwd` : '',
+  ].filter(Boolean);
+  return parts.join(' · ') || 'метрик нет';
+}
+
+function topPostLabel(p: BloggerProfile): string {
+  const post = p.topPostsPreview?.[0];
+  if (!post) return p.postInsightRefreshStatus === 'pending' ? 'обновление…' : '—';
+  return `${post.platform}: ${postMetricLabel(post)}`;
+}
+
+function fitLabel(p: BloggerProfile): string {
+  if (!p.fit) return '—';
+  return `${Math.round(p.fit.score * 100)}%`;
+}
+
+function fitTitle(p: BloggerProfile): string {
+  if (!p.fit) return '';
+  return [p.fit.rationale, ...p.fit.positiveSignals.map((s) => `+ ${s}`), ...p.fit.gaps.map((g) => `- ${g}`)].join('\n');
+}
+
+const refreshMut = useMutation({
+  mutationFn: (profileId: string) => api.post(`/blogger-profiles/${profileId}/post-insights/refresh`, {}),
+  onSuccess: () => {
+    toast.success('Обновление постов поставлено в очередь');
+    qc.invalidateQueries({ queryKey: ['blogger-profiles'] });
+  },
+  onError: (e) => toast.error('Не удалось обновить посты', (e as Error).message),
+});
+
 function offerKindLabel(kind: string): string {
   const labels: Record<string, string> = {
     post: 'Пост',
@@ -162,6 +227,12 @@ function rowActions(p: BloggerProfile): Array<{
       label: 'Перейти к подбору',
       icon: 'users_round',
       onClick: () => router.push('/match'),
+    },
+    { label: 'divider', divider: true },
+    {
+      label: 'Обновить посты',
+      icon: 'refresh',
+      onClick: () => refreshMut.mutate(p.id),
     },
   ];
 }
@@ -212,6 +283,33 @@ function rowActions(p: BloggerProfile): Array<{
         placeholder="любой"
         tone="violet"
       />
+      <label style="display: flex; align-items: center; gap: 6px;">
+        <span class="muted-2" style="font-size: 11px;">Контекст</span>
+        <select v-model="contextType" class="input" style="height: 30px; width: 116px;">
+          <option value="none">нет</option>
+          <option value="campaign">campaign</option>
+          <option value="brief">brief</option>
+        </select>
+      </label>
+      <input
+        v-if="contextType !== 'none'"
+        v-model="contextId"
+        class="input"
+        style="height: 30px; width: 230px;"
+        :placeholder="contextType === 'campaign' ? 'campaignId' : 'briefId'"
+      />
+      <label style="display: flex; align-items: center; gap: 6px;">
+        <span class="muted-2" style="font-size: 11px;">Сорт.</span>
+        <select v-model="sortMode" class="input" style="height: 30px; width: 124px;">
+          <option value="updated">обновление</option>
+          <option value="relevance">релевантность</option>
+          <option value="top_posts">топ-посты</option>
+        </select>
+      </label>
+      <label style="display: flex; align-items: center; gap: 6px; font-size: 12px;">
+        <input v-model="requirePostMetrics" type="checkbox" />
+        <span>с метриками постов</span>
+      </label>
       <template #right>
         <span class="muted-2">{{ filteredItems.length }} из {{ items.length }}</span>
       </template>
@@ -233,6 +331,8 @@ function rowActions(p: BloggerProfile): Array<{
             <th>Платф.</th>
             <th>Темы</th>
             <th>Форматы</th>
+            <th class="num">Fit</th>
+            <th>Топ-пост</th>
             <th class="num">Охват</th>
             <th class="num">Ср. просмотры</th>
             <th>Прайс</th>
@@ -304,6 +404,16 @@ function rowActions(p: BloggerProfile): Array<{
                 >
                 <span v-if="!row.formats.length" class="muted-2">—</span>
               </div>
+            </td>
+            <td class="num mono" :title="fitTitle(row)">
+              <span :class="row.fit ? 'cell-strong' : 'muted-2'">{{ fitLabel(row) }}</span>
+            </td>
+            <td>
+              <span class="muted" style="font-size: 12px;" :title="row.topPostsPreview?.[0]?.textSnippet ?? row.postInsightRefreshError ?? ''">
+                {{ topPostLabel(row) }}
+              </span>
+              <span v-if="row.postInsightRefreshStatus === 'failed'" class="muted-2" style="display: block; font-size: 10.5px;">ошибка обновления</span>
+              <span v-else-if="row.topPostsPreview?.[0]?.freshness.state === 'stale'" class="muted-2" style="display: block; font-size: 10.5px;">метрики устарели</span>
             </td>
             <td class="num mono">{{ row.reach != null ? formatCompact(row.reach) : '—' }}</td>
             <td class="num mono">{{ row.avgViews != null ? formatCompact(row.avgViews) : '—' }}</td>

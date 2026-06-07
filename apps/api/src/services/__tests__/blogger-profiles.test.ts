@@ -12,19 +12,39 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // is exactly what the boundary coercion `Number(dp.confidence)` must handle.
 
 interface PrismaMock {
-  bloggerProfile: { findUnique: ReturnType<typeof vi.fn> };
+  bloggerProfile: {
+    findUnique: ReturnType<typeof vi.fn>;
+    findMany: ReturnType<typeof vi.fn>;
+    count: ReturnType<typeof vi.fn>;
+    update: ReturnType<typeof vi.fn>;
+  };
+  adBrief: { findUnique: ReturnType<typeof vi.fn> };
+  campaign: { findUnique: ReturnType<typeof vi.fn> };
+  matchResult: { findMany: ReturnType<typeof vi.fn> };
   channel: { findUnique: ReturnType<typeof vi.fn>; findMany: ReturnType<typeof vi.fn> };
   message: { findMany: ReturnType<typeof vi.fn> };
 }
 
 const prismaMock: PrismaMock = {
-  bloggerProfile: { findUnique: vi.fn() },
+  bloggerProfile: { findUnique: vi.fn(), findMany: vi.fn(), count: vi.fn(), update: vi.fn() },
+  adBrief: { findUnique: vi.fn() },
+  campaign: { findUnique: vi.fn() },
+  matchResult: { findMany: vi.fn() },
   channel: { findUnique: vi.fn(), findMany: vi.fn() },
   message: { findMany: vi.fn() },
 };
 
 vi.mock('@nosquare/db', () => ({
   getPrisma: () => prismaMock,
+}));
+
+vi.mock('../../feature-flags.js', () => ({
+  getFeatureFlags: () => ({ get: () => false }),
+}));
+
+const channelScrapeAdd = vi.fn();
+vi.mock('../../queues.js', () => ({
+  getQueues: () => ({ channelScrape: { add: channelScrapeAdd } }),
 }));
 
 import { bloggerProfilesService } from '../blogger-profiles.js';
@@ -36,6 +56,15 @@ beforeEach(() => {
   prismaMock.channel.findUnique.mockResolvedValue(null);
   prismaMock.channel.findMany.mockResolvedValue([]);
   prismaMock.message.findMany.mockResolvedValue([]);
+  prismaMock.bloggerProfile.count.mockResolvedValue(0);
+  prismaMock.bloggerProfile.findMany.mockResolvedValue([]);
+  prismaMock.bloggerProfile.update.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
+    id: 'p_update',
+    ...data,
+  }));
+  prismaMock.adBrief.findUnique.mockResolvedValue(null);
+  prismaMock.campaign.findUnique.mockResolvedValue(null);
+  prismaMock.matchResult.findMany.mockResolvedValue([]);
   // Pin the clock so age-in-days assertions don't drift with the real wall clock.
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
@@ -167,6 +196,180 @@ describe('bloggerProfilesService.get — API-boundary serialization', () => {
     // topics has no contributing data point → stale-by-default, no fallback
     // to profile.capturedAt (would otherwise be fresh-by-accident).
     expect(out.freshness.topics).toEqual({ stale: true, ageDays: null });
+  });
+
+  it('serializes bounded post insights with independent metric freshness', async () => {
+    prismaMock.bloggerProfile.findUnique.mockResolvedValue({
+      id: 'p_posts',
+      channelId: null,
+      topics: ['финтех'],
+      languages: ['ru'],
+      formats: ['post'],
+      audience: {},
+      rateCards: [],
+      placementOffers: [],
+      reach: null,
+      avgViews: 10000,
+      capturedAt: NOW,
+      createdAt: NOW,
+      updatedAt: NOW,
+      postInsightRefreshStatus: 'idle',
+      postInsightRefreshError: null,
+      postInsightRefreshedAt: null,
+      postInsights: [
+        {
+          id: 'post1',
+          profileId: 'p_posts',
+          channelId: null,
+          platform: 'telegram',
+          externalPostId: '42',
+          url: 'https://t.me/test/42',
+          publishedAt: new Date('2026-05-19T00:00:00Z'),
+          textSnippet: 'финтех пост',
+          mediaKind: 'post',
+          metrics: { views: 20000, reactions: 100 },
+          metricCapturedAt: new Date('2026-05-19T00:00:00Z'),
+          source: 'telegram_public_parse',
+          sourceRawRef: 'telegram:1:42',
+          createdAt: NOW,
+          updatedAt: NOW,
+        },
+      ],
+      dataPoints: [],
+      mediaAssets: [],
+    });
+
+    const out = await bloggerProfilesService.get('p_posts');
+    expect(out.postInsights).toHaveLength(1);
+    expect(out.topPostsPreview).toHaveLength(1);
+    expect(out.postInsights[0]!.metrics.views).toBe(20000);
+    expect(out.postInsights[0]!.freshness).toEqual({ state: 'fresh', ageDays: 1 });
+    expect(out.postInsights[0]!.performanceScore).toBeGreaterThan(0);
+  });
+
+  it('keeps legacy list responses compatible when no fit context or post insights exist', async () => {
+    prismaMock.bloggerProfile.count.mockResolvedValue(1);
+    prismaMock.bloggerProfile.findMany.mockResolvedValue([
+      {
+        id: 'p_list',
+        channelId: null,
+        topics: [],
+        languages: [],
+        formats: [],
+        audience: {},
+        rateCards: [],
+        placementOffers: [],
+        reach: null,
+        avgViews: null,
+        capturedAt: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+        postInsightRefreshStatus: 'idle',
+        postInsightRefreshError: null,
+        postInsightRefreshedAt: null,
+        dataPoints: [],
+        postInsights: [],
+        _count: { dataPoints: 0 },
+      },
+    ]);
+    const out = await bloggerProfilesService.list({ limit: 50 });
+    expect(out.total).toBe(1);
+    expect(out.items[0]!.topPostsPreview).toEqual([]);
+    expect((out.items[0] as { fit?: unknown }).fit).toBeUndefined();
+  });
+
+  it('rejects ambiguous catalog fit context', async () => {
+    await expect(
+      bloggerProfilesService.list({ campaignId: 'camp1', briefId: 'brief1' }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it('uses persisted match result for brief context', async () => {
+    prismaMock.adBrief.findUnique.mockResolvedValue({
+      id: 'brief1',
+      topic: 'финтех',
+      audienceTarget: '',
+      budget: null,
+      formats: [],
+      geo: [],
+      deadline: null,
+      notes: '',
+      createdAt: NOW,
+    });
+    prismaMock.bloggerProfile.count.mockResolvedValue(1);
+    prismaMock.bloggerProfile.findMany.mockResolvedValue([
+      {
+        id: 'p_match',
+        channelId: null,
+        topics: ['финтех'],
+        languages: [],
+        formats: [],
+        audience: {},
+        rateCards: [],
+        placementOffers: [],
+        reach: null,
+        avgViews: null,
+        capturedAt: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+        postInsightRefreshStatus: 'idle',
+        postInsightRefreshError: null,
+        postInsightRefreshedAt: null,
+        dataPoints: [],
+        postInsights: [],
+        _count: { dataPoints: 0 },
+      },
+    ]);
+    prismaMock.matchResult.findMany.mockResolvedValue([
+      {
+        profileId: 'p_match',
+        score: '0.77',
+        rationale: 'persisted',
+        rerankedByLlm: false,
+        fitSignals: {
+          positiveSignals: ['saved signal'],
+          gaps: ['saved gap'],
+          scoreBreakdown: { total: 0.77 },
+        },
+        evidencePostIds: ['post1'],
+      },
+    ]);
+
+    const out = await bloggerProfilesService.list({ briefId: 'brief1' });
+    expect((out.items[0] as { fit?: unknown }).fit).toMatchObject({
+      score: 0.77,
+      source: 'match_result',
+      rationale: 'persisted',
+      positiveSignals: ['saved signal'],
+      gaps: ['saved gap'],
+      evidencePostIds: ['post1'],
+    });
+  });
+
+  it('rejects campaign context when the campaign goal is missing', async () => {
+    prismaMock.campaign.findUnique.mockResolvedValue({
+      id: 'camp1',
+      goal: null,
+      goalText: 'goal',
+      valueProp: 'value',
+      createdAt: NOW,
+      type: { key: 'custdev' },
+    });
+    await expect(bloggerProfilesService.list({ campaignId: 'camp1' })).rejects.toMatchObject({
+      statusCode: 400,
+    });
+  });
+
+  it('enqueues a channel scrape refresh and marks unsupported profiles explicitly', async () => {
+    prismaMock.bloggerProfile.findUnique.mockResolvedValueOnce({ id: 'p1', channelId: 'ch1' });
+    prismaMock.channel.findUnique.mockResolvedValueOnce({ id: 'ch1', platform: 'telegram' });
+    const ok = await bloggerProfilesService.requestPostInsightRefresh('p1');
+    expect(ok).toMatchObject({ postInsightRefreshStatus: 'pending' });
+    expect(channelScrapeAdd).toHaveBeenCalledWith('refresh-post-insights', { channelId: 'ch1' });
+
+    prismaMock.bloggerProfile.findUnique.mockResolvedValueOnce({ id: 'p2', channelId: null });
+    const unsupported = await bloggerProfilesService.requestPostInsightRefresh('p2');
+    expect(unsupported).toMatchObject({ postInsightRefreshStatus: 'unsupported' });
   });
 
   it('returns real multi-platform quote rate cards and their provenance rows', async () => {

@@ -29,6 +29,79 @@ export const SocialProfileLinkZ = z.object({
   handle: z.string().optional(),
 });
 
+export const BloggerPostMetricsZ = z
+  .object({
+    views: z.number().int().nonnegative().optional(),
+    likes: z.number().int().nonnegative().optional(),
+    comments: z.number().int().nonnegative().optional(),
+    shares: z.number().int().nonnegative().optional(),
+    forwards: z.number().int().nonnegative().optional(),
+    reactions: z.number().int().nonnegative().optional(),
+    saves: z.number().int().nonnegative().optional(),
+    engagementRate: z.number().min(0).optional(),
+  })
+  .default({});
+
+export const PostMetricFreshnessZ = z.object({
+  state: z.enum(['fresh', 'stale', 'unavailable', 'pending']),
+  ageDays: z.number().int().nonnegative().nullable(),
+});
+
+export const BloggerPostInsightSourceZ = z.enum([
+  'scrapecreators',
+  'telegram_public_parse',
+  'manual_import',
+]);
+
+export const BloggerPostInsightZ = z.object({
+  id: z.string(),
+  profileId: z.string(),
+  channelId: z.string().nullable(),
+  platform: z.string().min(1),
+  externalPostId: z.string().min(1),
+  url: z.string().url().nullable(),
+  publishedAt: z.string().nullable(),
+  textSnippet: z.string().default(''),
+  mediaKind: z.enum(['post', 'story', 'reels', 'shorts', 'video', 'other']).default('post'),
+  metrics: BloggerPostMetricsZ,
+  metricCapturedAt: z.string().nullable(),
+  source: BloggerPostInsightSourceZ,
+  sourceRawRef: z.string().nullable().optional(),
+  freshness: PostMetricFreshnessZ,
+  performanceScore: z.number().min(0).max(1),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const BloggerPostInsightPreviewZ = BloggerPostInsightZ.pick({
+  id: true,
+  profileId: true,
+  channelId: true,
+  platform: true,
+  externalPostId: true,
+  url: true,
+  publishedAt: true,
+  textSnippet: true,
+  mediaKind: true,
+  metrics: true,
+  metricCapturedAt: true,
+  source: true,
+  freshness: true,
+  performanceScore: true,
+});
+
+export const PostInsightRefreshStatusZ = z.enum(['idle', 'pending', 'refreshing', 'failed', 'unsupported']);
+
+export const CatalogFitZ = z.object({
+  score: z.number().min(0).max(1),
+  source: z.enum(['deterministic', 'match_result', 'llm_rerank']),
+  rationale: z.string().default(''),
+  positiveSignals: z.array(z.string()).default([]),
+  gaps: z.array(z.string()).default([]),
+  evidencePostIds: z.array(z.string()).default([]),
+  scoreBreakdown: z.record(z.number()).default({}),
+});
+
 /** Audience breakdown — each map is label → share (0..1) or absolute count. */
 export const AudienceZ = z
   .object({
@@ -58,6 +131,12 @@ export const BloggerProfileZ = z.object({
   reach: z.number().int().nullable(),
   avgViews: z.number().int().nullable(),
   capturedAt: z.string().nullable(),
+  postInsightRefreshStatus: PostInsightRefreshStatusZ.default('idle'),
+  postInsightRefreshError: z.string().nullable().optional(),
+  postInsightRefreshedAt: z.string().nullable().optional(),
+  topPostsPreview: z.array(BloggerPostInsightPreviewZ).default([]).optional(),
+  postInsights: z.array(BloggerPostInsightZ).default([]).optional(),
+  fit: CatalogFitZ.optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -113,6 +192,12 @@ export const ProfileExtractionOutputZ = z.object({
 
 export type RateCard = z.infer<typeof RateCardZ>;
 export type SocialProfileLink = z.infer<typeof SocialProfileLinkZ>;
+export type BloggerPostMetrics = z.infer<typeof BloggerPostMetricsZ>;
+export type PostMetricFreshness = z.infer<typeof PostMetricFreshnessZ>;
+export type BloggerPostInsight = z.infer<typeof BloggerPostInsightZ>;
+export type BloggerPostInsightPreview = z.infer<typeof BloggerPostInsightPreviewZ>;
+export type PostInsightRefreshStatus = z.infer<typeof PostInsightRefreshStatusZ>;
+export type CatalogFit = z.infer<typeof CatalogFitZ>;
 export type Audience = z.infer<typeof AudienceZ>;
 export type BloggerProfile = z.infer<typeof BloggerProfileZ>;
 export type ProfileDataPoint = z.infer<typeof ProfileDataPointZ>;

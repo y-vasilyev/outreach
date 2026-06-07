@@ -13,7 +13,7 @@ vi.mock('../../../lib/api', () => {
       super(message);
     }
   }
-  return { api: { get: vi.fn() }, ApiError };
+  return { api: { get: vi.fn(), post: vi.fn() }, ApiError };
 });
 
 import { api } from '../../../lib/api';
@@ -71,6 +71,26 @@ beforeEach(() => {
         capturedAt: NOW,
         createdAt: NOW,
         updatedAt: NOW,
+        postInsightRefreshStatus: 'idle',
+        postInsightRefreshError: null,
+        postInsights: [
+          {
+            id: 'post1',
+            profileId: 'p_live',
+            channelId: 'chan_live',
+            platform: 'telegram',
+            externalPostId: '42',
+            url: 'https://t.me/polyaam/42',
+            publishedAt: NOW,
+            textSnippet: 'финтех пост с хорошими просмотрами',
+            mediaKind: 'post',
+            metrics: { views: 45000, reactions: 300 },
+            metricCapturedAt: NOW,
+            source: 'telegram_public_parse',
+            freshness: { state: 'fresh', ageDays: 0 },
+            performanceScore: 0.8,
+          },
+        ],
         dataPoints: rateCards.map((r, i) => ({
           id: `dp_live_${i}`,
           profileId: 'p_live',
@@ -184,6 +204,9 @@ describe('BloggerProfilePage', () => {
     expect(text).toContain('telegram @polyaam');
     expect(text).toContain('youtube @polyaam');
     expect(text).toContain('Прайс (9)');
+    expect(text).toContain('Топ-посты (1)');
+    expect(text).toContain('финтех пост с хорошими просмотрами');
+    expect(text).toContain('45');
     expect(text).toContain('telegram_photo_post');
     expect(text).toContain('youtube_integration_first_slot');
     expect(text).toContain('instagram_reels');

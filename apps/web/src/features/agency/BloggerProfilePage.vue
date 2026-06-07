@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { useQuery } from '@tanstack/vue-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { useRoute, useRouter } from 'vue-router';
 import PageHead from '../../components/PageHead.vue';
 import Spinner from '../../components/Spinner.vue';
@@ -14,8 +14,10 @@ import MediaKitDownload from './MediaKitDownload.vue';
 import FreshnessPanel from './FreshnessPanel.vue';
 import { api, ApiError } from '../../lib/api';
 import { isFeatureOff } from '../../lib/featureGate';
-import { formatCompact, formatDateTime } from '../../lib/format';
+import { formatCompact, formatDateTime, formatRelative } from '../../lib/format';
+import { toast } from '../../lib/toast';
 import type {
+  BloggerPostInsight,
   BloggerProfile,
   PlacementAttribute,
   PlacementOffer,
@@ -25,6 +27,7 @@ import type {
 
 const route = useRoute();
 const router = useRouter();
+const qc = useQueryClient();
 const id = computed(() => route.params.id as string);
 
 const { data: profile, isLoading, error } = useQuery({
@@ -59,6 +62,7 @@ const standardKv = computed<KvItem[]>(() => {
 
 const dataPoints = computed<ProfileDataPoint[]>(() => profile.value?.dataPoints ?? []);
 const mediaAssets = computed<MediaAsset[]>(() => profile.value?.mediaAssets ?? []);
+const postInsights = computed<BloggerPostInsight[]>(() => profile.value?.postInsights ?? []);
 // Structured placement offers (entity-style-rate-cards). When present they are
 // the source of truth for commercial terms; the legacy "Прайс" table is the
 // fallback for profiles with no structured offers.
@@ -120,6 +124,25 @@ function assetLabel(a: MediaAsset): string {
   return `${kind}${size}`;
 }
 
+function postMetricLabel(post: BloggerPostInsight): string {
+  const m = post.metrics;
+  const parts = [
+    m.views != null ? `${formatCompact(m.views)} views` : '',
+    m.likes != null ? `${formatCompact(m.likes)} likes` : '',
+    m.comments != null ? `${formatCompact(m.comments)} comments` : '',
+    m.reactions != null ? `${formatCompact(m.reactions)} react` : '',
+    m.forwards != null ? `${formatCompact(m.forwards)} fwd` : '',
+  ].filter(Boolean);
+  return parts.join(' · ') || 'метрик нет';
+}
+
+function postFreshnessLabel(post: BloggerPostInsight): string {
+  if (post.freshness.state === 'fresh') return `fresh · ${post.freshness.ageDays ?? 0} д`;
+  if (post.freshness.state === 'stale') return `stale · ${post.freshness.ageDays ?? '?'} д`;
+  if (post.freshness.state === 'pending') return 'обновляется';
+  return 'нет метрик';
+}
+
 function profileTitle(): string {
   const p = profile.value;
   return p?.displayName || p?.channelId || 'Профиль блогера';
@@ -134,11 +157,28 @@ function renderValue(v: unknown): string {
   if (typeof v === 'object') return JSON.stringify(v);
   return String(v);
 }
+
+const refreshMut = useMutation({
+  mutationFn: () => api.post(`/blogger-profiles/${id.value}/post-insights/refresh`, {}),
+  onSuccess: () => {
+    toast.success('Обновление постов поставлено в очередь');
+    qc.invalidateQueries({ queryKey: ['blogger-profile'] });
+  },
+  onError: (e) => toast.error('Не удалось обновить посты', (e as Error).message),
+});
 </script>
 
 <template>
   <PageHead :title="profileTitle()" sub="Стандартизированный коммерческий профиль">
     <template #actions>
+      <button
+        class="btn"
+        :disabled="refreshMut.isPending.value || profile?.postInsightRefreshStatus === 'pending'"
+        @click="refreshMut.mutate()"
+      >
+        <span v-if="refreshMut.isPending.value" class="spinner" />
+        <Icon v-else name="refresh" :size="12" /><span>Обновить посты</span>
+      </button>
       <button class="btn" @click="router.push('/bloggers')">
         <Icon name="arrow_left" :size="12" /><span>К каталогу</span>
       </button>
@@ -165,6 +205,48 @@ function renderValue(v: unknown): string {
          signal — see profile-staleness.ts for semantics. Detail-only payload
          field, so it may be absent on legacy responses. -->
     <FreshnessPanel v-if="profile.freshness" :freshness="profile.freshness" style="margin-bottom: 12px;" />
+
+    <div class="card" style="margin-bottom: 12px;">
+      <div class="card-head">
+        <Icon name="list" :size="12" /><span>Топ-посты ({{ postInsights.length }})</span>
+        <span v-if="profile.postInsightRefreshStatus !== 'idle'" class="muted-2" style="margin-left: 6px;">
+          {{ profile.postInsightRefreshStatus }}
+        </span>
+      </div>
+      <div class="card-body">
+        <div v-if="profile.postInsightRefreshStatus === 'pending'" class="placeholder" style="min-height: 44px;">Метрики постов обновляются.</div>
+        <div v-else-if="profile.postInsightRefreshStatus === 'unsupported'" class="placeholder" style="min-height: 44px;">Источник не поддерживает обновление постов: {{ profile.postInsightRefreshError ?? 'нет публичного канала' }}</div>
+        <div v-else-if="profile.postInsightRefreshStatus === 'failed'" class="placeholder" style="min-height: 44px;">Последнее обновление постов завершилось ошибкой: {{ profile.postInsightRefreshError ?? '—' }}</div>
+        <div v-if="!postInsights.length" class="placeholder" style="min-height: 48px;">Посты с метриками пока не собраны.</div>
+        <div v-else style="display: grid; gap: 8px;">
+          <div
+            v-for="post in postInsights.slice(0, 12)"
+            :key="post.id"
+            style="border: 1px solid var(--line); border-radius: 8px; padding: 10px;"
+          >
+            <div style="display: flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap;">
+              <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                <Tag :platform="post.platform">{{ post.platform }}</Tag>
+                <span class="mono muted-2" style="font-size: 11px;">{{ post.mediaKind }}</span>
+                <span class="mono cell-strong" style="font-size: 12px;">{{ postMetricLabel(post) }}</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="muted-2" style="font-size: 11px;">{{ postFreshnessLabel(post) }}</span>
+                <a v-if="post.url" class="btn ghost icon-only sm" :href="post.url" target="_blank" rel="noreferrer" title="Открыть пост">
+                  <Icon name="arrow_up_right" :size="12" />
+                </a>
+              </div>
+            </div>
+            <div class="muted" style="font-size: 12.5px; line-height: 1.45; margin-top: 7px;">
+              {{ post.textSnippet || '—' }}
+            </div>
+            <div class="muted-2" style="font-size: 10.5px; margin-top: 7px;">
+              опубликован {{ formatRelative(post.publishedAt) }} · метрики {{ formatRelative(post.metricCapturedAt) }} · source {{ post.source }}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- Standardized fields -->
     <div class="card">

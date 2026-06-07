@@ -30,6 +30,7 @@ export interface TgScrapeClient {
       dateIso: string;
       text: string;
       urls: string[];
+      metrics?: PublicPostMetrics;
     }>
   >;
 }
@@ -46,6 +47,19 @@ export interface ChannelSnapshotPost {
   date: string; // ISO
   text: string;
   urls: string[];
+  mediaKind?: 'post' | 'story' | 'reels' | 'shorts' | 'video' | 'other';
+  metrics?: PublicPostMetrics;
+}
+
+export interface PublicPostMetrics {
+  views?: number;
+  likes?: number;
+  comments?: number;
+  shares?: number;
+  forwards?: number;
+  reactions?: number;
+  saves?: number;
+  engagementRate?: number;
 }
 
 export interface ChannelSnapshot {

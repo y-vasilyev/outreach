@@ -1305,7 +1305,41 @@ function mapMessage(m: Record<string, unknown>): RecentPost {
     }
   }
 
-  return { id, dateIso, text, urls };
+  const views = finiteNumber(m.views);
+  const forwards = finiteNumber(m.forwards);
+  const reactions = sumReactions(m.reactions);
+  const metrics = {
+    ...(views !== undefined && { views }),
+    ...(forwards !== undefined && { forwards }),
+    ...(reactions !== undefined && { reactions }),
+  };
+
+  return {
+    id,
+    dateIso,
+    text,
+    urls,
+    ...(Object.keys(metrics).length > 0 && { metrics }),
+  };
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value;
+  const n = Number(stringifyBigInt(value));
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+
+function sumReactions(raw: unknown): number | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const results = (raw as { results?: unknown }).results;
+  if (!Array.isArray(results)) return undefined;
+  let total = 0;
+  for (const item of results) {
+    if (!item || typeof item !== 'object') continue;
+    const count = finiteNumber((item as { count?: unknown }).count);
+    if (count !== undefined) total += count;
+  }
+  return total > 0 ? total : undefined;
 }
 
 /**
