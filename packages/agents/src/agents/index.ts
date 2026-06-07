@@ -27,6 +27,8 @@ import { rateCardExtractor } from './RateCardExtractor.js';
 import { audienceStatsExtractor } from './AudienceStatsExtractor.js';
 import { bloggerMatcher } from './BloggerMatcher.js';
 import { sponsoredIntegrationDetector } from './SponsoredIntegrationDetector.js';
+import { discoveryQueryPlanner } from './DiscoveryQueryPlanner.js';
+import { bloggerDiscoveryReviewer } from './BloggerDiscoveryReviewer.js';
 
 agentRegistry.register(channelAnalyzer);
 agentRegistry.register(contactExtractor);
@@ -48,6 +50,8 @@ agentRegistry.register(rateCardExtractor);
 agentRegistry.register(audienceStatsExtractor);
 agentRegistry.register(bloggerMatcher);
 agentRegistry.register(sponsoredIntegrationDetector);
+agentRegistry.register(discoveryQueryPlanner);
+agentRegistry.register(bloggerDiscoveryReviewer);
 
 export {
   channelAnalyzer,
@@ -70,6 +74,8 @@ export {
   audienceStatsExtractor,
   bloggerMatcher,
   sponsoredIntegrationDetector,
+  discoveryQueryPlanner,
+  bloggerDiscoveryReviewer,
 };
 
 export * from './ChannelAnalyzer.js';
@@ -92,3 +98,5 @@ export * from './RateCardExtractor.js';
 export * from './AudienceStatsExtractor.js';
 export * from './BloggerMatcher.js';
 export * from './SponsoredIntegrationDetector.js';
+export * from './DiscoveryQueryPlanner.js';
+export * from './BloggerDiscoveryReviewer.js';

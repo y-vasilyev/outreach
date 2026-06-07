@@ -1,11 +1,7 @@
 import { getPrisma, decryptJson } from '@nosquare/db';
 import { Errors } from '@nosquare/shared';
 import type { DiscoverySearchInput, DiscoveryResult } from '@nosquare/shared';
-import {
-  YandexSearchClient,
-  buildDiscoverySearchQueries,
-  extractCandidates,
-} from '@nosquare/platforms';
+import { YandexSearchClient, executePlannedSearches } from '@nosquare/platforms';
 
 import { getQueues } from '../queues.js';
 
@@ -43,14 +39,17 @@ export const discoveryService = {
       folderId: cfg.folderId,
       ...(cfg.baseUrl ? { baseUrl: cfg.baseUrl } : {}),
     });
-    const searchQueries = buildDiscoverySearchQueries(input.query, {
-      ...(input.platform ? { platform: input.platform } : {}),
-    });
-    const results = (await Promise.all(searchQueries.map((q) => client.search(q)))).flat();
-    const candidates = extractCandidates(
-      results,
-      input.platform ? { platform: input.platform } : {},
-    ).slice(0, input.limit);
+    // Reuse the traceable multi-query search core (channel-discovery change).
+    // A single search is just a one-query plan; the helper still owns the
+    // build-scopes → search → extract → dedupe path so all discovery callers
+    // share one implementation. The trace metadata isn't surfaced here (the
+    // legacy `DiscoveryResult` shape is preserved), but provenance rides along
+    // on each candidate.
+    const { candidates } = await executePlannedSearches(
+      client,
+      [{ query: input.query, platform: input.platform ?? null }],
+      { limitPerQuery: input.limit, maxCandidates: input.limit },
+    );
 
     const queues = getQueues();
     const source = `search:${input.query}`;

@@ -12,6 +12,7 @@ interface QueueMap {
   followupCron: Queue;
   metricsRoll: Queue;
   discoveryBatch: Queue;
+  guidedDiscovery: Queue;
 }
 
 let _queues: QueueMap | undefined;
@@ -26,6 +27,7 @@ export function getQueues(): QueueMap {
       followupCron: new Queue(QueueNames.followupCron, conn()),
       metricsRoll: new Queue(QueueNames.metricsRoll, conn()),
       discoveryBatch: new Queue(QueueNames.discoveryBatch, conn()),
+      guidedDiscovery: new Queue(QueueNames.guidedDiscovery, conn()),
     };
   }
   return _queues;

@@ -135,6 +135,12 @@ const routes: RouteRecordRaw[] = [
         meta: { crumbs: ['Discovery', 'Batch'] },
       },
       {
+        path: 'discovery/guided/:id',
+        name: 'discovery-guided',
+        component: () => import('../features/discovery/DiscoveryGuidedRunPage.vue'),
+        meta: { crumbs: ['Discovery', 'Guided run'] },
+      },
+      {
         path: 'users',
         name: 'users',
         component: () => import('../features/users/UsersPage.vue'),

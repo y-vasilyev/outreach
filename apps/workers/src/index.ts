@@ -11,6 +11,7 @@ import { startFollowupScheduler } from './queues/followup-scheduler.js';
 import { startQualityReviewScheduler } from './queues/quality-review-scheduler.js';
 import { startProfileExtractWorker } from './queues/profile-extract.js';
 import { startDiscoveryBatchWorker } from './queues/discovery-batch.js';
+import { startGuidedDiscoveryWorker } from './queues/guided-discovery.js';
 import { initFeatureFlags } from './feature-flags.js';
 import { startCooldownHealer } from './services/cooldown-healer.js';
 import { startWarmupPromoter } from './services/warmup-promoter.js';
@@ -32,6 +33,7 @@ async function main() {
     startTgListenWorker(),
     startProfileExtractWorker(),
     startDiscoveryBatchWorker(),
+    startGuidedDiscoveryWorker(),
   ];
   const dispatcher = startCampaignDispatcher();
   const followups = startFollowupScheduler();

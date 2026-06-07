@@ -1,9 +1,15 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { DiscoverySearchInputZ, DiscoveryBatchInputZ } from '@nosquare/shared';
+import {
+  DiscoverySearchInputZ,
+  DiscoveryBatchInputZ,
+  GuidedRunCreateInputZ,
+  CandidateActionZ,
+} from '@nosquare/shared';
 
 import { discoveryService } from '../services/discovery.js';
 import { discoveryBatchService } from '../services/discovery-batch.js';
+import { discoveryGuidedService } from '../services/discovery-guided.js';
 import { auditService } from '../services/audit.js';
 import { requireFeature } from '../require-feature.js';
 
@@ -64,6 +70,70 @@ export async function discoveryRoutes(app: FastifyInstance) {
     async (req) => {
       const params = z.object({ id: z.string() }).parse(req.params);
       return discoveryBatchService.get(params.id);
+    },
+  );
+
+  // ─── Guided blogger discovery (ajtbd-guided-blogger-discovery) ───
+
+  app.post(
+    '/discovery/guided',
+    { preHandler: [app.requireRole(['admin', 'operator'])] },
+    async (req) => {
+      const body = GuidedRunCreateInputZ.parse(req.body);
+      const userId = (req.user as { id: string }).id;
+      const { id } = await discoveryGuidedService.create(body, userId);
+      await auditService.log({
+        userId,
+        action: 'discovery.guided.create',
+        targetType: 'discovery_run',
+        targetId: id,
+        payload: {
+          campaignId: body.campaignId ?? null,
+          platform: body.platform ?? null,
+          manualBrief: Boolean(body.brief),
+        },
+      });
+      return { id };
+    },
+  );
+
+  app.get(
+    '/discovery/guided',
+    { preHandler: [app.requireRole(['admin', 'operator'])] },
+    async () => discoveryGuidedService.list(),
+  );
+
+  app.get(
+    '/discovery/guided/:id',
+    { preHandler: [app.requireRole(['admin', 'operator'])] },
+    async (req) => {
+      const params = z.object({ id: z.string() }).parse(req.params);
+      return discoveryGuidedService.get(params.id);
+    },
+  );
+
+  app.post(
+    '/discovery/guided/:id/candidates/:candidateId/action',
+    { preHandler: [app.requireRole(['admin', 'operator'])] },
+    async (req) => {
+      const params = z
+        .object({ id: z.string(), candidateId: z.string() })
+        .parse(req.params);
+      const body = CandidateActionZ.parse(req.body);
+      const userId = (req.user as { id: string }).id;
+      const result = await discoveryGuidedService.candidateAction(
+        params.id,
+        params.candidateId,
+        body,
+      );
+      await auditService.log({
+        userId,
+        action: 'discovery.guided.candidate_action',
+        targetType: 'discovery_run_candidate',
+        targetId: params.candidateId,
+        payload: { runId: params.id, action: body.action },
+      });
+      return result;
     },
   );
 }

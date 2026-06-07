@@ -658,6 +658,87 @@ model DiscoveryBatch {
   @@map("discovery_batch")
 }
 
+// Guided blogger discovery (ajtbd-guided-blogger-discovery change). A
+// first-class run with richer lifecycle data than DiscoveryBatch: the
+// campaign/manual AJTBD-brief input snapshot, the LLM query plan, a
+// sanitized operator-visible trace, and enriched reviewable candidates.
+// Trace events are stored as JSON on the run (a product surface, D4); the
+// candidates are a separate table so save/shortlist/reject + scrape-refresh
+// can be persisted per-candidate without rewriting the whole run blob.
+enum DiscoveryRunStatus {
+  pending
+  running
+  done
+  failed
+
+  @@map("discovery_run_status")
+}
+
+model DiscoveryRun {
+  id             String             @id @default(cuid())
+  // Optional campaign whose goal/AJTBD seeded this run (null for a manual
+  // brief). Plain reference (no FK) so a deleted campaign doesn't cascade
+  // into discovery history.
+  campaignId     String?            @map("campaign_id")
+  // Stable input snapshot resolved before any agent/search work. Shape
+  // mirrors `GuidedRunInputZ` in @nosquare/shared: { brief, ajtbd, platform,
+  // geo, language, budgets }.
+  input          Json
+  status         DiscoveryRunStatus @default(pending)
+  // Planner output: the bounded set of planned queries (sanitized). Shape
+  // mirrors `PlannedQueryZ[]`.
+  plannedQueries Json               @default("[]") @map("planned_queries")
+  // Sanitized operator-visible trace events. Shape mirrors
+  // `DiscoveryTraceEventZ[]`. Never contains API keys / raw integration
+  // config / private payloads.
+  trace          Json               @default("[]")
+  // Run summary: budget usage, counts, skipped, fatalError. Shape mirrors
+  // `GuidedRunSummaryZ`.
+  summary        Json               @default("{}")
+  createdById    String?            @map("created_by_id")
+  createdAt      DateTime           @default(now()) @map("created_at")
+  updatedAt      DateTime           @updatedAt @map("updated_at")
+  completedAt    DateTime?          @map("completed_at")
+
+  candidates DiscoveryRunCandidate[]
+
+  @@index([status, createdAt])
+  @@index([createdById])
+  @@map("discovery_run")
+}
+
+model DiscoveryRunCandidate {
+  id               String       @id @default(cuid())
+  runId            String       @map("run_id")
+  run              DiscoveryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  // Plain reference to the created/reused Channel.id (no FK relation, keeping
+  // the channel graph's cascade semantics untouched). Null only transiently
+  // before the channel row is upserted.
+  channelId        String?      @map("channel_id")
+  platform         String
+  handle           String
+  // Provenance (channel-discovery spec): { sourceQueries[], url, title,
+  // alreadyKnown }.
+  provenance       Json         @default("{}")
+  // Enrichment lifecycle: new | needs_scrape | pending_enrichment | enriched.
+  enrichmentStatus String       @default("new") @map("enrichment_status")
+  // Reviewer output: { recommendation, rationale, riskNotes[], evidence[],
+  // insufficientEvidenceReason? }. Null until reviewed (or skipped).
+  review           Json?
+  // Denormalised reviewer score (0..1) for list ordering; null until reviewed.
+  score            Decimal?
+  // Denormalised recommendation enum for compact list rows.
+  recommendation   String?
+  // Operator decision: null | saved | shortlisted | rejected.
+  decision         String?
+  createdAt        DateTime     @default(now()) @map("created_at")
+  updatedAt        DateTime     @updatedAt @map("updated_at")
+
+  @@unique([runId, platform, handle])
+  @@index([runId])
+  @@map("discovery_run_candidate")
+}
+
 // Standardized, queryable catalog row for a blogger/channel. Composed
 // deterministically from ProfileDataPoint rows (latest high-confidence).
 model BloggerProfile {

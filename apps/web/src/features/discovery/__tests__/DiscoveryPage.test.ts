@@ -139,7 +139,7 @@ describe('DiscoveryPage — single-niche search', () => {
   it('clearing the batch limit also falls back to the default (20), not 1', async () => {
     apiPost.mockResolvedValue({ id: 'b-clear' });
     const { wrapper } = await mountAndSettle();
-    const textarea = wrapper.find('textarea.input');
+    const textarea = wrapper.find('textarea.mono');
     await textarea.setValue('alpha');
     // Batch limit is the second number input on the page (after the single-niche
     // limit). Clear it and submit.
@@ -158,7 +158,7 @@ describe('DiscoveryPage — single-niche search', () => {
 describe('DiscoveryPage — batch form', () => {
   async function mountWithBatch(): Promise<{ wrapper: any; textarea: any }> {
     const { wrapper } = await mountAndSettle();
-    const textarea = wrapper.find('textarea.input');
+    const textarea = wrapper.find('textarea.mono');
     expect(textarea.exists()).toBe(true);
     return { wrapper, textarea };
   }
@@ -241,5 +241,63 @@ describe('DiscoveryPage — batch form', () => {
     await wrapper.findAll('button.btn').find((b: Btn) => b.text().includes('Запустить batch'))!.trigger('click');
     await flushPromises();
     expect(routerPush).not.toHaveBeenCalled();
+  });
+});
+
+describe('DiscoveryPage — guided workbench', () => {
+  // The guided brief is the non-mono textarea (the batch one carries `mono`).
+  function briefTextarea(wrapper: any) {
+    return wrapper.findAll('textarea').find((t: Btn) => !t.classes().includes('mono'));
+  }
+
+  it('loads campaign options and the guided runs list when the flag is on', async () => {
+    await mountAndSettle();
+    expect(apiGet).toHaveBeenCalledWith('/campaigns');
+    expect(apiGet).toHaveBeenCalledWith('/discovery/guided');
+  });
+
+  it('POSTs /discovery/guided with a manual brief and navigates to the run', async () => {
+    apiPost.mockResolvedValue({ id: 'run-XYZ' });
+    const { wrapper } = await mountAndSettle();
+    const ta = briefTextarea(wrapper);
+    expect(ta, 'expected the guided brief textarea').toBeDefined();
+    await ta!.setValue('  B2B финтех основатели  ');
+    await wrapper.findAll('button.btn').find((b: Btn) => b.text().includes('Запустить поиск'))!.trigger('click');
+    await flushPromises();
+    expect(apiPost).toHaveBeenCalledWith('/discovery/guided', { brief: 'B2B финтех основатели' });
+    expect(routerPush).toHaveBeenCalledWith('/discovery/guided/run-XYZ');
+  });
+
+  it('blocks the guided submit when the brief is too short', async () => {
+    const { wrapper } = await mountAndSettle();
+    const ta = briefTextarea(wrapper);
+    await ta!.setValue('a');
+    const btn = wrapper.findAll('button.btn').find((b: Btn) => b.text().includes('Запустить поиск'))!;
+    expect(btn.attributes('disabled')).toBeDefined();
+    await btn.trigger('click');
+    await flushPromises();
+    expect(apiPost).not.toHaveBeenCalled();
+  });
+
+  it('renders guided run rows from the list', async () => {
+    apiGet.mockImplementation((url: string) => {
+      if (url === '/discovery/guided') {
+        return Promise.resolve([
+          {
+            id: 'run_1',
+            status: 'done',
+            createdAt: '2026-06-01T12:00:00.000Z',
+            completedAt: '2026-06-01T12:03:00.000Z',
+            campaignId: null,
+            briefPreview: 'fintech founders',
+            platform: 'telegram',
+            summary: { plannedQueries: 3, executedQueries: 3, failedQueries: 0, candidatesFound: 7, candidatesReviewed: 5, candidatesSkipped: 0, recommended: 2, newChannels: 4, knownChannels: 3, budgets: { maxQueries: 8, maxResultsPerQuery: 20, maxCandidates: 40, maxReviewed: 15 } },
+          },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+    const { wrapper } = await mountAndSettle();
+    expect(wrapper.text()).toContain('fintech founders');
   });
 });

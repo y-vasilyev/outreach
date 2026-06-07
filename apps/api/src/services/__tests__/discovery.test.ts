@@ -24,16 +24,51 @@ const mocks = vi.hoisted(() => {
 
 vi.mock('@nosquare/db', () => ({ getPrisma: () => mocks.prisma, decryptJson: mocks.decrypt }));
 vi.mock('../../queues.js', () => ({ getQueues: () => ({ channelScrape: { add: mocks.scrapeAdd } }) }));
-vi.mock('@nosquare/platforms', () => ({
-  YandexSearchClient: class {
-    search = mocks.searchResults;
-  },
-  buildDiscoverySearchQueries: (query: string, opts: { platform?: string } = {}) =>
+vi.mock('@nosquare/platforms', () => {
+  const buildDiscoverySearchQueries = (query: string, opts: { platform?: string } = {}) =>
     opts.platform
       ? [`site:${opts.platform}.example ${query}`]
-      : [`site:t.me ${query}`, `site:instagram.com ${query}`],
-  extractCandidates: (...args: unknown[]) => mocks.candidates(...args),
-}));
+      : [`site:t.me ${query}`, `site:instagram.com ${query}`];
+  const extractCandidates = (...args: unknown[]) => mocks.candidates(...args);
+  // Inline equivalent of the real traceable search core so the service's
+  // refactor (channel-discovery change) keeps exercising the same
+  // build → search → extract → dedupe path through these mocks.
+  const executePlannedSearches = async (
+    client: { search: (q: string) => Promise<unknown[]> },
+    planned: { query: string; platform?: string | null }[],
+    opts: { limitPerQuery?: number; maxCandidates?: number } = {},
+  ) => {
+    const limit = opts.limitPerQuery ?? 20;
+    const max = opts.maxCandidates ?? Number.POSITIVE_INFINITY;
+    const byKey = new Map<string, { platform: string; handle: string; url: string; title: string; sourceQuery: string; sourceQueries: string[] }>();
+    const trace: unknown[] = [];
+    for (const p of planned) {
+      const subs = buildDiscoverySearchQueries(p.query, p.platform ? { platform: p.platform } : {});
+      const results = (await Promise.all(subs.map((q) => client.search(q)))).flat();
+      const cands = (extractCandidates(results, p.platform ? { platform: p.platform } : {}) as { platform: string; handle: string; url: string; title: string }[]).slice(0, limit);
+      for (const c of cands) {
+        const key = `${c.platform}:${c.handle.toLowerCase()}`;
+        const existing = byKey.get(key);
+        if (existing) {
+          existing.sourceQueries.push(p.query);
+          continue;
+        }
+        if (byKey.size >= max) continue;
+        byKey.set(key, { ...c, sourceQuery: p.query, sourceQueries: [p.query] });
+      }
+      trace.push({ query: p.query, platform: p.platform ?? null, status: 'ok', resultCount: results.length, candidateCount: cands.length, startedAt: '', completedAt: '' });
+    }
+    return { candidates: [...byKey.values()], trace };
+  };
+  return {
+    YandexSearchClient: class {
+      search = mocks.searchResults;
+    },
+    buildDiscoverySearchQueries,
+    extractCandidates,
+    executePlannedSearches,
+  };
+});
 
 import { discoveryService } from '../discovery.js';
 

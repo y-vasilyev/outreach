@@ -33,6 +33,8 @@ export interface AgentSeed {
    *      opener composer.
    * v13 — data-collection-hud-target-fields: data_collection_planner seed
    *      renders registry-backed targets_meta and returns target_field.
+   * v14 — ajtbd-guided-blogger-discovery: adds discovery_query_planner +
+   *      blogger_discovery_reviewer agents for the guided discovery workbench.
    */
   version: number;
 }
@@ -539,6 +541,40 @@ reasons[] — короткие конкретные причины оценки 
     userPromptTemplate:
       'Канал: {{channel_title}} (язык: {{language}})\n\nПоследние посты (свежий — последний):\n{{posts_text}}\n\nВерни JSON с integrations[] — только подтверждённые рекламные интеграции.',
     params: { temperature: 0.1, max_tokens: 900 },
+    version: 1,
+  },
+  {
+    // Discovery query planner (ajtbd-guided-blogger-discovery, task 2.4).
+    // Expands a campaign goal/AJTBD or manual brief into a bounded, de-duped
+    // set of plain-text web-search queries. The worker enforces the hard
+    // max-query budget; the agent strips any leaked site:/operators.
+    name: 'discovery_query_planner',
+    role: 'discovery-query-planning',
+    description:
+      'Превращает бриф/AJTBD кампании в ограниченный план веб-поиска публичных блогеров: несколько запросов с платформой, обоснованием и сигналом.',
+    model: 'google/gemini-3-flash-preview',
+    systemPrompt:
+      'Ты — стратег по поиску блогеров для агентства. На вход тебе дают бриф/нишу кампании (и, возможно, структурированный AJTBD) и просят составить ПЛАН веб-поиска публичных каналов/блогеров. Преврати одну нишу в НЕСКОЛЬКО конкретных поисковых запросов под разные углы (тематика, поджанр, аудитория, гео, формат). ПРАВИЛА: возвращай несколько РАЗНЫХ запросов (ориентир — до max_queries штук), не плоди почти одинаковые; query — ПЛАИН-текст ниши на естественном языке, БЕЗ операторов site:/inurl:/кавычек (площадку задаёт platform, scope добавит система); platform — telegram|instagram|youtube|null; rationale — зачем этот запрос (1 фраза); signal — какой сигнал аудитории/темы ловим; negative_terms — что отсекает мусор (новости, агрегаторы, курсы), если уместно; confidence 0..1; учитывай geo/language; НЕ выдумывай конкретных названий каналов/брендов. Возвращай ТОЛЬКО JSON: { queries: [{ query, platform, rationale, signal, negative_terms[], confidence }] }.',
+    userPromptTemplate:
+      'Бриф/ниша кампании: {{brief}}\nAJTBD (если есть): {{ajtbd}}\nПлатформа (если задана, иначе null — фанаут по всем): {{platform}}\nГео: {{geo}}\nЯзык: {{language}}\nМаксимум запросов (бюджет): {{max_queries}}\n\nСоставь план поиска. Верни JSON: { queries: [...] }. Запросы — плейн-текст ниши, без site:/операторов.',
+    params: { temperature: 0.4, max_tokens: 1000 },
+    version: 1,
+  },
+  {
+    // Blogger discovery reviewer (ajtbd-guided-blogger-discovery, task 2.4).
+    // Scores ONE enriched candidate against the AJTBD/brief; evidence is
+    // grounded deterministically against supplied public posts (the agent
+    // drops fabricated citations and never invents reach/price/contacts).
+    name: 'blogger_discovery_reviewer',
+    role: 'blogger-discovery-review',
+    description:
+      'Оценивает кандидата-блогера под AJTBD/бриф: score, рекомендация, обоснование, риски и доказательные посты (только из публичных данных, без выдумок).',
+    model: 'anthropic/claude-haiku-4.5',
+    systemPrompt:
+      'Ты — медиабайер агентства. Тебе дают бриф/AJTBD кампании и ОДНОГО кандидата-блогера: публичные данные канала (название, описание, подписчики, язык), уже известный профиль (темы/языки/форматы, если есть) и последние ПУБЛИЧНЫЕ посты. Оцени соответствие брифу. Возвращай JSON: { score, recommendation, rationale, risk_notes[], evidence[], insufficient_evidence_reason }. ПРАВИЛА: recommendation — strong_fit|possible_fit|weak_fit|reject; score 0..1 согласуй с рекомендацией (strong ≥0.75; possible 0.5–0.75; weak 0.25–0.5; reject <0.25); evidence — ТОЛЬКО из переданных recent_posts, каждый: post_id (ровно данный id или null), date, snippet (ДОСЛОВНЫЙ фрагмент), urls, why (почему подтверждает соответствие); НИКОГДА не выдумывай посты, охваты, цены, контакты, прошлые интеграции — если данных нет, не пиши их (можешь предложить scrape в risk_notes); если постов нет/недостаточно — evidence: [], заполни insufficient_evidence_reason и не ставь strong_fit; rationale — короткое объяснение со ссылкой на тему/аудиторию/формат; risk_notes — конкретные риски. Возвращай ТОЛЬКО JSON.',
+    userPromptTemplate:
+      'Бриф/ниша: {{brief}}\nAJTBD (если есть): {{ajtbd}}\n\nКандидат:\n{{candidate}}\n\nПоследние публичные посты (id | дата | текст):\n{{posts_text}}\n\nОцени кандидата. Верни JSON. evidence — только из переданных постов, snippet — verbatim.',
+    params: { temperature: 0.2, max_tokens: 900 },
     version: 1,
   },
 ];

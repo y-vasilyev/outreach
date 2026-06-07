@@ -25,6 +25,15 @@ export {
 } from './discovery/extractCandidates.js';
 export { buildDiscoverySearchQueries } from './discovery/searchQueries.js';
 export {
+  executePlannedSearches,
+  type DiscoverySearchClient,
+  type PlannedSearchInput,
+  type TraceableCandidate,
+  type SearchQueryTrace,
+  type ExecuteSearchResult,
+  type ExecuteSearchOptions,
+} from './discovery/executeSearch.js';
+export {
   ScrapeCreatorsClient,
   type ScrapeCreatorsClientOptions,
   type InstagramProfile,

@@ -1,5 +1,12 @@
 import { ApiError } from '../../lib/api';
-import type { DiscoveryBatchStatus, DiscoveryBatchStatusEnum } from './types';
+import type {
+  DiscoveryBatchStatus,
+  DiscoveryBatchStatusEnum,
+  GuidedRunDetail,
+  GuidedRunStatusEnum,
+  CandidateRecommendation,
+  CandidateEnrichmentStatus,
+} from './types';
 
 /**
  * Pure helpers extracted from DiscoveryBatchStatusPage so the polling
@@ -65,4 +72,68 @@ export function batchProgress(totals: { processed: number; queries: number } | u
   if (!totals || totals.queries === 0) return 0;
   const raw = totals.processed / totals.queries;
   return Math.max(0, Math.min(1, raw));
+}
+
+// ─── Guided blogger discovery helpers ───
+
+/**
+ * Refetch cadence for a guided run detail. Stops on terminal status or
+ * irrecoverable HTTP (403/404), else polls every 2.5s (the worker writes a
+ * trace event per stage, so a tighter-than-batch cadence keeps the live log
+ * feeling responsive without hammering the API).
+ */
+export function guidedPollInterval(
+  data: GuidedRunDetail | undefined,
+  err: unknown,
+): PollResult {
+  if (err instanceof ApiError && (err.status === 403 || err.status === 404)) {
+    return false;
+  }
+  if (!data) return 2500;
+  return data.status === 'done' || data.status === 'failed' ? false : 2500;
+}
+
+/** Map a guided run status to the existing pill tone vocabulary. */
+export function guidedStatusPill(s: GuidedRunStatusEnum): PillTone {
+  if (s === 'done') return 'ok';
+  if (s === 'failed') return 'bad';
+  if (s === 'running') return 'accent';
+  return 'ghost';
+}
+
+/** Map a candidate recommendation to a pill tone. */
+export function recommendationPill(r: CandidateRecommendation | null): PillTone {
+  if (r === 'strong_fit') return 'ok';
+  if (r === 'possible_fit') return 'accent';
+  if (r === 'reject') return 'bad';
+  return 'ghost'; // weak_fit / null
+}
+
+/** Human label for a recommendation (null → "—"). */
+export function recommendationLabel(r: CandidateRecommendation | null): string {
+  switch (r) {
+    case 'strong_fit':
+      return 'сильный';
+    case 'possible_fit':
+      return 'возможный';
+    case 'weak_fit':
+      return 'слабый';
+    case 'reject':
+      return 'отказ';
+    default:
+      return '—';
+  }
+}
+
+/** Map an enrichment status to a pill tone. */
+export function enrichmentPill(s: CandidateEnrichmentStatus): PillTone {
+  if (s === 'enriched') return 'ok';
+  if (s === 'needs_scrape') return 'bad';
+  return 'ghost'; // new / pending_enrichment
+}
+
+/** Format a candidate score (0..1) as a percentage, or "—" when unscored. */
+export function scoreLabel(score: number | null): string {
+  if (score == null) return '—';
+  return `${Math.round(Math.max(0, Math.min(1, score)) * 100)}%`;
 }
