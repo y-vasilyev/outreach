@@ -72,7 +72,12 @@ export interface MessageAttachment {
   bytes?: number;
   /** MediaAsset.id when bytes landed in S3 — fetch a presigned GET via API. */
   assetId?: string;
+  /** OCR status of the attachment (attachment-ocr-ingestion): распознано/не удалось. */
+  ocrStatus?: 'pending' | 'processing' | 'ok' | 'failed' | 'unsupported' | null;
 }
+
+/** Per-message extraction status (operator-reanalyze-and-markup). */
+export type ExtractionStatus = 'pending' | 'ok' | 'empty' | 'no_signal' | 'failed';
 
 export interface ChatMessage {
   id: string;

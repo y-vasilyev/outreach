@@ -61,6 +61,8 @@ export interface MediaAsset {
   kind: string;
   mime: string | null;
   bytes: number | null;
+  /** OCR status (attachment-ocr-ingestion). */
+  ocrStatus?: 'pending' | 'processing' | 'ok' | 'failed' | 'unsupported' | null;
   createdAt: string;
 }
 

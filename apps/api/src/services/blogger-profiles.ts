@@ -118,6 +118,13 @@ function serializePostInsight(
       ? row.source
       : 'manual_import') as BloggerPostInsight['source'],
     sourceRawRef: row.sourceRawRef ?? null,
+    // Post-example image (blogger-profile-who-is-this): expose a boolean +
+    // status, never the s3 key. The UI fetches the URL via a dedicated route.
+    hasImage: Boolean((row as { imageS3Key?: string | null }).imageS3Key) &&
+      (row as { imageStatus?: string | null }).imageStatus === 'ok',
+    imageStatus: ((row as { imageStatus?: string | null }).imageStatus ?? null) as
+      | BloggerPostInsight['imageStatus']
+      | null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };

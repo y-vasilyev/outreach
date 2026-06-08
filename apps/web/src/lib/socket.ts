@@ -86,6 +86,12 @@ export interface RealtimeEvents {
       createdAt: string;
     };
   };
+  'message.extraction_status.changed': {
+    conversationId: string;
+    messageId: string;
+    extractionStatus: 'pending' | 'ok' | 'empty' | 'no_signal' | 'failed';
+    extractionError?: string | null;
+  };
   'suggestion.new': { conversationId: string; suggestionId: string };
   'suggestion.approved': { conversationId: string; suggestionId: string; auto?: boolean };
   'status.changed': { conversationId: string; status: string };

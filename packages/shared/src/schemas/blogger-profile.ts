@@ -67,6 +67,9 @@ export const BloggerPostInsightZ = z.object({
   metricCapturedAt: z.string().nullable(),
   source: BloggerPostInsightSourceZ,
   sourceRawRef: z.string().nullable().optional(),
+  /** Post-example image (blogger-profile-who-is-this). `hasImage` hides the s3 key. */
+  hasImage: z.boolean().optional(),
+  imageStatus: z.enum(['pending', 'processing', 'ok', 'failed', 'unsupported']).nullable().optional(),
   freshness: PostMetricFreshnessZ,
   performanceScore: z.number().min(0).max(1),
   createdAt: z.string(),
@@ -86,6 +89,8 @@ export const BloggerPostInsightPreviewZ = BloggerPostInsightZ.pick({
   metrics: true,
   metricCapturedAt: true,
   source: true,
+  hasImage: true,
+  imageStatus: true,
   freshness: true,
   performanceScore: true,
 });

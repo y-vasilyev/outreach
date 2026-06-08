@@ -8,13 +8,16 @@ import {
 } from '@nosquare/shared';
 
 import { operatorMarkupService } from '../services/operator-markup.js';
+import { requireFeature } from '../require-feature.js';
 
 /**
  * Operator re-analysis + markup routes (operator-reanalyze-and-markup).
  * Re-run extraction, correct profile data points, and manage extraction hints.
- * Operator/admin only.
+ * Operator/admin only, and behind the `agency_sourcing` feature (these surfaces
+ * only make sense for the agency-sourcing catalog pipeline).
  */
 export async function operatorMarkupRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireFeature('agency_sourcing'));
   app.addHook('onRequest', app.authenticate);
 
   // Re-run extraction for one inbound message (supersede prior rows).

@@ -2,6 +2,7 @@ import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   HeadBucketCommand,
   CreateBucketCommand,
 } from '@aws-sdk/client-s3';
@@ -58,6 +59,19 @@ export class ObjectStore {
         ...(contentType ? { ContentType: contentType } : {}),
       }),
     );
+  }
+
+  /**
+   * Cheap existence check (blogger-profile-who-is-this) — a HEAD, no bytes.
+   * Returns false when the object is missing, true when present.
+   */
+  async headObject(key: string): Promise<boolean> {
+    try {
+      await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**

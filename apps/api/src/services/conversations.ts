@@ -235,7 +235,9 @@ export const conversationsService = {
       const assets = m.mediaAssets;
       const enriched = att.map((a, i) => {
         const asset = assets[i];
-        return asset ? { ...a, assetId: asset.id } : a;
+        // Thread the OCR status onto the attachment so the inbox can show a
+        // «распознано/не удалось» chip (blogger-profile-who-is-this / #4).
+        return asset ? { ...a, assetId: asset.id, ocrStatus: asset.ocrStatus } : a;
       });
       const { mediaAssets: _omit, ...rest } = m;
       return { ...rest, attachments: enriched };

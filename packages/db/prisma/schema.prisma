@@ -844,6 +844,12 @@ model BloggerPostInsight {
   metricCapturedAt DateTime?      @map("metric_captured_at")
   source           String
   sourceRawRef     String?        @map("source_raw_ref")
+  // Post-example preview image (blogger-profile-who-is-this). For Telegram the
+  // public post photo is stored to S3 under `imageS3Key`; for YouTube
+  // `imageS3Key` holds a public thumbnail URL (served directly). `imageStatus`
+  // ∈ pending|ok|failed|unsupported drives the UI + the on-demand repair.
+  imageS3Key       String?        @map("image_s3_key")
+  imageStatus      String?        @default("pending") @map("image_status")
   createdAt        DateTime       @default(now()) @map("created_at")
   updatedAt        DateTime       @updatedAt @map("updated_at")
 

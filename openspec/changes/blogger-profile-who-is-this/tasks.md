@@ -1,8 +1,8 @@
 ## 1. DB + schema (packages/db, packages/shared)
 
-- [ ] 1.1 Add `imageS3Key String? @map("image_s3_key")` + `imageStatus String? @default("pending") @map("image_status")` to `BloggerPostInsight`.
-- [ ] 1.2 Migration `9e_blogger_post_images` (after `9d_*`); `pnpm db:migrate`.
-- [ ] 1.3 `BloggerPostInsightZ`/preview schema: add `hasImage: boolean` + `imageStatus` (never expose the raw s3 key).
+- [x] 1.1 Add `imageS3Key String? @map("image_s3_key")` + `imageStatus String? @default("pending") @map("image_status")` to `BloggerPostInsight`.
+- [x] 1.2 Migration `9e_blogger_post_images` (after `9d_*`); `pnpm db:migrate`.
+- [x] 1.3 `BloggerPostInsightZ`/preview schema: add `hasImage: boolean` + `imageStatus` (never expose the raw s3 key).
 
 ## 2. Platform media contract + Telegram public downloader (packages/platforms, packages/tg-client, apps/workers)
 
@@ -13,10 +13,10 @@
 
 ## 3. API: image endpoint + read + DTO threading (apps/api)
 
-- [ ] 3.0 Add `ObjectStore.headObject(key): Promise<boolean>` (cheap existence check).
+- [x] 3.0 Add `ObjectStore.headObject(key): Promise<boolean>` (cheap existence check).
 - [ ] 3.1 `GET /blogger-post-insights/:id/image-url`: 404 insight-missing; 409 unsupported/no-image/storage-off; YouTube → return the public thumbnail URL; Telegram → headObject + presign, else repair via `downloadPublicPostMedia` then presign (502 on refetch failure).
-- [ ] 3.2 Profile read: `hasImage`/`imageStatus` on top posts (never the key); thread `ocrStatus` into message `attachments` enrichment (`conversations.getMessages` copies only `assetId` today) and profile media DTO.
-- [ ] 3.3 Add `requireFeature('agency_sourcing')` to `operatorMarkupRoutes` (drift fix: they were role-gated only, but the operator-reanalyze-and-markup spec said agency-gated).
+- [x] 3.2 Profile read: `hasImage`/`imageStatus` on top posts (never the key); thread `ocrStatus` into message `attachments` enrichment (`conversations.getMessages` copies only `assetId` today) and profile media DTO.
+- [x] 3.3 Add `requireFeature('agency_sourcing')` to `operatorMarkupRoutes` (drift fix: they were role-gated only, but the operator-reanalyze-and-markup spec said agency-gated).
 - [ ] 3.4 Tests: image-url presigns when present; missing Telegram object triggers repair; unsupported → 409; ocrStatus present on a message attachment.
 
 ## 4. Web: profile card (apps/web)
