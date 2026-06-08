@@ -43,7 +43,7 @@ export function startFollowupScheduler() {
           ...(c.campaignId ? { campaignId: c.campaignId } : {}),
         },
         {
-          jobId: `followup_check:${c.id}`,
+          jobId: `followup_check-${c.id}`,
           attempts: 2,
           removeOnComplete: true,
           removeOnFail: true,
