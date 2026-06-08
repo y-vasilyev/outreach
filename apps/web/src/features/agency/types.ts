@@ -41,6 +41,15 @@ export interface PlacementOffer {
   capturedAt: string | null;
 }
 
+// Per-platform audience size (placement-representation-v2). Mirror of
+// packages/shared/src/schemas/blogger-profile.ts (PlatformAudienceEntry).
+export interface PlatformAudienceEntry {
+  platform: string;
+  subscribers: number;
+  source: 'reply' | 'scrapecreators' | 'manual_import';
+  capturedAt: string | null;
+}
+
 export interface Audience {
   age?: Record<string, number>;
   gender?: Record<string, number>;
@@ -132,6 +141,7 @@ export interface BloggerProfile {
   audience: Audience;
   rateCards: RateCard[];
   placementOffers?: PlacementOffer[];
+  platformAudience?: PlatformAudienceEntry[];
   reach: number | null;
   avgViews: number | null;
   capturedAt: string | null;

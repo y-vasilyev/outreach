@@ -8,7 +8,12 @@ import {
   placementOffersToFormats,
   placementOffersToRateCards,
 } from './placement-offers.js';
-import type { Audience, BloggerProfile, RateCard } from './schemas/blogger-profile.js';
+import type {
+  Audience,
+  BloggerProfile,
+  PlatformAudienceEntry,
+  RateCard,
+} from './schemas/blogger-profile.js';
 
 /**
  * Deterministic blogger-profile roll-up (agency-sourcing-matching M5, task 5.3).
@@ -55,6 +60,7 @@ export type RolledUpProfileFields = Pick<
   | 'audience'
   | 'rateCards'
   | 'placementOffers'
+  | 'platformAudience'
   | 'reach'
   | 'avgViews'
   | 'capturedAt'
@@ -167,14 +173,21 @@ interface CollectedOffer {
  * Stable identity for an offer: two offers with the same platform/kind/duration/
  * price/currency/snippet are the *same* offer (e.g. re-quoted in two messages).
  * A day post vs a month post differ on `duration`, so they never collapse.
+ * `tariff_name`/`slot` are part of the identity too (placement-representation-v2)
+ * so two SAME-price slots of one tariff stay distinct without touching the
+ * derived `rate.<format>` key.
  */
 function offerDedupeKey(offer: PlacementOffer): string {
   const duration = getOfferAttribute(offer, 'duration');
   const durationStr = typeof duration === 'string' ? duration.toLowerCase() : '';
+  const tariff = getOfferAttribute(offer, 'tariff_name');
+  const slot = getOfferAttribute(offer, 'slot');
   return [
     (offer.platform ?? '').toLowerCase(),
     offer.kind.toLowerCase(),
     durationStr,
+    typeof tariff === 'string' ? tariff.toLowerCase() : '',
+    typeof slot === 'string' ? slot.toLowerCase() : '',
     offer.price ?? '',
     (offer.currency ?? '').toLowerCase(),
     offer.rawSnippet.trim(),
@@ -316,6 +329,32 @@ export function rollUpProfileFields(points: RollupDataPoint[]): RolledUpProfileF
   if (age) audience.age = age;
   if (gender) audience.gender = gender;
 
+  // ── Per-platform audience (placement-representation-v2): one entry per
+  // platform, from `audience.subscribers.<platform>` points, latest-high-
+  // confidence per platform. Distinct from the scalar `reach`. ──
+  const platformAudience: PlatformAudienceEntry[] = [];
+  const subsByPlatform = new Map<string, RollupDataPoint[]>();
+  for (const p of points) {
+    const m = /^audience\.subscribers\.([a-z0-9_]+)$/.exec(p.field);
+    if (!m) continue;
+    const platform = m[1]!;
+    const arr = subsByPlatform.get(platform) ?? [];
+    arr.push(p);
+    subsByPlatform.set(platform, arr);
+  }
+  for (const [platform, pts] of [...subsByPlatform.entries()].sort()) {
+    const chosen = byConfidenceThenRecency(pts).find((p) => toFiniteNumber(p.value) !== undefined);
+    const subscribers = chosen ? toFiniteNumber(chosen.value) : undefined;
+    if (subscribers === undefined) continue;
+    const at = chosen!.capturedAt;
+    platformAudience.push({
+      platform,
+      subscribers: Math.round(subscribers),
+      source: 'reply',
+      capturedAt: at instanceof Date ? at.toISOString() : String(at),
+    });
+  }
+
   // ── Topics / languages / formats: union of all values (these accumulate
   // rather than overwrite — a blogger genuinely has multiple). Deduped,
   // order-stable by first appearance in latest-high-confidence order. ──
@@ -359,6 +398,7 @@ export function rollUpProfileFields(points: RollupDataPoint[]): RolledUpProfileF
     audience,
     rateCards,
     placementOffers,
+    platformAudience,
     reach: reach ?? null,
     avgViews: avgViews ?? null,
     capturedAt,

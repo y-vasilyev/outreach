@@ -355,6 +355,8 @@ export async function handleProfileExtract(data: {
         // `placementOffers` (harden-reply-extraction D3), so the catalog is
         // structurally complete regardless of the matching/planner-preference flag.
         placementOffers: rolled.placementOffers as never,
+        // Per-platform audience sizes (placement-representation-v2).
+        platformAudience: rolled.platformAudience as never,
       },
     });
 

@@ -61,7 +61,7 @@ const FALLBACK_SYSTEM = `Ты извлекаешь ПРАЙС за реклам�
 - platform — площадка: telegram, youtube, instagram, vk, tiktok (или null, если не указана).
 - price — ЧИСЛО (цена), без валюты и пробелов. "47 000" → 47000, "15к"/"15k" → 15000, "1.2к" → 1200. null, если цена не указана.
 - currency — "RUB" (руб/₽/р по умолчанию для русского), "USD" ($), "EUR" (€).
-- attributes — массив типизированных атрибутов { key, value, confidence, rawSnippet }. Допустимые key из активного реестра: duration (enum day/week/month/permanent — "сутки"→day, "месяц"→month), delete_policy (enum deleted/permanent — "без удаления"→permanent), includes (список строк — "входит ...", "+ доп пост"), tax (строка — НАЛОГ как атрибут, напр. "налог 6%"; НИКОГДА не делай налог отдельным размещением или ценой), notes (строка — прочие условия: "первый слот", "60-120 секунд").
+- attributes — массив типизированных атрибутов { key, value, confidence, rawSnippet }. Допустимые key из активного реестра: duration (enum day/week/month/permanent — "сутки"→day, "месяц"→month), delete_policy (enum deleted/permanent — "без удаления"→permanent), includes (список строк — "входит ...", "+ доп пост"), tax (строка — НАЛОГ как атрибут, напр. "налог 6%"; можно НЕСКОЛЬКО tax если налогов несколько; НИКОГДА не делай налог отдельным размещением или ценой), notes (строка — прочие условия), tariff_name (строка — название тарифа: "Основной", "Продвинутый"), slot (строка — слот/позиция: "1", "2"), price_period (enum base/seasonal/promo — обычная цена→base, "цена июня"/сезон→seasonal, акция→promo), prepayment (строка — "100%", "50/50"), tax_regime (enum ip/self_employed/ooo/none — "ИП"→ip, "самозанятый"→self_employed), tax_included (boolean — "налог включён"→true), top_pin_hours (число — часы в топе: 24, 72), package_items (список строк — состав пакета; пакет это kind=package с ценой пакета в price).
 - confidence — 0..1. Явное размещение с ценой → 0.9+. Неясный формат → 0.4–0.6. Пакет/двусмысленно → kind='package' или 'other' с НИЗКИМ confidence (≤0.5), но ВСЁ РАВНО верни (не выбрасывай).
 - rawSnippet — ДОСЛОВНЫЙ фрагмент-источник (verbatim, не перефразируй).
 
@@ -251,9 +251,13 @@ export const rateCardExtractor: Agent<RateCardExtractorInput, RateCardExtractorO
 
 const PLACEMENT_DEDUPE = (offer: PlacementOfferDraft): string => {
   const duration = offer.attributes.find((a) => a.key === 'duration')?.value ?? '';
+  const tariff = offer.attributes.find((a) => a.key === 'tariff_name')?.value ?? '';
+  const slot = offer.attributes.find((a) => a.key === 'slot')?.value ?? '';
   return `${(offer.platform ?? '').toLowerCase()}:${offer.kind.toLowerCase()}:${String(
     duration,
-  ).toLowerCase()}:${offer.price ?? ''}:${offer.rawSnippet.trim().toLowerCase()}`;
+  ).toLowerCase()}:${String(tariff).toLowerCase()}:${String(slot).toLowerCase()}:${
+    offer.price ?? ''
+  }:${offer.rawSnippet.trim().toLowerCase()}`;
 };
 
 /**

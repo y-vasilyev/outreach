@@ -118,6 +118,75 @@ export const PLACEMENT_ATTRIBUTE_REGISTRY_V1: PlacementAttributeRegistryEntry[] 
     requiredForKinds: [],
     active: true,
   },
+  // ── Registry v2 (placement-representation-v2). All requiredForKinds: [] so
+  // they NEVER add data-collection-planner follow-ups by default; they exist to
+  // give common commercial terms a typed, comparable home. ──
+  {
+    key: 'tariff_name',
+    valueType: 'string',
+    description: 'Название тарифа/пакета как у блогера (напр. «Основной», «Продвинутый»)',
+    applicableKinds: [],
+    requiredForKinds: [],
+    active: true,
+  },
+  {
+    key: 'slot',
+    valueType: 'string',
+    description: 'Слот/позиция размещения в тарифе (напр. «1», «2», «первый»)',
+    applicableKinds: [],
+    requiredForKinds: [],
+    active: true,
+  },
+  {
+    key: 'price_period',
+    valueType: 'enum',
+    description: 'Период действия цены: базовая, сезонная или акционная',
+    applicableKinds: [],
+    enumValues: ['base', 'seasonal', 'promo'],
+    requiredForKinds: [],
+    active: true,
+  },
+  {
+    key: 'prepayment',
+    valueType: 'string',
+    description: 'Условия предоплаты как указано (напр. «100%», «50/50»)',
+    applicableKinds: [],
+    requiredForKinds: [],
+    active: true,
+  },
+  {
+    key: 'tax_regime',
+    valueType: 'enum',
+    description: 'Налоговый режим блогера (ИП, самозанятый, ООО, нет)',
+    applicableKinds: [],
+    enumValues: ['ip', 'self_employed', 'ooo', 'none'],
+    requiredForKinds: [],
+    active: true,
+  },
+  {
+    key: 'tax_included',
+    valueType: 'boolean',
+    description: 'Включён ли налог в цену («налог включён» → true, «+ налог сверху» → false)',
+    applicableKinds: [],
+    requiredForKinds: [],
+    active: true,
+  },
+  {
+    key: 'top_pin_hours',
+    valueType: 'number',
+    description: 'Часы закрепа в топе для top-pin размещений (напр. 24, 72)',
+    applicableKinds: ['post'],
+    requiredForKinds: [],
+    active: true,
+  },
+  {
+    key: 'package_items',
+    valueType: 'string_list',
+    description: 'Состав пакета/бандла (форматы, входящие в пакетную цену offer.price при kind=package)',
+    applicableKinds: ['package'],
+    requiredForKinds: [],
+    active: true,
+  },
 ];
 
 /** Attribute keys promoted to top-level offer fields (not stored in `attributes[]`). */

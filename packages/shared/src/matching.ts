@@ -1,5 +1,10 @@
 import type { AdBrief } from './schemas/matching.js';
-import type { Audience, BloggerProfile, RateCard } from './schemas/blogger-profile.js';
+import type {
+  Audience,
+  BloggerProfile,
+  PlatformAudienceEntry,
+  RateCard,
+} from './schemas/blogger-profile.js';
 import type { PlacementOffer } from './schemas/placement-offer.js';
 import { getOfferAttribute, getOfferAttributes } from './placement-offers.js';
 
@@ -34,6 +39,8 @@ export type MatchableProfile = Pick<
   'id' | 'topics' | 'languages' | 'formats' | 'audience' | 'rateCards' | 'reach' | 'avgViews'
 > & {
   placementOffers?: PlacementOffer[];
+  /** Per-platform audience sizes (placement-representation-v2). */
+  platformAudience?: PlatformAudienceEntry[];
 };
 
 /**
@@ -342,6 +349,8 @@ interface OfferTerms {
   price: number | null;
   /** All stated taxes (an offer can carry stacked taxes, e.g. ИП 8% + реклама 3%). */
   tax: string[];
+  /** base | seasonal | promo (placement-representation-v2); undefined = base. */
+  pricePeriod?: string;
 }
 
 function readOfferTerms(offer: PlacementOffer): OfferTerms {
@@ -365,6 +374,7 @@ function readOfferTerms(offer: PlacementOffer): OfferTerms {
   }
   const tax = getOfferAttributes(offer, 'tax')
     .filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
+  const pp = getOfferAttribute(offer, 'price_period');
   return {
     platform,
     kind,
@@ -374,6 +384,7 @@ function readOfferTerms(offer: PlacementOffer): OfferTerms {
     deliverables,
     price: typeof offer.price === 'number' && Number.isFinite(offer.price) ? offer.price : null,
     tax,
+    ...(typeof pp === 'string' ? { pricePeriod: pp } : {}),
   };
 }
 
@@ -463,12 +474,26 @@ export function structuredPlacementScore(
     const sd = s.terms.isPermanent ? PERMANENT_RANK : (s.terms.durationRank ?? 0);
     const bd = best.terms.isPermanent ? PERMANENT_RANK : (best.terms.durationRank ?? 0);
     if (sd !== bd) { if (sd > bd) best = s; continue; }
+    // Prefer the base price over a seasonal/promo variant of an otherwise
+    // equal offer (placement-representation-v2), so the reported price is the
+    // stable one rather than a temporary markup/discount.
+    const sBase = !s.terms.pricePeriod || s.terms.pricePeriod === 'base';
+    const bBase = !best.terms.pricePeriod || best.terms.pricePeriod === 'base';
+    if (sBase !== bBase) { if (sBase) best = s; continue; }
     const sp = s.terms.price ?? Infinity;
     const bp = best.terms.price ?? Infinity;
     if (sp < bp) best = s;
   }
 
-  const relevantPrices = relevant
+  // Budget against STABLE prices: if any relevant offer is a base-period price,
+  // use only base prices (a temporary promo/seasonal variant must not let a
+  // candidate pass budget on a discount, nor fail on a markup). Fall back to all
+  // relevant prices only when no base exists (placement-representation-v2).
+  const baseRelevant = relevant.filter(
+    (s) => !s.terms.pricePeriod || s.terms.pricePeriod === 'base',
+  );
+  const priceSource = baseRelevant.length > 0 ? baseRelevant : relevant;
+  const relevantPrices = priceSource
     .map((s) => s.terms.price)
     .filter((p): p is number => typeof p === 'number' && Number.isFinite(p) && p > 0);
 
@@ -489,6 +514,8 @@ function describeOfferTerms(terms: OfferTerms): string {
   if (terms.isPermanent) bits.push('бессрочно');
   else if (terms.durationLabel) bits.push(DURATION_LABEL[terms.durationLabel] ?? terms.durationLabel);
   if (terms.deliverables.length > 0) bits.push(`включает: ${terms.deliverables.join(', ')}`);
+  if (terms.pricePeriod === 'seasonal') bits.push('сезонная цена');
+  else if (terms.pricePeriod === 'promo') bits.push('акция');
   for (const t of terms.tax) bits.push(t);
   return bits.join(', ');
 }
@@ -677,10 +704,28 @@ export function rankProfiles(
   const byId = new Map(profiles.map((p) => [p.id, p]));
   const shortlisted = prefilter(brief, profiles, opts);
   const scored = shortlisted.map((p) => scoreProfile(brief, p, opts));
+  // When the brief targets a specific platform, break ties by THAT platform's
+  // audience (placement-representation-v2) so a blogger strong on the requested
+  // platform outranks one with bigger total reach elsewhere; else scalar reach.
+  const wants = parseBriefPlacementWants(brief);
+  const audienceSignal = (profileId: string): number => {
+    const p = byId.get(profileId);
+    if (!p) return 0;
+    if (wants.platform) {
+      // Platform-targeted: rank by THAT platform's audience only. A profile with
+      // no data for the requested platform scores 0 here (its large reach on a
+      // DIFFERENT platform must not win), so proven on-platform audience wins.
+      const entry = (p.platformAudience ?? []).find(
+        (e) => e.platform.toLowerCase() === wants.platform,
+      );
+      return entry?.subscribers ?? 0;
+    }
+    return p.reach ?? 0;
+  };
   scored.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
-    const ra = byId.get(a.profileId)?.reach ?? 0;
-    const rb = byId.get(b.profileId)?.reach ?? 0;
+    const ra = audienceSignal(a.profileId);
+    const rb = audienceSignal(b.profileId);
     if (rb !== ra) return rb - ra;
     return a.profileId.localeCompare(b.profileId);
   });

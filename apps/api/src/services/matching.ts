@@ -15,6 +15,7 @@ import {
   RateCardZ,
   AudienceZ,
   PlacementOfferZ,
+  PlatformAudienceEntryZ,
   type AdBrief,
   type BloggerPostInsight,
   type CatalogFit,
@@ -23,6 +24,7 @@ import {
   type RateCard,
   type Audience,
   type PlacementOffer,
+  type PlatformAudienceEntry,
 } from '@nosquare/shared';
 import type { CreateAdBriefInput } from '@nosquare/shared';
 
@@ -84,6 +86,16 @@ function parsePlacementOffers(value: unknown): PlacementOffer[] {
   return out;
 }
 
+function parsePlatformAudience(value: unknown): PlatformAudienceEntry[] {
+  const arr = Array.isArray(value) ? value : [];
+  const out: PlatformAudienceEntry[] = [];
+  for (const item of arr) {
+    const parsed = PlatformAudienceEntryZ.safeParse(item);
+    if (parsed.success) out.push(parsed.data);
+  }
+  return out;
+}
+
 function toMatchable(p: DbBloggerProfile): MatchableProfile {
   return {
     id: p.id,
@@ -93,6 +105,7 @@ function toMatchable(p: DbBloggerProfile): MatchableProfile {
     audience: parseAudience(p.audience),
     rateCards: parseRateCards(p.rateCards),
     placementOffers: parsePlacementOffers((p as { placementOffers?: unknown }).placementOffers),
+    platformAudience: parsePlatformAudience((p as { platformAudience?: unknown }).platformAudience),
     reach: p.reach ?? null,
     avgViews: p.avgViews ?? null,
   };

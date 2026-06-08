@@ -112,6 +112,19 @@ export const AudienceZ = z
   .partial()
   .default({});
 
+/**
+ * One platform's audience size (placement-representation-v2). Composed from
+ * `audience.subscribers.<platform>` data points; distinct from the scalar
+ * `reach`/`avgViews` so a multi-platform blogger is comparable per platform.
+ */
+export const PlatformAudienceEntryZ = z.object({
+  platform: z.string().min(1),
+  subscribers: z.number().int().nonnegative(),
+  source: z.enum(['reply', 'scrapecreators', 'manual_import']).default('reply'),
+  capturedAt: z.string().nullable().default(null),
+});
+export type PlatformAudienceEntry = z.infer<typeof PlatformAudienceEntryZ>;
+
 export const BloggerProfileZ = z.object({
   id: z.string(),
   channelId: z.string().nullable(),
@@ -128,6 +141,8 @@ export const BloggerProfileZ = z.object({
    * these for compatibility when structured offers exist.
    */
   placementOffers: z.array(PlacementOfferZ).default([]),
+  /** Per-platform audience sizes (placement-representation-v2). */
+  platformAudience: z.array(PlatformAudienceEntryZ).default([]),
   reach: z.number().int().nullable(),
   avgViews: z.number().int().nullable(),
   capturedAt: z.string().nullable(),

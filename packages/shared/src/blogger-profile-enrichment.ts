@@ -500,6 +500,43 @@ function makeAttr(
   return { key, value, confidence, rawSnippet };
 }
 
+const RU_MONTHS =
+  /(январ|феврал|март|апрел|ма[йя]|июн|июл|август|сентябр|октябр|ноябр|декабр)/iu;
+
+/**
+ * Line-level v2 attributes (placement-representation-v2) that apply to an
+ * offer on the line: `price_period` (seasonal — «цена июня»/«акция»),
+ * `tax_regime` (ip), `tax_included` (включён), `prepayment` («100% предоплата»),
+ * `slot` («слот 2»). Best-effort + only on unambiguous phrasing; the LLM covers
+ * the long tail. Returns an empty array when none apply.
+ */
+function v2LineAttributes(line: string): PlacementAttribute[] {
+  const l = line.toLowerCase();
+  const out: PlacementAttribute[] = [];
+  // «цена июня» / «цена на июль» → seasonal. (No \b — it does not bound
+  // Cyrillic month text in JS regex; rely on the month word being present.)
+  if (/цена/iu.test(l) && RU_MONTHS.test(l)) {
+    out.push(makeAttr('price_period', 'seasonal', line, 0.7));
+  } else if (/акци[яи]|сезонн/iu.test(l)) {
+    out.push(makeAttr('price_period', 'promo', line, 0.6));
+  }
+  // NB: \b is ASCII-only and does not bound Cyrillic, so match explicit
+  // non-letter boundaries around «ип»/«ооо».
+  if (/(^|[^\p{L}])ип([^\p{L}]|$)|индивидуальн[\p{L}]*\s+предприним/iu.test(l)) {
+    out.push(makeAttr('tax_regime', 'ip', line, 0.8));
+  } else if (/самозанят/iu.test(l)) {
+    out.push(makeAttr('tax_regime', 'self_employed', line, 0.8));
+  } else if (/(^|[^\p{L}])ооо([^\p{L}]|$)/iu.test(l)) {
+    out.push(makeAttr('tax_regime', 'ooo', line, 0.7));
+  }
+  if (/налог[а-яё\s]*включ/iu.test(l)) out.push(makeAttr('tax_included', true, line, 0.8));
+  const prepay = /(\d{1,3}\s*%|\d{1,2}\s*\/\s*\d{1,2})\s*предоплат/iu.exec(line);
+  if (prepay) out.push(makeAttr('prepayment', prepay[1]!.replace(/\s+/g, ''), line, 0.8));
+  const slot = /слот\s*[№#]?\s*(\d+|перв[а-яё]*|втор[а-яё]*)/iu.exec(line);
+  if (slot) out.push(makeAttr('slot', slot[1]!.toLowerCase(), line, 0.8));
+  return out;
+}
+
 interface OfferAccumulator {
   offers: PlacementOfferDraft[];
   seen: Set<string>;
@@ -507,9 +544,11 @@ interface OfferAccumulator {
 
 function pushOffer(acc: OfferAccumulator, offer: PlacementOfferDraft): void {
   const duration = offer.attributes.find((a) => a.key === 'duration')?.value ?? '';
-  const key = `${offer.platform ?? ''}:${offer.kind}:${String(duration)}:${
-    offer.price ?? ''
-  }:${offer.rawSnippet.trim().toLowerCase()}`;
+  const tariff = offer.attributes.find((a) => a.key === 'tariff_name')?.value ?? '';
+  const slot = offer.attributes.find((a) => a.key === 'slot')?.value ?? '';
+  const key = `${offer.platform ?? ''}:${offer.kind}:${String(duration)}:${String(tariff)}:${String(
+    slot,
+  )}:${offer.price ?? ''}:${offer.rawSnippet.trim().toLowerCase()}`;
   if (acc.seen.has(key)) return;
   acc.seen.add(key);
   acc.offers.push(offer);
@@ -547,6 +586,7 @@ function extractInlineOffersFromLine(
     if (lineDeletePolicy) attributes.push(makeAttr('delete_policy', lineDeletePolicy, line, 0.9));
     if (lineIncludes.length > 0) attributes.push(makeAttr('includes', lineIncludes, line, 0.85));
     for (const t of taxes) attributes.push(makeAttr('tax', t, t, 0.9));
+    attributes.push(...v2LineAttributes(line));
     pushOffer(acc, {
       kind: 'post',
       platform,
@@ -582,6 +622,7 @@ function extractInlineOffersFromLine(
           attributes.push(makeAttr('includes', lineIncludes, line, 0.85));
         }
         for (const t of taxes) attributes.push(makeAttr('tax', t, t, 0.9));
+        attributes.push(...v2LineAttributes(line));
         pushOffer(acc, {
           kind: 'offsite_review',
           platform: null,
@@ -613,6 +654,11 @@ function extractTableOffersFromLine(
   // A tax / bonus / stats header is NOT a priced placement — skip as an offer
   // (tax is carried as an attribute on real offers by the caller).
   if (/налог|бонус|статистик|скидк/i.test(label)) return;
+  // Guard against mis-merging a multi-row comma line ("A — 63600, B — 53000"):
+  // the lazy `.+?` would swallow the first row's price into the label and pair
+  // the wrong price. If the label still contains an em-dash+price, this is such
+  // a line — skip it (the LLM extractor handles named-tariff/slot tables).
+  if (/[—–]\s*\d/.test(label)) return;
   const price = parsePrice(m[2]!);
   if (price == null) return;
   const format = canonicalFormat(label, platform);
@@ -629,6 +675,7 @@ function extractTableOffersFromLine(
   if (/первый\s+слот|first\s+slot|\d+\s*-?\s*\d*\s*секунд/iu.test(label)) {
     attributes.push(makeAttr('notes', label, line, 0.8));
   }
+  attributes.push(...v2LineAttributes(line));
   pushOffer(acc, {
     kind,
     platform,
@@ -677,6 +724,7 @@ function extractLabeledOffersFromLine(
     if (lineDeletePolicy) attributes.push(makeAttr('delete_policy', lineDeletePolicy, line, 0.8));
     if (lineIncludes.length > 0) attributes.push(makeAttr('includes', lineIncludes, line, 0.8));
     for (const t of taxes) attributes.push(makeAttr('tax', t, t, 0.8));
+    attributes.push(...v2LineAttributes(line));
     pushOffer(acc, {
       kind,
       platform,
@@ -781,6 +829,13 @@ function extractCommaPairOffersFromLine(
     const format = `${fragPlatform ? `${fragPlatform}_` : ''}${word}`;
     const attributes: PlacementAttribute[] = [];
     for (const t of taxes) attributes.push(makeAttr('tax', t, t, 0.7));
+    // Fragment-level v2 attrs (e.g. slot) win over line-level; dedupe by key.
+    const seenV2 = new Set<string>();
+    for (const a of [...v2LineAttributes(frag), ...v2LineAttributes(line)]) {
+      if (seenV2.has(a.key)) continue;
+      seenV2.add(a.key);
+      attributes.push(a);
+    }
     candidates.push({
       kind: kindFromFormat(format),
       platform: fragPlatform,
@@ -854,8 +909,12 @@ function extractDurationLadderOffersFromLine(
     const dur = tier ? durationFromText(tier) : null;
     if (dur) attributes.push(makeAttr('duration', dur, tier!, 0.85));
     else if (tier) attributes.push(makeAttr('notes', `топ ${tier}`, frag, 0.8));
+    // top_pin_hours: the verbatim hour count of a top-pin tier (24ч/72ч).
+    const hourMatch = tier ? /^(\d+)\s*ч/iu.exec(tier) : null;
+    if (hourMatch) attributes.push(makeAttr('top_pin_hours', Number(hourMatch[1]), frag, 0.85));
     const dp = deletePolicyFromText(frag);
     if (dp) attributes.push(makeAttr('delete_policy', dp, frag, 0.85));
+    attributes.push(...v2LineAttributes(frag));
     const draft: PlacementOfferDraft = {
       kind: 'post',
       platform,
@@ -909,6 +968,43 @@ function extractPricePerUnitOffersFromLine(
   }
 }
 
+/**
+ * Package/bundle line, e.g. «Пакетное размещение - 50 тыс. оба формата». Emits a
+ * `kind=package` offer whose `price` is the package total and `package_items`
+ * lists the bundle composition (placement-representation-v2). The package total
+ * lives on `offer.price` (no separate `package_price`).
+ */
+function extractPackageOffersFromLine(
+  line: string,
+  platform: string | null,
+  acc: OfferAccumulator,
+): void {
+  if (!/пакетн|\bпакет\b/iu.test(line)) return;
+  const best = maxPriceInFragment(line);
+  if (!best || best.price < 1000) return;
+  const items: string[] = [];
+  if (/оба\s+формат/iu.test(line)) items.push('оба формата');
+  for (const [re, name] of [
+    [/фото/iu, 'фото'],
+    [/видео/iu, 'видео'],
+    [/сторис|stories/iu, 'сторис'],
+  ] as const) {
+    if (re.test(line) && !items.includes(name)) items.push(name);
+  }
+  const attributes: PlacementAttribute[] = [];
+  if (items.length > 0) attributes.push(makeAttr('package_items', items, line, 0.7));
+  attributes.push(...v2LineAttributes(line));
+  pushOffer(acc, {
+    kind: 'package',
+    platform,
+    price: best.price,
+    currency: best.currency,
+    attributes,
+    confidence: 0.8,
+    rawSnippet: line,
+  });
+}
+
 export function extractPlacementOffersFromText(text: string): PlacementOfferDraft[] {
   const acc: OfferAccumulator = { offers: [], seen: new Set<string>() };
   let platform: string | null = null;
@@ -931,6 +1027,13 @@ export function extractPlacementOffersFromText(text: string): PlacementOfferDraf
     if (isTopPinLine(line)) {
       const before = acc.offers.length;
       extractDurationLadderOffersFromLine(line, linePlatform, acc);
+      if (acc.offers.length > before) continue;
+    }
+    // Package/bundle lines route only to the package builder (a «Пакетное …»
+    // line is one offer, not per-format rows).
+    if (/пакетн|\bпакет\b/iu.test(line)) {
+      const before = acc.offers.length;
+      extractPackageOffersFromLine(line, linePlatform, acc);
       if (acc.offers.length > before) continue;
     }
     extractInlineOffersFromLine(line, linePlatform, acc);

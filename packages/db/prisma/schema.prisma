@@ -768,6 +768,12 @@ model BloggerProfile {
   // `placement.offer` ProfileDataPoint rows; `rateCards`/`formats` are derived
   // from these for compatibility. Shape mirrors `PlacementOfferZ[]` in shared.
   placementOffers Json @default("[]") @map("placement_offers")
+  // Per-platform audience sizes (placement-representation-v2). Rolled up from
+  // `audience.subscribers.<platform>` ProfileDataPoint rows; one entry per
+  // platform `{ platform, subscribers, source, capturedAt }`. Distinct from the
+  // single scalar `reach`/`avgViews` — a multi-platform blogger keeps a count
+  // per platform for catalog search/compare. Shape: PlatformAudienceEntryZ[].
+  platformAudience Json @default("[]") @map("platform_audience")
   reach      Int?
   avgViews   Int?      @map("avg_views")
   capturedAt DateTime? @map("captured_at")

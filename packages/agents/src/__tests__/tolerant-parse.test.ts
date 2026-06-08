@@ -34,7 +34,7 @@ describe('invokeJson tolerant element validation', () => {
     expect(out.items.map((i) => i.n)).toEqual([1, 3]);
     expect(out.note).toBe('x');
     expect(logger.warn).toHaveBeenCalledTimes(1);
-    expect((logger.warn as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+    expect((logger.warn as ReturnType<typeof vi.fn>).mock.calls[0]![0]).toMatchObject({
       event: 'extract.element_dropped',
       array: 'items',
     });
