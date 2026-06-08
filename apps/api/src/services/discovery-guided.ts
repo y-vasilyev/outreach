@@ -1,5 +1,5 @@
 import { getPrisma } from '@nosquare/db';
-import { AppError, Errors, extractAjtbdView } from '@nosquare/shared';
+import { AppError, Errors, extractAjtbdView, scoreContactPriority } from '@nosquare/shared';
 import {
   GuidedRunBudgetsZ,
   GuidedRunInputSnapshotZ,
@@ -447,7 +447,7 @@ async function launchCandidate(
   // warranted.
   const contacts = await prisma.contact.findMany({
     where: { channelId: candidate.channelId, roleGuess: { in: ['ad_manager', 'owner'] } },
-    select: { id: true },
+    select: { id: true, roleGuess: true, type: true, confidence: true },
   });
   if (contacts.length === 0) {
     throw Errors.badRequest(
@@ -455,9 +455,20 @@ async function launchCandidate(
     );
   }
 
+  // One outreach per channel, to its single best contact — same rule the
+  // autonomous dispatcher applies via `dedupeBestContactPerChannel`. An
+  // explicitly published ad/manager contact ("Реклама/сотр-во: @…",
+  // role_guess=ad_manager) must win over the channel owner's personal account
+  // (e.g. "Мама Оля https://t.me/…", role_guess=owner). Without this, launch
+  // added EVERY ad_manager+owner contact and `addContacts` created a chat per
+  // contact — so we DMed the personal owner alongside the ad manager.
+  const best = contacts.reduce((a, b) =>
+    scoreContactPriority(b) > scoreContactPriority(a) ? b : a,
+  );
+
   const result = await campaignsService.addContacts(
     campaignId,
-    contacts.map((c) => c.id),
+    [best.id],
     { prepareOnly: true },
   );
 

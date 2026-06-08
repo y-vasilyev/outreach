@@ -287,7 +287,9 @@ describe('discoveryGuidedService.candidateAction launch', () => {
     mocks.prisma.discoveryRunCandidate.findFirst.mockResolvedValue({ id: 'cand_1', channelId: 'ch_1', provenance: {}, decision: 'shortlisted' });
     mocks.prisma.discoveryRun.findUnique.mockResolvedValue({ campaignId: 'camp_run' });
     mocks.prisma.campaign.findUnique.mockResolvedValue({ id: 'camp_run', type: { key: 'agency_sourcing' } });
-    mocks.prisma.contact.findMany.mockResolvedValue([{ id: 'contact_1' }]);
+    mocks.prisma.contact.findMany.mockResolvedValue([
+      { id: 'contact_1', roleGuess: 'ad_manager', type: 'tg_username', confidence: 0.8 },
+    ]);
     mocks.prisma.discoveryRunCandidate.update.mockResolvedValue({});
   });
 
@@ -302,6 +304,27 @@ describe('discoveryGuidedService.candidateAction launch', () => {
     expect(updArg.data.decision).toBe('launched');
     expect(updArg.data.launchedCampaignId).toBe('camp_x');
     expect((res as { suggestionsQueued: number }).suggestionsQueued).toBe(1);
+  });
+
+  it('launches ONE chat to the best contact — ad_manager wins over owner', async () => {
+    // Regression: channel publishes an explicit ad contact ("Реклама/сотр-во:
+    // @Julia_s_vami", ad_manager) AND the owner's personal account ("Мама Оля
+    // https://t.me/top_mama_olia", owner). Launch must DM only the ad manager,
+    // not also the personal owner — i.e. addContacts gets exactly one id.
+    mocks.prisma.contact.findMany.mockResolvedValue([
+      { id: 'owner_olia', roleGuess: 'owner', type: 'tg_link', confidence: 0.9 },
+      { id: 'ad_julia', roleGuess: 'ad_manager', type: 'tg_username', confidence: 0.7 },
+    ]);
+    await discoveryGuidedService.candidateAction('run_1', 'cand_1', { action: 'launch', campaignId: 'camp_x' });
+    expect(mocks.addContacts).toHaveBeenCalledWith('camp_x', ['ad_julia'], { prepareOnly: true });
+  });
+
+  it('falls back to the owner when no ad_manager exists', async () => {
+    mocks.prisma.contact.findMany.mockResolvedValue([
+      { id: 'owner_only', roleGuess: 'owner', type: 'tg_username', confidence: 0.6 },
+    ]);
+    await discoveryGuidedService.candidateAction('run_1', 'cand_1', { action: 'launch', campaignId: 'camp_x' });
+    expect(mocks.addContacts).toHaveBeenCalledWith('camp_x', ['owner_only'], { prepareOnly: true });
   });
 
   it('resolves campaignId from the run when the body omits it', async () => {
