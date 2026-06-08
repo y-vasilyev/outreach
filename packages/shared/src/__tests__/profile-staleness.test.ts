@@ -13,10 +13,14 @@ const daysAgo = (n: number): Date => new Date(NOW.getTime() - n * DAY);
 
 describe('classifyProfileField', () => {
   it.each([
+    ['rate', 'rateCards'],
     ['rate.story', 'rateCards'],
     ['rate.post', 'rateCards'],
     ['audience.geo', 'audience'],
     ['audience.age', 'audience'],
+    ['audience.geo.ru', 'audience'],
+    ['audience.age.25_34', 'audience'],
+    ['audience.gender.female', 'audience'],
     ['reach', 'reach'],
     ['reach.story', 'reach'],
     ['views.avg', 'avgViews'],
@@ -36,7 +40,10 @@ describe('classifyProfileField', () => {
   it('returns null for unknown prefixes', () => {
     expect(classifyProfileField('mystery.field')).toBeNull();
     expect(classifyProfileField('')).toBeNull();
-    expect(classifyProfileField('rate')).toBeNull(); // bare `rate` without `.<fmt>`
+    // `rate` (bare) IS the rate_card registry root, so it classifies to
+    // rateCards — the classifier must accept the same exact-or-dotted roots
+    // the registry matcher does. `rateLimit` must NOT match, though.
+    expect(classifyProfileField('rateLimit')).toBeNull();
   });
 
   it('classifies a structured placement.offer as rateCards', () => {

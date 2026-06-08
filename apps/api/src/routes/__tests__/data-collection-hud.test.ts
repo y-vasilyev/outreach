@@ -113,6 +113,29 @@ describe('GET /conversations/:id/data-collection', () => {
     expect(res.statusCode).toBe(401);
   });
 
+  it('returns an empty HUD (campaignTypeKey null) for an unsupported campaign type', async () => {
+    flagState.current.data_collection_hud = true;
+    // A CustDev campaign is not a HUD-supported type: the endpoint must NOT
+    // fall back to the agency default target set (which would surface
+    // commercial fields on a non-agency conversation).
+    prismaMock.conversation.findUnique.mockResolvedValue({
+      id: 'conv-1',
+      contact: { channelId: 'ch-1' },
+      campaign: { id: 'camp-1', goal: {}, type: { key: 'custdev' } },
+    });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/conversations/conv-1/data-collection',
+      headers: { authorization: `Bearer ${tokenFor(app, 'operator')}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { campaignTypeKey: string | null; targets: unknown[] };
+    expect(body.campaignTypeKey).toBeNull();
+    expect(body.targets).toEqual([]);
+    // Must not even query the profile when the type is unsupported.
+    expect(prismaMock.bloggerProfile.findUnique).not.toHaveBeenCalled();
+  });
+
   it('classifies a fresh ProfileDataPoint as answered with provenance', async () => {
     flagState.current.data_collection_hud = true;
     prismaMock.bloggerProfile.findUnique.mockResolvedValue({

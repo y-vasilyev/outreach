@@ -148,6 +148,21 @@ export const AGENCY_DEFAULT_TARGET_KEYS: readonly string[] = [
   'geo',
 ];
 
+/**
+ * Campaign type keys for which the data-collection HUD is meaningful (i.e.
+ * the ones that actually run the data-collection planner). Any other type —
+ * including `custdev` — has no commercial target list, so the HUD endpoint
+ * returns `{ campaignTypeKey: null, targets: [] }` rather than falling back
+ * to the agency default set (which would surface commercial fields on a
+ * non-agency conversation).
+ */
+export const HUD_SUPPORTED_CAMPAIGN_TYPE_KEYS: readonly string[] = ['agency_sourcing'];
+
+/** Whether the data-collection HUD applies to this campaign type key. */
+export function isHudSupportedCampaignType(key: string | null | undefined): boolean {
+  return key != null && HUD_SUPPORTED_CAMPAIGN_TYPE_KEYS.includes(key);
+}
+
 /** Look up a single target by key. */
 export function getTarget(key: string): DataCollectionTarget | undefined {
   return DATA_COLLECTION_TARGETS[key];

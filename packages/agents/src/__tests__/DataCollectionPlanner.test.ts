@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { dataCollectionPlanner } from '../agents/DataCollectionPlanner.js';
+import { dataCollectionPlanner, dataCollectionPlannerInputSchema } from '../agents/DataCollectionPlanner.js';
 import { makeCtx, makeConfig, makeLLM } from './_mocks.js';
 
 /**
@@ -99,6 +99,31 @@ describe('data_collection_planner', () => {
     expect(out.goal_satisfied).toBe(true);
     expect(out.next_data_point).toBeUndefined();
     // Closing path omits target_field — no question is being asked.
+    expect(out.target_field).toBeUndefined();
+    expect(out.reply.length).toBeGreaterThan(0);
+  });
+
+  it('closes deterministically when there are NO automated targets (empty list)', async () => {
+    // A campaign whose effective planner targets are all manual_only/unknown
+    // resolves to []. The input must be accepted (not rejected by a min(1)),
+    // and run() must close instead of asking anything.
+    const llm = makeLLM({
+      completeJsonImpl: () => ({
+        next_data_point: 'rate_card',
+        reply: 'Сколько стоит пост?',
+        goal_satisfied: false,
+        rationale: 'llm tries to ask anyway',
+      }),
+    });
+    const ctx = makeCtx({ llm, config: baseConfig });
+    // Schema must accept an empty target list.
+    expect(dataCollectionPlannerInputSchema.safeParse({ target_data_points: [] }).success).toBe(true);
+    const out = await dataCollectionPlanner.run(
+      { target_data_points: [], collected_data_points: [], history_tail: [], last_inbound: '' },
+      ctx,
+    );
+    expect(out.goal_satisfied).toBe(true);
+    expect(out.next_data_point).toBeUndefined();
     expect(out.target_field).toBeUndefined();
     expect(out.reply.length).toBeGreaterThan(0);
   });

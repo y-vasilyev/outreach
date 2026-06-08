@@ -78,8 +78,19 @@ export function classifyProfileField(field: string): ProfileFreshnessCategory | 
   // Structured placement offers (entity-style-rate-cards) roll up into the
   // rateCards/formats sections, mirroring legacy `rate.<format>`.
   if (field === 'placement.offer') return 'rateCards';
-  if (field.startsWith('rate.')) return 'rateCards';
-  if (field === 'audience.geo' || field === 'audience.age' || field === 'audience.gender') {
+  if (field === 'rate' || field.startsWith('rate.')) return 'rateCards';
+  if (
+    field === 'audience.geo' ||
+    field === 'audience.age' ||
+    field === 'audience.gender' ||
+    // Dotted subkeys (e.g. `audience.geo.ru`, `audience.age.25_34`) are part
+    // of the registry's exact-or-dotted matching contract, so the freshness
+    // classifier must accept them too — otherwise a matched data point would
+    // be silently dropped as non-contributing.
+    field.startsWith('audience.geo.') ||
+    field.startsWith('audience.age.') ||
+    field.startsWith('audience.gender.')
+  ) {
     return 'audience';
   }
   if (field === 'reach' || field.startsWith('reach.')) return 'reach';

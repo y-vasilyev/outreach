@@ -3,6 +3,7 @@ import {
   buildHudTargetRow,
   Errors,
   getSuggestionTargetField,
+  isHudSupportedCampaignType,
   resolveEffectiveHudTargets,
   type HudTargetRow,
 } from '@nosquare/shared';
@@ -52,6 +53,7 @@ export const dataCollectionHudService = {
         },
         campaign: {
           select: {
+            id: true,
             goal: true,
             type: { select: { key: true } },
           },
@@ -62,18 +64,23 @@ export const dataCollectionHudService = {
 
     const campaignTypeKey = conversation.campaign?.type?.key ?? null;
 
-    // No campaign → empty HUD. The registry helper would fall back to the
-    // agency default set otherwise, which is wrong for typeless / CustDev
-    // conversations that don't run the planner at all.
-    if (!conversation.campaign) {
-      return { campaignTypeKey, targets: [] };
+    // No campaign — or a campaign whose type isn't a HUD-supported type
+    // (e.g. CustDev) — yields an empty HUD with a null type key. Otherwise the
+    // registry helper would fall back to the agency default target set, which
+    // is wrong for non-agency conversations and would surface commercial
+    // fields where they don't belong. (spec: "no campaign or the campaign's
+    // type key is not in the registry's supported types".)
+    if (!conversation.campaign || !isHudSupportedCampaignType(campaignTypeKey)) {
+      return { campaignTypeKey: null, targets: [] };
     }
+    const campaignId = conversation.campaign.id;
 
     const targets = resolveEffectiveHudTargets(conversation.campaign, (unknownKey) => {
       logger.warn(
         {
           event: 'data_collection_hud.unknown_target_key',
           conversationId,
+          campaignId,
           key: unknownKey,
         },
         'data-collection HUD: dropping unknown campaign.goal.target_data_points key',

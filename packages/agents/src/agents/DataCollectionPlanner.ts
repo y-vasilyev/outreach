@@ -30,8 +30,14 @@ import { invokeJson } from './_runtime.js';
  */
 
 export const dataCollectionPlannerInputSchema = z.object({
-  /** All target data points this campaign wants harvested. */
-  target_data_points: z.array(z.string().min(1)).min(1),
+  /**
+   * All target data points this campaign wants harvested. May be empty — a
+   * campaign whose effective planner targets are all `manual_only` or unknown
+   * resolves to `[]`, in which case `run()` deterministically closes
+   * (`goal_satisfied`) instead of the input being rejected and the
+   * conversation needlessly degrading to assisted.
+   */
+  target_data_points: z.array(z.string().min(1)).default([]),
   /** Subset already collected (matched against target by exact string). */
   collected_data_points: z.array(z.string()).default([]),
   /** Recent dialogue turns for tone/context (optional). */
