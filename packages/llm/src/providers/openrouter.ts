@@ -89,6 +89,25 @@ interface OpenAICallOpts {
   includeCost: boolean;
 }
 
+/**
+ * Build the user message `content` (attachment-ocr-ingestion). Multimodal image
+ * parts are OpenRouter-ONLY — this helper is shared with `openai_compat`, so
+ * images are gated on `providerModel === 'openrouter'`; every other provider
+ * keeps plain string content (text-only, byte-identical to before).
+ */
+export function buildUserMessageContent(
+  req: CompletionRequest,
+  providerModel: 'openrouter' | 'openai_compat',
+): unknown {
+  const useImages =
+    providerModel === 'openrouter' && Array.isArray(req.images) && req.images.length > 0;
+  if (!useImages) return req.userPrompt;
+  return [
+    { type: 'text', text: req.userPrompt },
+    ...req.images!.map((img) => ({ type: 'image_url', image_url: { url: img.url } })),
+  ];
+}
+
 export async function doOpenAICompatCall(
   cfg: ProviderConfig,
   req: CompletionRequest,
@@ -101,7 +120,7 @@ export async function doOpenAICompatCall(
     model: req.model,
     messages: [
       { role: 'system', content: req.systemPrompt },
-      { role: 'user', content: req.userPrompt },
+      { role: 'user', content: buildUserMessageContent(req, opts.model) },
     ],
     temperature: req.temperature ?? 0.3,
     max_tokens: req.maxTokens ?? 2000,

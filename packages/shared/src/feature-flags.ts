@@ -33,6 +33,7 @@ export const FEATURE_FLAG_DEFAULTS = {
   channel_discovery: false,
   data_collection_hud: false,
   structured_placement_offers: false,
+  attachment_ocr: false,
 } as const;
 
 export type FeatureFlagKey = keyof typeof FEATURE_FLAG_DEFAULTS;

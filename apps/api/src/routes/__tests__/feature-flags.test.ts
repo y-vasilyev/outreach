@@ -105,6 +105,7 @@ describe('GET /feature-flags', () => {
     expect(body.map((f) => f.key).sort()).toEqual(
       [
         'agency_sourcing',
+        'attachment_ocr',
         'blogger_matching',
         'campaign_types',
         'channel_discovery',

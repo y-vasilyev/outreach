@@ -25,6 +25,7 @@ import { agencyOpeningComposer } from './AgencyOpeningComposer.js';
 import { dataCollectionPlanner } from './DataCollectionPlanner.js';
 import { rateCardExtractor } from './RateCardExtractor.js';
 import { audienceStatsExtractor } from './AudienceStatsExtractor.js';
+import { mediaOcrExtractor } from './MediaOcrExtractor.js';
 import { bloggerMatcher } from './BloggerMatcher.js';
 import { sponsoredIntegrationDetector } from './SponsoredIntegrationDetector.js';
 import { discoveryQueryPlanner } from './DiscoveryQueryPlanner.js';
@@ -48,6 +49,7 @@ agentRegistry.register(agencyOpeningComposer);
 agentRegistry.register(dataCollectionPlanner);
 agentRegistry.register(rateCardExtractor);
 agentRegistry.register(audienceStatsExtractor);
+agentRegistry.register(mediaOcrExtractor);
 agentRegistry.register(bloggerMatcher);
 agentRegistry.register(sponsoredIntegrationDetector);
 agentRegistry.register(discoveryQueryPlanner);
@@ -72,6 +74,7 @@ export {
   dataCollectionPlanner,
   rateCardExtractor,
   audienceStatsExtractor,
+  mediaOcrExtractor,
   bloggerMatcher,
   sponsoredIntegrationDetector,
   discoveryQueryPlanner,

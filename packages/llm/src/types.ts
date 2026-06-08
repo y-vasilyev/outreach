@@ -28,6 +28,15 @@ export interface CompletionRequest {
   jsonMode?: boolean;
   /** JSON-schema for structured output (used by providers that support it). */
   responseSchema?: unknown;
+  /**
+   * Optional image inputs for multimodal (vision) requests
+   * (attachment-ocr-ingestion). Each `url` is a data-URL (`data:image/png;
+   * base64,…`) or an http URL. ONLY the OpenRouter provider renders these as
+   * `image_url` content parts; other providers ignore them and stay text-only.
+   * Callers MUST keep base64 data-URLs out of any persisted/logged input object
+   * — they belong on this request only, never in `agent_run.input`.
+   */
+  images?: Array<{ url: string }>;
   abortSignal?: AbortSignal;
   metadata?: CompletionRequestMetadata;
 }

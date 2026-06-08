@@ -10,6 +10,7 @@ export * from './safety-input.js';
 export * from './agency-detection.js';
 export * from './agency.js';
 export * from './price.js';
+export * from './media.js';
 export * from './profile-rollup.js';
 export * from './profile-staleness.js';
 export * from './blogger-profile-enrichment.js';

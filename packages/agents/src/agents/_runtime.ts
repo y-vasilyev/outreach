@@ -202,6 +202,35 @@ function stripNulls(v: unknown): unknown {
   return v;
 }
 
+/**
+ * Vision/OCR free-text completion (attachment-ocr-ingestion). Passes `images`
+ * to the provider as a runtime side channel — they are NOT part of any persisted
+ * agent input. Only the OpenRouter provider renders them; others stay text-only.
+ */
+export async function invokeVisionText(opts: {
+  ctx: AgentRunCtx;
+  vars: PromptVars;
+  images: Array<{ url: string }>;
+  fallbackSystemPrompt?: string;
+  fallbackUserPromptTemplate?: string;
+}): Promise<string> {
+  const { ctx, vars, images, fallbackSystemPrompt, fallbackUserPromptTemplate } = opts;
+  const systemTpl = ctx.config.systemPrompt || fallbackSystemPrompt || '';
+  const userTpl = ctx.config.userPromptTemplate || fallbackUserPromptTemplate || '';
+  const systemPrompt = renderTemplate(systemTpl, vars, ctx.logger);
+  const userPrompt = renderTemplate(userTpl, vars, ctx.logger);
+  const params = readParams(ctx.config.params);
+  const res = await ctx.llm.complete({
+    systemPrompt,
+    userPrompt,
+    model: ctx.config.model || 'default',
+    images,
+    ...(typeof params.temperature === 'number' && { temperature: params.temperature }),
+    ...(typeof params.max_tokens === 'number' && { maxTokens: params.max_tokens }),
+  });
+  return res.text;
+}
+
 /** Same as invokeJson but for free-text completions (no agent in this list uses it). */
 export async function invokeText(
   ctx: AgentRunCtx,

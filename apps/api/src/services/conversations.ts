@@ -219,7 +219,7 @@ export const conversationsService = {
         // (empty s3Key) are filtered so the UI doesn't render broken images.
         mediaAssets: {
           where: { NOT: { s3Key: '' } },
-          select: { id: true, kind: true, mime: true, bytes: true },
+          select: { id: true, kind: true, mime: true, bytes: true, ocrStatus: true },
           orderBy: { createdAt: 'asc' },
         },
       },

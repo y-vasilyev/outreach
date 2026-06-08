@@ -25,6 +25,7 @@ import { logger } from '../logger.js';
 import { publishRealtime } from '../services/realtime-emit.js';
 import { runAgentSafe } from '../services/run-agent-safe.js';
 import { snapshotRawPayload } from '../services/media-store.js';
+import { ocrMessageAttachments } from '../services/attachment-ocr.js';
 
 interface ExtractionOut {
   data_points: ProfileDataPointDraft[];
@@ -144,7 +145,18 @@ export async function handleProfileExtract(data: {
   // Extraction input is the single triggering message — the same message we
   // attribute points to (provenance unit). `replies` is a one-element array so
   // the extractor-agent input shape is unchanged.
-  const replies = sourceMessage.text ? [sourceMessage.text] : [];
+  // Attachment OCR (attachment-ocr-ingestion): recognize text from image
+  // attachments and fold it into the extractor input BEFORE the empty/pre-gate
+  // checks, so an attachment-only reply (empty text) is not skipped. Double-
+  // gated + degrades safely (returns [] when off/failed).
+  const ocrTexts = await ocrMessageAttachments({
+    conversationId: conv.id,
+    messageId: sourceMessageId,
+  }).catch(() => [] as string[]);
+
+  const replies: string[] = [];
+  if (sourceMessage.text) replies.push(sourceMessage.text);
+  for (const t of ocrTexts) replies.push(`[из вложения] ${t}`);
   if (replies.length === 0) {
     await stampExtractionStatus({ conversationId: conv.id, messageId: sourceMessageId, status: 'no_signal' });
     return { ok: true, skipped: 'empty_inbound' };
@@ -155,7 +167,10 @@ export async function handleProfileExtract(data: {
   // returns a structured `{pass, reason}` so we can track passed_by /
   // skipped_by counters in logs and tune the predicate from real data.
   // See `packages/shared/src/agency-detection.ts` for the policy.
-  const gate = preGateExtraction(sourceMessage.text);
+  // Pre-gate on the COMBINED text (chat text ∪ OCR'd attachment text), so an
+  // attachment that carries commercial signal passes even when the chat text is
+  // empty/service-talk (attachment-ocr-ingestion).
+  const gate = preGateExtraction(replies.join('\n'));
   if (!gate.pass) {
     logger.info(
       {

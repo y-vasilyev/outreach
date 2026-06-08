@@ -60,6 +60,21 @@ export class ObjectStore {
     );
   }
 
+  /**
+   * Download an object's bytes (attachment-ocr-ingestion). Used worker-side to
+   * fetch a stored attachment for OCR. Throws when the key is missing/empty.
+   */
+  async getObject(key: string): Promise<Uint8Array> {
+    const res = await this.client.send(
+      new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+    );
+    const body = res.Body as { transformToByteArray?: () => Promise<Uint8Array> } | undefined;
+    if (!body?.transformToByteArray) {
+      throw new Error(`getObject: empty body for ${key}`);
+    }
+    return body.transformToByteArray();
+  }
+
   /** Issue a short-lived presigned GET URL the client fetches directly. */
   async getPresignedGetUrl(key: string, ttlSeconds = DEFAULT_TTL_SECONDS): Promise<string> {
     return getSignedUrl(

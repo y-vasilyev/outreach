@@ -450,6 +450,8 @@ export class AgentRunner {
     return withTokenAccounting(provider, makeAccountingHook(runId));
   }
 
+  // (redactPersistedInput is a module function below)
+
   private async persistRun(args: {
     runId: string;
     agent: AnyAgent;
@@ -472,7 +474,7 @@ export class AgentRunner {
           conversationId: ctx?.conversationId ?? null,
           endpointId: config.endpointId ?? null,
           model: config.model || null,
-          input: input as object,
+          input: redactPersistedInput(input) as object,
           output: (output ?? undefined) as object | undefined,
           tokensIn: acc.tokensIn,
           tokensOut: acc.tokensOut,
@@ -503,4 +505,25 @@ function toProviderConfig(r: ResolvedEndpoint): ProviderConfig {
   if (r.timeoutMs !== undefined) cfg.timeoutMs = r.timeoutMs;
   if (r.proxyUrl !== undefined) cfg.proxyUrl = r.proxyUrl;
   return cfg;
+}
+
+/**
+ * Redact heavy/sensitive fields before persisting an agent's input to
+ * `agent_run.input` (attachment-ocr-ingestion). Vision agents carry image
+ * data-URLs (`images[].url` — base64); we must NOT store those in the DB. Any
+ * `images[].url` is replaced with a short `[redacted N chars]` marker. Cheap +
+ * shallow; returns the input unchanged when there is nothing to redact.
+ */
+function redactPersistedInput(input: unknown): unknown {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
+  const obj = input as Record<string, unknown>;
+  if (!Array.isArray(obj.images)) return input;
+  const images = (obj.images as Array<unknown>).map((img) => {
+    if (img && typeof img === 'object' && typeof (img as { url?: unknown }).url === 'string') {
+      const url = (img as { url: string }).url;
+      return { ...(img as object), url: `[redacted ${url.length} chars]` };
+    }
+    return img;
+  });
+  return { ...obj, images };
 }

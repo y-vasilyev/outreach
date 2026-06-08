@@ -552,6 +552,7 @@ export const bloggerProfilesService = {
         kind: a.kind,
         mime: a.mime,
         bytes: a.bytes,
+        ocrStatus: a.ocrStatus,
         createdAt: a.createdAt,
       })),
       postInsights: profile.postInsights,

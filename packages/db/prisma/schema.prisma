@@ -925,6 +925,14 @@ model MediaAsset {
   sha256         String?
   // Plain reference to the source TG message id.
   sourceTgMsgId  String?         @map("source_tg_msg_id")
+  // Vision OCR of the attachment (attachment-ocr-ingestion). `ocrText` is the
+  // recognized text fed into extraction; `ocrStatus` ∈ pending|processing|ok|
+  // failed|unsupported drives the atomic single-run claim + caching.
+  ocrText        String?         @map("ocr_text")
+  ocrStatus      String?         @default("pending") @map("ocr_status")
+  // When the current `processing` claim was taken — lets a stale claim (worker
+  // crashed mid-OCR) be reclaimed after a timeout instead of stranding forever.
+  ocrClaimedAt   DateTime?       @map("ocr_claimed_at")
   createdAt      DateTime        @default(now()) @map("created_at")
 
   @@index([conversationId])

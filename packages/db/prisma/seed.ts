@@ -439,6 +439,8 @@ async function main() {
     channel_discovery: 'Дискавери каналов по нише через Yandex Search',
     structured_placement_offers:
       'Структурированные офферы размещений (типизированные атрибуты вместо плоских rate.<format>)',
+    attachment_ocr:
+      'OCR изображений-вложений (прайс/медиакит/скрин) в извлечение — нужен object_storage',
   };
   for (const key of FEATURE_FLAG_KEYS) {
     const description = FLAG_DESCRIPTIONS[key] ?? '';
