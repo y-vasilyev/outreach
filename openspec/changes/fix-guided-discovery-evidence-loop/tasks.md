@@ -2,7 +2,7 @@
 
 - [ ] 1.1 In `packages/shared/src/schemas/discovery.ts`: add `'enriching'` to `GuidedRunStatusEnumZ`; add `pendingReview: z.number().int().default(0)` to `GuidedRunSummaryZ`; add `'launched'` to `CandidateDecisionZ`; extend `CandidateActionZ` to `{ action: 'save'|'shortlist'|'reject'|'clear'|'scrape_refresh'|'launch', campaignId?: string }`. `campaignId` stays OPTIONAL for all actions (including `launch`) — do NOT refine it to required for `launch`; the service resolves `campaignId ?? run.campaignId` and errors if both are absent (keeps schema and service in agreement — D7).
 - [ ] 1.2 In `packages/shared/src/schemas/queue.ts`: add `guidedDiscoveryReview: 'guided-discovery-review'` to `QueueNames`; add `GuidedDiscoveryReviewJobZ = z.object({ runId, candidateId: z.string().optional(), scrapeOutcome: z.enum(['ok','failed']).optional(), sweep: z.boolean().optional() })` + exported type. (sweep job has no `candidateId`.)
-- [ ] 1.3 Prisma migration `packages/db/prisma/migrations/10_guided_discovery_enriching/migration.sql` (mirror `8_guided_discovery_runs` header comment), all additive:
+- [ ] 1.3 Prisma migration `packages/db/prisma/migrations/9a_guided_discovery_enriching/migration.sql` (mirror `8_guided_discovery_runs` header comment), all additive:
   - `ALTER TYPE "discovery_run_status" ADD VALUE 'enriching';`
   - `CREATE INDEX "discovery_run_candidate_channel_id_idx" ON "discovery_run_candidate"("channel_id");`
   - `ALTER TABLE "discovery_run_candidate" ADD COLUMN "review_claimed_at" TIMESTAMP(3);` (atomic-claim guard before any reviewer LLM call — D4 step 0)
@@ -23,7 +23,7 @@
   - **Success hook** — at the end of the success branch (KEEP the `contact-extract` enqueue), look up open discovery candidates and enqueue review jobs with `scrapeOutcome:'ok'`.
   - **Failure hook** — bind to the BullMQ FINAL `'failed'` event (the existing `worker.on('failed', ...)` at line 166), gated on `job.attemptsMade >= (job.opts.attempts ?? 1)` so it fires once after retries are exhausted; do NOT enqueue from the per-attempt `catch` (which `throw`s and is retried). Enqueue review jobs with `scrapeOutcome:'failed'`.
   - **Selector** (both hooks): `discoveryRunCandidate.findMany({ where: { channelId, run: { status: { in: ['running','enriching'] } }, OR: [{ review: { equals: Prisma.JsonNull } }, { enrichmentStatus: 'pending_enrichment' }] } })` — `review: null` alone would skip refresh-re-armed candidates.
-  - **Enqueue** each with a deterministic `jobId: review:discovery:<runId>:<candidateId>:<generation>` (generation from `provenance.scrapeGeneration`) and `attempts: 1` so BullMQ dedups duplicate fires.
+  - **Enqueue** each with a deterministic `jobId: review:discovery:<runId>-<candidateId>-<generation>` (generation from `provenance.scrapeGeneration`) and `attempts: 1` so BullMQ dedups duplicate fires. (BullMQ rejects a custom `jobId` containing `:` unless it splits into EXACTLY 3 parts, so the run/candidate/generation triple is dash-joined inside the third part.)
   - Best-effort: wrap in try/catch + log; never fail the scrape job on hook error.
 
 ## 3. API — actions + launch bridge

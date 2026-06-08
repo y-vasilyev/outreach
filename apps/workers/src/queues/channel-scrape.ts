@@ -61,7 +61,10 @@ async function triggerGuidedReview(channelId: string, scrapeOk: boolean): Promis
       await reviewQueue.add(
         'review',
         { runId: c.runId, candidateId: c.id, scrapeOutcome: scrapeOk ? 'ok' : 'failed' },
-        { jobId: `review:discovery:${c.runId}:${c.id}:${generation}`, attempts: 1 },
+        // BullMQ rejects a ':'-containing jobId unless it splits into exactly 3
+        // parts; this dedup key has 5 segments, so join the variable parts with
+        // '-' to keep it valid (was `review:discovery:${runId}:${id}:${gen}`).
+        { jobId: `review:discovery:${c.runId}-${c.id}-${generation}`, attempts: 1 },
       );
     }
   } catch (err) {

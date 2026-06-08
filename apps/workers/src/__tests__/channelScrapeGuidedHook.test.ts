@@ -54,13 +54,13 @@ describe('triggerGuidedReview', () => {
     expect(mocks.reviewAdd).toHaveBeenCalledWith(
       'review',
       { runId: 'r1', candidateId: 'c1', scrapeOutcome: 'ok' },
-      { jobId: 'review:discovery:r1:c1:2', attempts: 1 },
+      { jobId: 'review:discovery:r1-c1-2', attempts: 1 },
     );
     // missing generation defaults to 0.
     expect(mocks.reviewAdd).toHaveBeenCalledWith(
       'review',
       { runId: 'r1', candidateId: 'c2', scrapeOutcome: 'ok' },
-      { jobId: 'review:discovery:r1:c2:0', attempts: 1 },
+      { jobId: 'review:discovery:r1-c2-0', attempts: 1 },
     );
   });
 
@@ -74,7 +74,7 @@ describe('triggerGuidedReview', () => {
     expect(mocks.reviewAdd).toHaveBeenCalledWith(
       'review',
       { runId: 'r1', candidateId: 'c1', scrapeOutcome: 'failed' },
-      { jobId: 'review:discovery:r1:c1:0', attempts: 1 },
+      { jobId: 'review:discovery:r1-c1-0', attempts: 1 },
     );
   });
 

@@ -388,7 +388,11 @@ export const campaignsService = {
             {
               attempts: 3,
               backoff: { type: 'exponential', delay: 5_000 },
-              jobId: `outreach_first_message:${convId}`,
+              // BullMQ (≥5.x) rejects a custom jobId containing ':' unless it
+              // splits into exactly 3 parts; use '-' so the per-conversation
+              // dedup key stays valid (was `outreach_first_message:${convId}`,
+              // a 2-part id that throws "Custom Id cannot contain :").
+              jobId: `outreach_first_message-${convId}`,
               removeOnComplete: true,
               removeOnFail: true,
             },
