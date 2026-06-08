@@ -1,0 +1,69 @@
+## 1. Shared schemas + DB (additive)
+
+- [ ] 1.1 In `packages/shared/src/schemas/discovery.ts`: add `'enriching'` to `GuidedRunStatusEnumZ`; add `pendingReview: z.number().int().default(0)` to `GuidedRunSummaryZ`; add `'launched'` to `CandidateDecisionZ`; extend `CandidateActionZ` to `{ action: 'save'|'shortlist'|'reject'|'clear'|'scrape_refresh'|'launch', campaignId?: string }`. `campaignId` stays OPTIONAL for all actions (including `launch`) — do NOT refine it to required for `launch`; the service resolves `campaignId ?? run.campaignId` and errors if both are absent (keeps schema and service in agreement — D7).
+- [ ] 1.2 In `packages/shared/src/schemas/queue.ts`: add `guidedDiscoveryReview: 'guided-discovery-review'` to `QueueNames`; add `GuidedDiscoveryReviewJobZ = z.object({ runId, candidateId: z.string().optional(), scrapeOutcome: z.enum(['ok','failed']).optional(), sweep: z.boolean().optional() })` + exported type. (sweep job has no `candidateId`.)
+- [ ] 1.3 Prisma migration `packages/db/prisma/migrations/10_guided_discovery_enriching/migration.sql` (mirror `8_guided_discovery_runs` header comment), all additive:
+  - `ALTER TYPE "discovery_run_status" ADD VALUE 'enriching';`
+  - `CREATE INDEX "discovery_run_candidate_channel_id_idx" ON "discovery_run_candidate"("channel_id");`
+  - `ALTER TABLE "discovery_run_candidate" ADD COLUMN "review_claimed_at" TIMESTAMP(3);` (atomic-claim guard before any reviewer LLM call — D4 step 0)
+  - `ALTER TABLE "discovery_run_candidate" ADD COLUMN "launched_campaign_id" TEXT;` (launch provenance, separate from `review` so re-review can't clobber it — D7)
+- [ ] 1.4 In `packages/db/prisma/schema.prisma`: add `enriching` to `enum DiscoveryRunStatus`; on `DiscoveryRunCandidate` add `@@index([channelId])`, `reviewClaimedAt DateTime? @map("review_claimed_at")`, and `launchedCampaignId String? @map("launched_campaign_id")`. Run `pnpm db:migrate` is deferred to implementation; schema edit + migration file must match. (Refresh `generation` counter lives in `provenance.scrapeGeneration` JSON — no column.)
+
+## 2. Workers — review loop
+
+- [ ] 2.1 `apps/api/src/queues.ts` (the shared queue factory — NOT `apps/workers/src/queues.ts`, which does not exist): register the `guided-discovery-review` queue alongside the others and expose it via `getQueues()`.
+- [ ] 2.2 `apps/workers/src/index.ts`: start the new worker (`startGuidedDiscoveryReviewWorker`) — this is where worker consumers are registered.
+- [ ] 2.3 `apps/workers/src/queues/guided-discovery.ts` phase-1 split: keep plan→search→normalize→create/reuse channel→enqueue scrape. In the review block, review inline ONLY `alreadyKnown` candidates that have evidence (existing `hasData`), within `maxReviewed`. Candidates without evidence are LEFT non-terminal (`needs_scrape`/`pending_enrichment`), NOT skip-and-forgotten.
+- [ ] 2.4 In `guided-discovery.ts`: after phase-1 review, compute `pendingReview = count(candidates with review IS NULL and not budget-skipped)`. Persist `summary.pendingReview`. Set status `enriching` when `pendingReview>0`, else `done` (`completedAt`). When `enriching`, enqueue a delayed sweep job `{ runId, sweep: true }` at `RUN_ENRICH_DEADLINE_MS`. Enqueue the phase-1 `channel-scrape` jobs with `attempts: 1` so the D3 final-failure hook fires promptly for discovery scrapes.
+- [ ] 2.5 New `apps/workers/src/queues/guided-discovery-review.ts`: worker on `guided-discovery-review`, concurrency 1, parses `GuidedDiscoveryReviewJobZ`. Recreate minimal `addTrace`/`persist` helpers over the run row (reuse trace/summary parse from the existing worker or factor a tiny shared helper inside workers).
+- [ ] 2.6 Per-candidate review flow (D4): (step 0) FIRST do the atomic claim `updateMany({ where: { id: candidateId, reviewClaimedAt: null }, data: { reviewClaimedAt: now } })`; if `count===0` → no-op return BEFORE any LLM call (prevents duplicate-job cost regression). Then: no-op when run terminal; if candidate already reviewed AND not re-armed (`enrichmentStatus !== 'pending_enrichment'`) → no-op; on a refresh re-review clear stale `review`/`score`/`recommendation` first; renew run lock; budget check (recompute reviewed count vs `maxReviewed`); on `scrapeOutcome==='failed'` or no evidence → persist terminal `insufficientEvidenceReason` review WITHOUT an LLM call; else load evidence + call `blogger_discovery_reviewer` via `getRunner().run` (with `campaignId`/`channelId` ctx) and persist score/recommendation/review; trace accordingly.
+- [ ] 2.7 Completion check (D4 step 6): recompute `pendingReview`; if 0, `updateMany({ where: { id, status: 'enriching' }, data: { status: 'done', completedAt } })` (idempotent); persist updated summary counts.
+- [ ] 2.8 Sweep branch (`sweep: true`, D5): force terminal review outcomes for all still-open candidates of the run (`insufficientEvidenceReason='scrape did not complete in time'`), then run the completion check → `done`.
+- [ ] 2.9 `apps/workers/src/queues/channel-scrape.ts` hook (D3):
+  - **Success hook** — at the end of the success branch (KEEP the `contact-extract` enqueue), look up open discovery candidates and enqueue review jobs with `scrapeOutcome:'ok'`.
+  - **Failure hook** — bind to the BullMQ FINAL `'failed'` event (the existing `worker.on('failed', ...)` at line 166), gated on `job.attemptsMade >= (job.opts.attempts ?? 1)` so it fires once after retries are exhausted; do NOT enqueue from the per-attempt `catch` (which `throw`s and is retried). Enqueue review jobs with `scrapeOutcome:'failed'`.
+  - **Selector** (both hooks): `discoveryRunCandidate.findMany({ where: { channelId, run: { status: { in: ['running','enriching'] } }, OR: [{ review: { equals: Prisma.JsonNull } }, { enrichmentStatus: 'pending_enrichment' }] } })` — `review: null` alone would skip refresh-re-armed candidates.
+  - **Enqueue** each with a deterministic `jobId: review:discovery:<runId>:<candidateId>:<generation>` (generation from `provenance.scrapeGeneration`) and `attempts: 1` so BullMQ dedups duplicate fires.
+  - Best-effort: wrap in try/catch + log; never fail the scrape job on hook error.
+
+## 3. API — actions + launch bridge
+
+- [ ] 3.1 `apps/api/src/services/discovery-guided.ts` `candidateAction`: on `scrape_refresh`, re-arm the candidate so the re-scrape re-scores (D6): set `enrichmentStatus='pending_enrichment'`, set `reviewClaimedAt=null`, bump `provenance.scrapeGeneration`; re-enqueue `channel-scrape` with `attempts: 1`; and transition the run `done → enriching` (when currently `done`) so the scrape→review hook re-fires. Leave `running`/`enriching`/`failed` as-is. Do NOT pre-clear `review`/`score`/`recommendation` here (the review step clears them when the new review begins, so the operator keeps the prior recommendation until the new one lands).
+- [ ] 3.2 `candidateAction` new `launch` branch (D7): require linked `channelId` (else `Errors.badRequest`); resolve `campaignId = body.campaignId ?? run.campaignId`, error if both absent; load campaign; when campaign `type.key==='agency_sourcing'` and flag off → `AppError('AGENCY_SOURCING_DISABLED', 422)`; select business/ad contacts (`roleGuess ∈ ['ad_manager','owner']` ONLY — `generic`/`bot`/`unknown` excluded by product decision, D7); if none → `Errors.badRequest(...)`; call `campaignsService.addContacts(campaignId, contactIds, { prepareOnly: true })` (forces conversation `mode='manual'` so the opener is NOT auto-sent regardless of `campaign.defaultMode` — closes the auto-send blocker); set candidate `decision='launched'` and `launchedCampaignId=campaignId` (dedicated column, NOT `review`); return the addContacts summary.
+- [ ] 3.2a `apps/api/src/services/campaigns.ts` `addContacts`: add an optional `opts?: { prepareOnly?: boolean }` param. When `prepareOnly`, upsert the conversation with `mode: 'manual'` in BOTH the `create` and `update` branches (overriding `c.defaultMode`) so the enqueued `outreach_first_message` opener lands as a `pending` suggestion that `tryAutoApprove` refuses. Default off — existing callers unchanged. (Verified blocker: `auto-approve.ts:116-147` auto-sends `first_touch` openers in `semi_auto`/`auto` modes without a gate.)
+- [ ] 3.3 Import/inject `campaignsService` (or its `addContacts`) into the discovery-guided service without creating a circular import (extract a thin shared helper if needed). Do NOT have the route call Prisma/queues directly.
+- [ ] 3.4 `apps/api/src/routes/discovery.ts`: the candidate-action route already exists; ensure `CandidateActionZ` parse covers `launch` + `campaignId`; audit `launch` with `{ runId, channelId, campaignId }` (no secrets).
+
+## 4. Web — honest status + launch button
+
+- [ ] 4.1 `apps/web/src/features/discovery/types.ts`: extend status/decision/action types to include `enriching`, `launched`, `launch` + `pendingReview` on summary (regenerate from shared types if generated).
+- [ ] 4.2 `apps/web/src/features/discovery/helpers.ts`: `guidedStatusPill` maps `enriching` to a live/accent tone (not `ok`); `pollInterval` stays live while `enriching` (only stops on `done`/`failed` — confirm guard).
+- [ ] 4.3 `DiscoveryGuidedRunPage.vue`: status pill shows `enriching`; add a summary stat "ожидают разбора: {{ summary.pendingReview }}"; never present `done` visuals while `pendingReview>0`.
+- [ ] 4.4 `DiscoveryGuidedRunPage.vue`: add "Запустить в работу" button on candidates with `decision ∈ {saved, shortlisted}` and a linked `channelId`; clicking opens a campaign picker (reuse existing pattern), then calls `candidateAction(id, { action:'launch', campaignId })`; show resulting `chatsCreated`/`suggestionsQueued`/`blocker`. Disable when no channel/decision.
+
+## 5. Agents / seed (only if reviewer prompt changes)
+
+- [ ] 5.1 No new agent. If D4 step 4 stays "no LLM call on scrape failure", `blogger_discovery_reviewer` seed is unchanged. If product chooses to have the reviewer emit a rationale on failure, update the system/user template in `packages/db/prisma/agents.seed.ts` and keep the seed idempotent.
+- [ ] 5.2 If 5.1 changed the prompt, update/extend the `blogger_discovery_reviewer` unit test with a mocked `LLMProvider` for the scrape-failed input.
+
+## 6. Tests
+
+- [ ] 6.1 `apps/workers` unit: fresh-niche run — all candidates new → phase 1 ends `enriching` with `pendingReview=N`, status NOT `done`; no candidate silently skipped.
+- [ ] 6.2 `apps/workers` unit: scrape success hook enqueues a review job for each open candidate of that channel; scrape failure hook enqueues with `scrapeOutcome='failed'`; `contact-extract` still enqueued on success.
+- [ ] 6.3 `guided-discovery-review` unit: reviews a candidate with evidence → persists score/recommendation; `scrapeOutcome='failed'` → terminal `insufficientEvidenceReason`, no LLM call; idempotent re-run is a no-op; completion check flips `enriching → done` only when last candidate closes (`updateMany` race-safe). Atomic claim: a second concurrent job for the same candidate (with `reviewClaimedAt` already set) returns WITHOUT calling the reviewer LLM (assert mocked provider not invoked).
+- [ ] 6.4 `guided-discovery-review` unit: sweep forces terminal outcomes and completes a wedged run; budget `maxReviewed` respected across inline + hook reviews. Re-arm: a candidate previously reviewed then `scrape_refresh`-ed (`enrichmentStatus='pending_enrichment'`, `reviewClaimedAt=null`) IS re-selected and re-scored (stale `review` cleared), proving a re-scrape re-scores an already-reviewed candidate.
+- [ ] 6.4a `channel-scrape` unit: the failure hook fires only on FINAL BullMQ failure (`attemptsMade >= attempts`), not on a retryable per-attempt error; deterministic `jobId` dedups duplicate enqueues; selector also matches `enrichmentStatus='pending_enrichment'` candidates with non-null `review`.
+- [ ] 6.5 API unit (`discovery-guided`): `scrape_refresh` on a `done` run reopens to `enriching`, re-arms the candidate (`pending_enrichment`, `reviewClaimedAt=null`, bumped generation) and re-enqueues scrape; `launch` selects only `ad_manager`/`owner` contacts, calls `addContacts` with `prepareOnly:true`, sets `decision='launched'` + `launchedCampaignId`; `launch` resolves `campaignId` from run when body omits it and errors when both absent; `launch` on agency campaign with flag off → 422; `launch` with no business contact → 400; `launch` without channel → 400.
+- [ ] 6.6 API unit: `launch` does NOT send — assert it calls `addContacts` with `{ prepareOnly: true }`, never a tg-send path. `campaigns.ts` unit: `addContacts(..., { prepareOnly: true })` upserts the conversation with `mode:'manual'` even when `campaign.defaultMode` is `semi_auto`/`auto`, so the opener cannot be auto-sent.
+- [ ] 6.7 Shared schema test: `CandidateActionZ` accepts `launch` with an OPTIONAL `campaignId` (not required); `GuidedRunStatusEnumZ` accepts `enriching`; `GuidedRunSummaryZ` parses `pendingReview`; `CandidateDecisionZ` accepts `launched`.
+
+## 7. Docs
+
+- [ ] 7.1 `AGENTS.md`: document the guided-discovery review loop (phase-1 evidence → scrape hook → per-candidate review → completion/sweep) and the launch-into-work bridge (reuses `addContacts`; pending opener for operator approval; human-approval gate; business/ad contacts only).
+- [ ] 7.2 `CHANGELOG.md`: operator-visible entry — honest `enriching` status + "ожидают разбора" count, working "Обновить scrape" re-scoring, new "Запустить в работу" action (gated, prepares pending outreach for approval, never auto-sends).
+
+## 8. Validation
+
+- [ ] 8.1 `pnpm typecheck && pnpm lint && pnpm test` green.
+- [ ] 8.2 `openspec validate fix-guided-discovery-evidence-loop --strict` — no errors.
+- [ ] 8.3 Manual demo (deferred / needs live endpoints): fresh niche → run goes `enriching`, candidates reviewed as scrapes land, run reaches `done` with recommendations; `scrape_refresh` re-scores; `launch` a shortlisted blogger → pending opener appears in its conversation for approval.
