@@ -3,13 +3,14 @@ import { z } from 'zod';
 import { PlacementAttributeReviewDecisionZ } from '@nosquare/shared';
 
 import { placementAttributesService } from '../services/placement-attributes.js';
-import { requireFeature } from '../require-feature.js';
 
 /**
  * Placement-attribute proposal review endpoints (entity-style-rate-cards,
- * Section 4.3). Admin-only and gated at request time by the
- * `structured_placement_offers` runtime flag (404 when off — same as a truly
- * unregistered route, via `requireFeature`).
+ * Section 4.3). Admin-only. Since harden-reply-extraction made structured
+ * extraction the canonical write path, attribute proposals are ALWAYS persisted
+ * regardless of the `structured_placement_offers` flag — so the review route is
+ * no longer flag-gated (the flag now governs matching/planner preference only).
+ * Operators can curate the vocabulary extraction produces at any time.
  *
  *   GET  /placement-attributes/proposals       — list `status='proposed'` rows
  *   GET  /placement-attributes/active-registry  — v1 ∪ approved active registry
@@ -19,7 +20,6 @@ import { requireFeature } from '../require-feature.js';
  * the active registry the planner + extraction load on the next tick.
  */
 export async function placementAttributesRoutes(app: FastifyInstance) {
-  app.addHook('onRequest', requireFeature('structured_placement_offers'));
   app.addHook('onRequest', app.authenticate);
 
   app.get(

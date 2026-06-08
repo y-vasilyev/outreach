@@ -233,6 +233,24 @@ export function getOfferAttribute(
   return found ? found.value : null;
 }
 
+/**
+ * Read ALL attribute values for a repeatable key (e.g. `tax`, `includes`-style
+ * keys an offer may carry more than once). Promoted single-valued fields
+ * (kind/platform/price/currency) yield a one- or zero-element array. Use this
+ * instead of `getOfferAttribute` wherever a key can legitimately repeat, so a
+ * second stacked tax is not silently dropped (harden-reply-extraction).
+ */
+export function getOfferAttributes(
+  offer: OfferAttributeView,
+  key: string,
+): PlacementAttributeValue[] {
+  if (key === 'kind' || key === 'platform' || key === 'price' || key === 'currency') {
+    const v = getOfferAttribute(offer, key);
+    return v === null || v === undefined ? [] : [v];
+  }
+  return offer.attributes.filter((a) => a.key === key).map((a) => a.value);
+}
+
 /** True when the offer carries a usable value for the attribute key. */
 export function offerHasAttribute(
   offer: OfferAttributeView,

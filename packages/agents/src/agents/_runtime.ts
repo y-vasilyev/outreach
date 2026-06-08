@@ -32,6 +32,16 @@ export interface InvokeJsonOpts<S extends ZodTypeAny> {
   fallbackSystemPrompt?: string;
   /** Hardcoded fallback used only when ctx.config.userPromptTemplate is empty. */
   fallbackUserPromptTemplate?: string;
+  /**
+   * Element-tolerant assembly (harden-reply-extraction D1). When the output is
+   * an object of arrays and a SINGLE bad element would otherwise reject the
+   * whole payload, pass `{ field: elementSchema }`. Order: strict parse → the
+   * provider's single repair shot → only if the repaired response STILL fails,
+   * each listed array is `safeParse`d per element, valid kept, invalid dropped
+   * with a structured warning. Non-array fields and unlisted fields are
+   * unchanged. Omit to keep the original strict-only behavior.
+   */
+  tolerantArrayFields?: Record<string, ZodTypeAny>;
 }
 
 /**
@@ -78,10 +88,74 @@ export async function invokeJson<S extends ZodTypeAny>(
     ...(params.json_schema !== undefined && { responseSchema: params.json_schema }),
   };
 
-  const { value } = await ctx.llm.completeJson<z.infer<S>>(req, (raw: string) =>
-    parseJsonStrict(raw, (v) => outputSchema.parse(stripNulls(v)) as z.infer<S>),
-  );
-  return value;
+  // Capture the most recent raw model text the parser saw. After the provider's
+  // repair shot, this holds the REPAIRED text, so tolerant assembly (below) runs
+  // on the model's best attempt — not the original broken one.
+  let lastRaw: string | null = null;
+  const strictParse = (raw: string): z.infer<S> => {
+    lastRaw = raw;
+    return parseJsonStrict(raw, (v) => outputSchema.parse(stripNulls(v)) as z.infer<S>);
+  };
+
+  try {
+    const { value } = await ctx.llm.completeJson<z.infer<S>>(req, strictParse);
+    return value;
+  } catch (err) {
+    // Tolerant fallback only when requested and we actually have model text to
+    // salvage. If element-wise assembly itself fails (e.g. unparseable JSON, or
+    // a non-array field is the culprit), rethrow the ORIGINAL error so behavior
+    // is unchanged for the non-tolerant case.
+    if (!opts.tolerantArrayFields || lastRaw == null) throw err;
+    try {
+      return assembleTolerant<S>(lastRaw, outputSchema, opts.tolerantArrayFields, ctx);
+    } catch {
+      throw err;
+    }
+  }
+}
+
+/**
+ * Element-tolerant assembly: parse the model text to an object, then for each
+ * declared array field keep the elements that individually validate and drop
+ * the rest (logged). Re-validates the assembled object against `outputSchema`
+ * so the returned value is schema-clean (AgentRunner re-validates output).
+ */
+function assembleTolerant<S extends ZodTypeAny>(
+  raw: string,
+  outputSchema: S,
+  arrayFields: Record<string, ZodTypeAny>,
+  ctx: AgentRunCtx,
+): z.infer<S> {
+  const obj = parseJsonStrict(raw, (v) => stripNulls(v)) as unknown;
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+    throw new Error('tolerant assembly: model output is not a JSON object');
+  }
+  const source = obj as Record<string, unknown>;
+  const assembled: Record<string, unknown> = { ...source };
+  for (const [field, elementSchema] of Object.entries(arrayFields)) {
+    const arr = source[field];
+    if (!Array.isArray(arr)) continue;
+    const kept: unknown[] = [];
+    arr.forEach((el, index) => {
+      const r = elementSchema.safeParse(el);
+      if (r.success) {
+        kept.push(r.data);
+      } else {
+        ctx.logger?.warn(
+          {
+            event: 'extract.element_dropped',
+            agent: ctx.config.name,
+            array: field,
+            index,
+            reason: r.error.issues[0]?.message ?? 'validation failed',
+          },
+          'tolerant extractor parse dropped an invalid element',
+        );
+      }
+    });
+    assembled[field] = kept;
+  }
+  return outputSchema.parse(assembled) as z.infer<S>;
 }
 
 /**

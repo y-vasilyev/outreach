@@ -1,3 +1,4 @@
+import { normalizePriceToken } from './price.js';
 import type {
   ProfileDataPointDraft,
   RateCard,
@@ -155,36 +156,39 @@ function parseCurrency(raw: string | undefined): string {
 }
 
 function parsePrice(raw: string): number | null {
-  const normalized = raw
-    .replace(/\u00a0/g, ' ')
-    .replace(/\s/g, '')
-    .replace(',', '.')
-    .toLowerCase();
-  const m = /^(\d+(?:\.\d+)?)(к|k|тыс\.?|тысяч[а-яё]*)?$/.exec(normalized);
-  if (!m) return null;
-  const n = Number(m[1]);
-  if (!Number.isFinite(n)) return null;
-  return Math.round(n * (m[2] ? 1000 : 1));
+  // Single source of truth for price coercion (handles spaces, "от", comma
+  // decimal, and к/тыс/млн/млрд multipliers). See packages/shared/src/price.ts.
+  return normalizePriceToken(raw);
 }
 
 function platformFromHeader(line: string): string | null {
-  const m = /^\s*(telegram|телеграм|youtube|ютуб|instagram|инстаграм|вконтакте|vk|вк|tiktok|tik\s*tok|тик\s*ток)\s+[—–-]\s+/i.exec(line);
+  const m =
+    /^\s*(telegram|телеграм|тгк|youtube|ютуб|instagram|инстаграм|вконтакте|vk|вк|tiktok|tik\s*tok|тик\s*ток|мах|max|дзен|zen)\s+[—–-]\s+/i.exec(
+      line,
+    );
   if (!m) return null;
   const raw = m[1]!.toLowerCase().replace(/\s+/g, '');
-  if (raw === 'telegram' || raw === 'телеграм') return 'telegram';
+  if (raw === 'telegram' || raw === 'телеграм' || raw === 'тгк') return 'telegram';
   if (raw === 'youtube' || raw === 'ютуб') return 'youtube';
   if (raw === 'instagram' || raw === 'инстаграм') return 'instagram';
   if (raw === 'вконтакте' || raw === 'vk' || raw === 'вк') return 'vk';
   if (raw === 'tiktok' || raw === 'тикток') return 'tiktok';
+  // MAX messenger and Yandex Zen are not in the closed offer-attribute enum;
+  // they ride the promoted free-string `platform` field so the second platform
+  // in a multi-platform reply is not dropped (harden-reply-extraction).
+  if (raw === 'мах' || raw === 'max') return 'max';
+  if (raw === 'дзен' || raw === 'zen') return 'zen';
   return null;
 }
 
 function platformFromInlineText(line: string): string | null {
-  if (/(^|[^\p{L}\p{N}])(?:тг|telegram|телеграм)(?=$|[^\p{L}\p{N}])/iu.test(line)) return 'telegram';
+  if (/(^|[^\p{L}\p{N}])(?:тгк|тг|telegram|телеграм)(?=$|[^\p{L}\p{N}])/iu.test(line)) return 'telegram';
   if (/(^|[^\p{L}\p{N}])(?:youtube|ютуб)(?=$|[^\p{L}\p{N}])/iu.test(line)) return 'youtube';
   if (/(^|[^\p{L}\p{N}])(?:instagram|инстаграм)(?=$|[^\p{L}\p{N}])/iu.test(line)) return 'instagram';
   if (/(^|[^\p{L}\p{N}])(?:vk|вк|вконтакте)(?=$|[^\p{L}\p{N}])/iu.test(line)) return 'vk';
   if (/(^|[^\p{L}\p{N}])(?:tiktok|tik\s*tok|тик\s*ток)(?=$|[^\p{L}\p{N}])/iu.test(line)) return 'tiktok';
+  if (/(^|[^\p{L}\p{N}])(?:мах|max)(?=$|[^\p{L}\p{N}])/iu.test(line)) return 'max';
+  if (/(^|[^\p{L}\p{N}])(?:дзен|zen)(?=$|[^\p{L}\p{N}])/iu.test(line)) return 'zen';
   return null;
 }
 
@@ -210,7 +214,7 @@ function canonicalFormat(label: string, platform: string | null): string {
   return platform ? `${prefix}other` : 'other';
 }
 
-const PRICE_WITH_CURRENCY_RE_SOURCE = String.raw`((?:\d{1,3}(?:[\s\u00a0]\d{3})+|\d+)(?:[.,]\d+)?\s*(?:к|k|тыс\.?|тысяч[а-яё]*)?)(?:\s*(₽|рубл[а-яё]*|руб\.?|р\.?|rub|usd|\$|eur|€))?`;
+const PRICE_WITH_CURRENCY_RE_SOURCE = String.raw`((?:\d{1,3}(?:[\s\u00a0]\d{3})+|\d+)(?:[.,]\d+)?\s*(?:к|k|тыс\.?|тысяч[а-яё]*|млн\.?|миллион[а-яё]*|млрд\.?|миллиард[а-яё]*)?)(?:\s*(₽|рубл[а-яё]*|руб\.?|р\.?|rub|usd|\$|eur|€))?`;
 
 function cleanRawSnippet(raw: string): string {
   return raw.replace(/^[^\p{L}\p{N}]+/u, '').trim();
@@ -351,7 +355,7 @@ export function extractRateCardDataPointsFromText(text: string): ProfileDataPoin
       });
     }
 
-    const m = /^(.+?)\s+[—–]\s+((?:\d{1,3}(?:[\s\u00a0]\d{3})+|\d+)(?:[.,]\d+)?\s*(?:к|k|тыс\.?|тысяч[а-яё]*)?)(?:\s*(₽|рубл[а-яё]*|руб\.?|р\.?|rub|usd|\$|eur|€))?\s*$/i.exec(line);
+    const m = /^(.+?)\s+[—–]\s+((?:\d{1,3}(?:[\s\u00a0]\d{3})+|\d+)(?:[.,]\d+)?\s*(?:к|k|тыс\.?|тысяч[а-яё]*|млн\.?|миллион[а-яё]*|млрд\.?|миллиард[а-яё]*)?)(?:\s*(₽|рубл[а-яё]*|руб\.?|р\.?|rub|usd|\$|eur|€))?\s*$/i.exec(line);
     if (!m) continue;
     const label = m[1]!.trim();
     if (/налог|бонус|статистик|скидк/i.test(label)) continue;
@@ -448,12 +452,22 @@ function deletePolicyFromText(text: string): 'deleted' | 'permanent' | null {
   return null;
 }
 
-/** Extract a `tax` note (e.g. "налог 6%", "+ налог на ИП") from free text. */
-function taxFromText(text: string): string | null {
-  const m = /(?:\+\s*)?налог[\p{L}\s]*(?:\d+\s*%|\bна\s+ип\b|включ[\p{L}]*)?[^.,;\n]*/iu.exec(text);
-  if (!m) return null;
-  const note = m[0].trim().replace(/^\+\s*/, '');
-  return note.length > 0 ? note : null;
+/**
+ * Extract ALL `tax` notes (e.g. "налог 6%", "+ налог на ИП", and a stacked
+ * "доп налог на рекламу 3%") from free text. Returns a deduped list so two
+ * distinct taxes on one offer are both preserved as separate `tax` attributes
+ * rather than collapsed (harden-reply-extraction). Empty when no tax is stated.
+ */
+function taxesFromText(text: string): string[] {
+  const re = /(?:\+\s*)?налог[\p{L}\s]*(?:\d+\s*%|\bна\s+ип\b|включ[\p{L}]*)?[^.,;\n]*/giu;
+  const out: string[] = [];
+  for (const m of text.matchAll(re)) {
+    const note = m[0].trim().replace(/^\+\s*/, '');
+    if (note.length > 0 && !out.some((x) => x.toLowerCase() === note.toLowerCase())) {
+      out.push(note);
+    }
+  }
+  return out;
 }
 
 /** Extract included deliverables from "входит ..." / "+ доп пост" phrasing. */
@@ -515,8 +529,7 @@ function extractInlineOffersFromLine(
   platform: string | null,
   acc: OfferAccumulator,
 ): void {
-  const tax = taxFromText(line);
-  const taxSnippet = tax ?? '';
+  const taxes = taxesFromText(line);
   const lineDeletePolicy = deletePolicyFromText(line);
   const lineIncludes = includesFromText(line);
 
@@ -533,7 +546,7 @@ function extractInlineOffersFromLine(
     const attributes: PlacementAttribute[] = [makeAttr('duration', period, rawSnippet, 0.95)];
     if (lineDeletePolicy) attributes.push(makeAttr('delete_policy', lineDeletePolicy, line, 0.9));
     if (lineIncludes.length > 0) attributes.push(makeAttr('includes', lineIncludes, line, 0.85));
-    if (tax) attributes.push(makeAttr('tax', tax, taxSnippet, 0.9));
+    for (const t of taxes) attributes.push(makeAttr('tax', t, t, 0.9));
     pushOffer(acc, {
       kind: 'post',
       platform,
@@ -568,7 +581,7 @@ function extractInlineOffersFromLine(
         if (lineIncludes.length > 0) {
           attributes.push(makeAttr('includes', lineIncludes, line, 0.85));
         }
-        if (tax) attributes.push(makeAttr('tax', tax, taxSnippet, 0.9));
+        for (const t of taxes) attributes.push(makeAttr('tax', t, t, 0.9));
         pushOffer(acc, {
           kind: 'offsite_review',
           platform: null,
@@ -592,7 +605,7 @@ function extractTableOffersFromLine(
   platform: string | null,
   acc: OfferAccumulator,
 ): void {
-  const m = /^(.+?)\s+[—–]\s+((?:\d{1,3}(?:[\s ]\d{3})+|\d+)(?:[.,]\d+)?\s*(?:к|k|тыс\.?|тысяч[а-яё]*)?)(?:\s*(₽|рубл[а-яё]*|руб\.?|р\.?|rub|usd|\$|eur|€))?\s*$/i.exec(
+  const m = /^(.+?)\s+[—–]\s+((?:\d{1,3}(?:[\s ]\d{3})+|\d+)(?:[.,]\d+)?\s*(?:к|k|тыс\.?|тысяч[а-яё]*|млн\.?|миллион[а-яё]*|млрд\.?|миллиард[а-яё]*)?)(?:\s*(₽|рубл[а-яё]*|руб\.?|р\.?|rub|usd|\$|eur|€))?\s*$/i.exec(
     line,
   );
   if (!m) return;
@@ -652,7 +665,7 @@ function extractLabeledOffersFromLine(
 ): void {
   const matches = extractLabeledFormatPrices(line);
   if (matches.length === 0) return;
-  const tax = taxFromText(line);
+  const taxes = taxesFromText(line);
   const lineDeletePolicy = deletePolicyFromText(line);
   const lineIncludes = includesFromText(line);
   for (const lp of matches) {
@@ -663,7 +676,7 @@ function extractLabeledOffersFromLine(
     if (duration && kind === 'post') attributes.push(makeAttr('duration', duration, lp.rawSnippet, 0.8));
     if (lineDeletePolicy) attributes.push(makeAttr('delete_policy', lineDeletePolicy, line, 0.8));
     if (lineIncludes.length > 0) attributes.push(makeAttr('includes', lineIncludes, line, 0.8));
-    if (tax) attributes.push(makeAttr('tax', tax, tax, 0.8));
+    for (const t of taxes) attributes.push(makeAttr('tax', t, t, 0.8));
     pushOffer(acc, {
       kind,
       platform,
@@ -673,6 +686,226 @@ function extractLabeledOffersFromLine(
       confidence: 0.9,
       rawSnippet: lp.rawSnippet,
     });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Additive layout coverage (harden-reply-extraction). These run AS FALLBACKS
+// after the table/inline/labeled builders and skip any offer whose
+// (platform,kind,duration,price) signature a prior builder already produced, so
+// they compose without double-counting (codex review).
+// ---------------------------------------------------------------------------
+
+/**
+ * Coarse signature for cross-builder dedupe (ignores rawSnippet AND duration).
+ * The fallback builders run AFTER the inline/table/labeled builders; a fragment
+ * with the same platform+kind+price as an offer a prior builder already emitted
+ * is the SAME offer (the prior one usually carries richer attributes like
+ * duration), so the fallback must skip it even though it lacks that duration.
+ */
+function offerSignature(o: PlacementOfferDraft): string {
+  return `${(o.platform ?? '').toLowerCase()}:${o.kind.toLowerCase()}:${o.price ?? ''}`;
+}
+
+/**
+ * Recognise a placement format word in a text fragment (platform-agnostic),
+ * returning the legacy format token (without platform prefix) or null when the
+ * fragment carries no format keyword. Used by the comma-pair builder so a bare
+ * price fragment ("100% предоплата", "7 дней в ленте") is not mistaken for an
+ * offer.
+ */
+function fragmentFormatWord(text: string): string | null {
+  const l = text.toLowerCase();
+  if (/видео\s*-?\s*пост|видеопост/.test(l)) return 'video_post';
+  if (/фото\s*-?\s*пост|фотопост/.test(l)) return 'photo_post';
+  if (/серия\s+сторис|сторис\s+серия/.test(l)) return 'story_series';
+  if (/сторис|stories|story/.test(l)) return 'story';
+  if (/рилс|reels?/.test(l)) return 'reels';
+  if (/shorts?|шортс?/.test(l)) return 'shorts';
+  if (/интеграц/.test(l)) return 'integration';
+  if (/кружок/.test(l)) return 'round_text';
+  if (/выездн[\p{L}]*\s+обзор|обзор/u.test(l)) return 'offsite_review';
+  if (/клип|clips?/.test(l)) return 'clip';
+  if (/публикац|пост|post/.test(l)) {
+    if (/фото/.test(l)) return 'photo_post';
+    if (/видео/.test(l)) return 'video_post';
+    return 'post';
+  }
+  if (/видео|video/.test(l)) return 'video';
+  if (/фото/.test(l)) return 'photo_post';
+  return null;
+}
+
+/**
+ * Comma-separated per-format price pairs on one line, e.g.
+ *   "Фото-пост 120000, Видео-пост 170000"
+ *   "35 тыс (текст+фото), 40 тыс (текст+видео)"
+ *   "видеопост ВК/ТГ 267000, +ютуб/тикток 506000" (2nd fragment inherits the
+ *    line-level format word).
+ * Each emitted fragment needs BOTH a format keyword (own or line-level) and a
+ * price.
+ */
+function extractCommaPairOffersFromLine(
+  line: string,
+  platform: string | null,
+  acc: OfferAccumulator,
+): void {
+  if (!line.includes(',')) return;
+  const fragments = line.split(',').map((f) => f.trim()).filter(Boolean);
+  if (fragments.length < 2) return;
+  const lineWord = fragmentFormatWord(line);
+  const taxes = taxesFromText(line);
+
+  // Collect candidate offers first. Only treat the line as a comma-pair list
+  // when AT LEAST TWO fragments each yield a (format + price) — a single
+  // "<format> <price>, <non-offer>" line is already covered by the LLM/other
+  // builders, and emitting a poorer deterministic copy here would suppress the
+  // richer offer at merge time (codex review).
+  const candidates: PlacementOfferDraft[] = [];
+  for (const frag of fragments) {
+    // Use the LARGEST price in the fragment, not the first — a duration that
+    // precedes the price ("пост на 24 часа 120000") must not be read as 24
+    // (codex review). A bare small number with no real price is rejected below.
+    const best = maxPriceInFragment(frag);
+    if (!best) continue;
+    const price = best.price;
+    const ownWord = fragmentFormatWord(frag);
+    const word = ownWord ?? lineWord;
+    if (!word) continue;
+    // A fragment that only inherits the line-level format word (no format word
+    // of its own) qualifies only when its price is substantial. This rejects a
+    // duration token misread as a price ("24 часа" -> 24) while still accepting
+    // a real inherited-format price ("+ютуб/тикток 506000").
+    if (!ownWord && price < 1000) continue;
+    const fragPlatform = platformFromInlineText(frag) ?? platform;
+    const format = `${fragPlatform ? `${fragPlatform}_` : ''}${word}`;
+    const attributes: PlacementAttribute[] = [];
+    for (const t of taxes) attributes.push(makeAttr('tax', t, t, 0.7));
+    candidates.push({
+      kind: kindFromFormat(format),
+      platform: fragPlatform,
+      price,
+      currency: best.currency,
+      attributes,
+      confidence: 0.82,
+      rawSnippet: frag,
+    });
+  }
+  if (candidates.length < 2) return;
+
+  const existing = new Set(acc.offers.map(offerSignature));
+  for (const draft of candidates) {
+    const sig = offerSignature(draft);
+    if (existing.has(sig)) continue;
+    existing.add(sig);
+    pushOffer(acc, draft);
+  }
+}
+
+/** True when a line is a top-pin ("час топа" / "в топе") placement quote. */
+function isTopPinLine(line: string): boolean {
+  return /час\s*топа|в\s*топе|\bтоп[еа]\b/iu.test(line);
+}
+
+/** Largest price in a text fragment (placement prices dwarf duration numbers). */
+function maxPriceInFragment(frag: string): { price: number; currency: string } | null {
+  const re = new RegExp(PRICE_WITH_CURRENCY_RE_SOURCE, 'giu');
+  let best: { price: number; currency: string } | null = null;
+  for (const m of frag.matchAll(re)) {
+    const price = parsePrice(m[1] ?? '');
+    if (price == null) continue;
+    if (!best || price > best.price) best = { price, currency: parseCurrency(m[2]) };
+  }
+  return best;
+}
+
+/**
+ * Top-pin duration ladder. Handles BOTH the compact comma form
+ * ("Час топа/24ч 6000, /72ч 9000, /месяц 12000") and the common one-tier-per-
+ * line form ("Час топа / 24 ч. без удаления - 6000₽"). Emits one `post` offer
+ * per fragment: the price is the LARGEST number in the fragment (so a duration
+ * digit like "24" is never misread as the price); the duration token feeds a
+ * `duration` attribute when it maps to the enum (`месяц`→month) or a verbatim
+ * `notes` attribute otherwise (`24ч`/`72ч` — first-class hour tiers are
+ * placement-representation-v2); `без удаления` becomes `delete_policy`.
+ * Top-pin lines are routed ONLY here (the caller skips the table/inline builders
+ * for them) so a tier is never double-emitted as a generic `other` offer.
+ */
+function extractDurationLadderOffersFromLine(
+  line: string,
+  platform: string | null,
+  acc: OfferAccumulator,
+): void {
+  if (!isTopPinLine(line)) return;
+  const existing = new Set(acc.offers.map(offerSignature));
+  const fragments = line.includes(',') ? line.split(',') : [line];
+  for (const fragRaw of fragments) {
+    const frag = fragRaw.trim();
+    if (!frag) continue;
+    const tierMatch = /(\d+\s*ч(?:ас[а-яё.]*)?|сутки|месяц|недел[а-яё]*|\bдень\b)/iu.exec(frag);
+    const tier = tierMatch ? tierMatch[1]!.trim() : null;
+    // A ladder tier MUST carry a duration token; and the price must be a real
+    // placement price (≥1000), so a bare duration number ("24 часа" -> 24) or a
+    // duration-less fragment ("пост 10000", left to the LLM) is not emitted.
+    if (!tier) continue;
+    const best = maxPriceInFragment(frag);
+    if (!best || best.price < 1000) continue;
+    const attributes: PlacementAttribute[] = [];
+    const dur = tier ? durationFromText(tier) : null;
+    if (dur) attributes.push(makeAttr('duration', dur, tier!, 0.85));
+    else if (tier) attributes.push(makeAttr('notes', `топ ${tier}`, frag, 0.8));
+    const dp = deletePolicyFromText(frag);
+    if (dp) attributes.push(makeAttr('delete_policy', dp, frag, 0.85));
+    const draft: PlacementOfferDraft = {
+      kind: 'post',
+      platform,
+      price: best.price,
+      currency: best.currency,
+      attributes,
+      confidence: 0.85,
+      rawSnippet: frag,
+    };
+    const sig = offerSignature(draft);
+    if (existing.has(sig)) continue;
+    existing.add(sig);
+    pushOffer(acc, draft);
+  }
+}
+
+/**
+ * "<price> за <format>" phrasing, e.g. "7000₽ за 1 ролик", "6000 за пост".
+ * Captures a price followed by `за [N] <format>` — the layout media kits use for
+ * single-platform one-liners (often after a profile URL the table parser skips).
+ */
+function extractPricePerUnitOffersFromLine(
+  line: string,
+  platform: string | null,
+  acc: OfferAccumulator,
+): void {
+  const re = new RegExp(
+    PRICE_WITH_CURRENCY_RE_SOURCE +
+      String.raw`\s*за\s+(?:\d+\s+)?(ролик|пост|публикац[а-яё]*|сторис|видео|интеграц[а-яё]*|обзор|рилс|reels?|клип)`,
+    'giu',
+  );
+  const existing = new Set(acc.offers.map(offerSignature));
+  for (const m of line.matchAll(re)) {
+    const price = parsePrice(m[1] ?? '');
+    if (price == null) continue;
+    const word = fragmentFormatWord(m[3] ?? '') ?? 'post';
+    const format = `${platform ? `${platform}_` : ''}${word}`;
+    const draft: PlacementOfferDraft = {
+      kind: kindFromFormat(format),
+      platform,
+      price,
+      currency: parseCurrency(m[2]),
+      attributes: [],
+      confidence: 0.85,
+      rawSnippet: m[0].trim(),
+    };
+    const sig = offerSignature(draft);
+    if (existing.has(sig)) continue;
+    existing.add(sig);
+    pushOffer(acc, draft);
   }
 }
 
@@ -689,9 +922,23 @@ export function extractPlacementOffersFromText(text: string): PlacementOfferDraf
       continue;
     }
     const linePlatform = platformFromInlineText(line) ?? platform;
+    // Top-pin ladder lines ("час топа …") are routed FIRST to the ladder builder
+    // so a tier is not also emitted as a generic `other` offer by the table
+    // builder (which would match "… без удаления — 9000₽"). But only skip the
+    // other builders when the ladder ACTUALLY produced an offer — otherwise a
+    // top line with no duration tier ("Пост в топе — 10000₽") would be dropped;
+    // let it fall through to the table/inline builders (codex review).
+    if (isTopPinLine(line)) {
+      const before = acc.offers.length;
+      extractDurationLadderOffersFromLine(line, linePlatform, acc);
+      if (acc.offers.length > before) continue;
+    }
     extractInlineOffersFromLine(line, linePlatform, acc);
     extractLabeledOffersFromLine(line, linePlatform, acc);
     extractTableOffersFromLine(line, linePlatform, acc);
+    // Additive fallbacks (compose via offerSignature dedupe).
+    extractPricePerUnitOffersFromLine(line, linePlatform, acc);
+    extractCommaPairOffersFromLine(line, linePlatform, acc);
   }
 
   return acc.offers;

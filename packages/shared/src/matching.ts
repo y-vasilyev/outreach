@@ -1,7 +1,7 @@
 import type { AdBrief } from './schemas/matching.js';
 import type { Audience, BloggerProfile, RateCard } from './schemas/blogger-profile.js';
 import type { PlacementOffer } from './schemas/placement-offer.js';
-import { getOfferAttribute } from './placement-offers.js';
+import { getOfferAttribute, getOfferAttributes } from './placement-offers.js';
 
 /**
  * Pure blogger-matching engine (agency-sourcing-matching M7, design D6).
@@ -340,7 +340,8 @@ interface OfferTerms {
   isPermanent: boolean;
   deliverables: string[];
   price: number | null;
-  tax: string | null;
+  /** All stated taxes (an offer can carry stacked taxes, e.g. ИП 8% + реклама 3%). */
+  tax: string[];
 }
 
 function readOfferTerms(offer: PlacementOffer): OfferTerms {
@@ -362,7 +363,8 @@ function readOfferTerms(offer: PlacementOffer): OfferTerms {
       }
     }
   }
-  const taxRaw = getOfferAttribute(offer, 'tax');
+  const tax = getOfferAttributes(offer, 'tax')
+    .filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
   return {
     platform,
     kind,
@@ -371,7 +373,7 @@ function readOfferTerms(offer: PlacementOffer): OfferTerms {
     isPermanent,
     deliverables,
     price: typeof offer.price === 'number' && Number.isFinite(offer.price) ? offer.price : null,
-    tax: typeof taxRaw === 'string' && taxRaw.trim().length > 0 ? taxRaw : null,
+    tax,
   };
 }
 
@@ -487,7 +489,7 @@ function describeOfferTerms(terms: OfferTerms): string {
   if (terms.isPermanent) bits.push('бессрочно');
   else if (terms.durationLabel) bits.push(DURATION_LABEL[terms.durationLabel] ?? terms.durationLabel);
   if (terms.deliverables.length > 0) bits.push(`включает: ${terms.deliverables.join(', ')}`);
-  if (terms.tax) bits.push(terms.tax);
+  for (const t of terms.tax) bits.push(t);
   return bits.join(', ');
 }
 

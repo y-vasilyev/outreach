@@ -2,7 +2,11 @@ import { z } from 'zod';
 import {
   extractPlacementOffersFromText,
   extractRateCardDataPointsFromText,
+  normalizePriceToken,
   PLACEMENT_ATTRIBUTE_REGISTRY_V1,
+  PlacementAttributeProposalDraftZ,
+  PlacementOfferDraftZ,
+  ProfileDataPointDraftZ,
   ProfileExtractionOutputZ,
   validateOfferAttributes,
   type PlacementAttributeProposalDraft,
@@ -111,6 +115,11 @@ export const rateCardExtractor: Agent<RateCardExtractorInput, RateCardExtractorO
       outputSchema: rateCardExtractorOutputSchema,
       fallbackSystemPrompt: FALLBACK_SYSTEM,
       fallbackUserPromptTemplate: FALLBACK_USER,
+      tolerantArrayFields: {
+        data_points: ProfileDataPointDraftZ,
+        placement_offers: PlacementOfferDraftZ,
+        attribute_proposals: PlacementAttributeProposalDraftZ,
+      },
     });
 
     // Deterministic guards (harden-agency-sourcing-pipeline):
@@ -138,12 +147,21 @@ export const rateCardExtractor: Agent<RateCardExtractorInput, RateCardExtractorO
     const data_points: typeof out.data_points = [];
     for (const dp of out.data_points) {
       const f = (dp.field ?? '').trim().toLowerCase();
+      // Legacy price coercion: a `rate.*` value the model emitted as a Russian
+      // price string ("50к", "1.2млн", "от 118000") would otherwise be dropped
+      // by the numeric guard. Normalize it to a number through the shared
+      // helper so the legacy compatibility stream coerces identically to the
+      // structured offers (harden-reply-extraction D2). Non-coercible strings
+      // keep their original value.
+      const coerced =
+        typeof dp.value === 'string' ? normalizePriceToken(dp.value) : null;
+      const value = coerced !== null ? coerced : dp.value;
       let normalized: string | null = null;
       if (RATE_FORMAT_RE.test(f)) {
         normalized = f;
-      } else if (PLAIN_FORMAT_RE.test(f) && isNumeric(dp.value)) {
+      } else if (PLAIN_FORMAT_RE.test(f) && isNumeric(value)) {
         normalized = `rate.${f}`;
-      } else if (f.startsWith('rate.') && isNumeric(dp.value)) {
+      } else if (f.startsWith('rate.') && isNumeric(value)) {
         // multi-segment like `rate.zoom.lecture` or `rate.reach.story` —
         // we have a price, just don't know the canonical format. Bucket.
         normalized = 'rate.other';
@@ -155,6 +173,7 @@ export const rateCardExtractor: Agent<RateCardExtractorInput, RateCardExtractorO
       data_points.push({
         ...dp,
         field: normalized,
+        value,
         rawSnippet:
           dp.rawSnippet && dp.rawSnippet.trim().length > 0 ? dp.rawSnippet : sourceText,
       });

@@ -1,4 +1,18 @@
 import { z } from 'zod';
+import { normalizePriceToken } from '../price.js';
+
+/**
+ * Coerce a price input to a finite non-negative number or null. Accepts numbers
+ * and the free-form price strings bloggers write ("от 118000", "118 000",
+ * "1.2млн", "50к"). A non-coercible value yields null (term-only offer) rather
+ * than rejecting the whole offer — harden-reply-extraction D2.
+ */
+const PriceCoerceZ = z.preprocess((v) => {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'number') return Number.isFinite(v) && v >= 0 ? v : null;
+  if (typeof v === 'string') return normalizePriceToken(v);
+  return null;
+}, z.number().nonnegative().nullable());
 
 /**
  * Structured commercial placement offers (entity-style-rate-cards change).
@@ -84,7 +98,7 @@ export const PlacementOfferDraftZ = z.object({
   kind: z.string().min(1),
   /** Platform (telegram/youtube/instagram/vk/tiktok) — promoted hot field. */
   platform: z.string().nullish().transform((v) => v ?? null),
-  price: z.number().nonnegative().nullish().transform((v) => v ?? null),
+  price: PriceCoerceZ,
   currency: z.string().default('RUB'),
   attributes: z.array(PlacementAttributeZ).default([]),
   confidence: z.number().min(0).max(1).default(0.5),

@@ -73,6 +73,16 @@ function toMillis(at: string | Date): number {
 const CONFIDENCE_BAND = 0.15;
 
 /**
+ * Confidence floor for the comparable commercial views (harden-reply-extraction
+ * D4). Facts below this are excluded from `placementOffers` AND from the legacy
+ * `rateCards`/`formats` derived for compatibility, so a garbled low-confidence
+ * offer cannot pollute search/compare via either path. The underlying data
+ * points are never dropped — they remain individually retrievable (needs-review)
+ * and HUD/observation freshness still counts them.
+ */
+export const PLACEMENT_OFFER_CONFIDENCE_FLOOR = 0.2;
+
+/**
  * Sort copy so the best (first) is the freshest within a confidence band, else
  * the highest confidence. Concretely: when |Δconfidence| ≤ CONFIDENCE_BAND,
  * order by capturedAt desc (fresh wins); otherwise by confidence desc. Ties in
@@ -188,6 +198,9 @@ function collectPlacementOffers(points: RollupDataPoint[]): PlacementOffer[] {
     const parsed = PlacementOfferZ.safeParse(p.value);
     if (!parsed.success) continue;
     const offer = parsed.data;
+    // Comparable-view confidence floor: sub-floor offers stay on their data-point
+    // rows (provenance/needs-review) but do not enter the rolled-up list.
+    if (offer.confidence < PLACEMENT_OFFER_CONFIDENCE_FLOOR) continue;
     // Keep the offer's own capturedAt provenance; backfill from the row when
     // the stored offer didn't carry one (older writes).
     if (!offer.capturedAt) {
@@ -243,7 +256,9 @@ export function rollUpProfileFields(points: RollupDataPoint[]): RolledUpProfileF
   for (const fmt of [...rateFormats].sort()) {
     const pts = byField.get(`rate.${fmt}`) ?? [];
     const chosen = byConfidenceThenRecency(pts).find(
-      (p) => toFiniteNumber(p.value) !== undefined,
+      // Same comparable-view floor as structured offers, so a sub-floor fact
+      // cannot leak back into the catalog via the legacy rate-card path.
+      (p) => toFiniteNumber(p.value) !== undefined && p.confidence >= PLACEMENT_OFFER_CONFIDENCE_FLOOR,
     );
     const price = chosen ? toFiniteNumber(chosen.value) : undefined;
     if (price === undefined) continue;

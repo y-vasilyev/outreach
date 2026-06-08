@@ -181,23 +181,19 @@ export async function handleProfileExtract(data: {
     drafts.push({ extractedBy: 'audience_stats_extractor', draft: dp });
   }
 
-  // Structured placement offers (entity-style-rate-cards). Behind the
-  // `structured_placement_offers` flag: when off, behavior is unchanged
-  // (legacy data_points only). When on, we ALSO dual-write the extractor's
+  // Structured placement offers are the CANONICAL write path
+  // (harden-reply-extraction D3): always persist the extractor's
   // placement_offers as `placement.offer` ProfileDataPoint rows and its
-  // attribute_proposals as `placement_attribute` rows (status='proposed').
+  // attribute_proposals as `placement_attribute` rows (status='proposed'),
+  // independent of any feature flag. The `structured_placement_offers` flag
+  // now governs only downstream matching/planner preference — not persistence.
   //
   // NOTE: computed BEFORE the empty-short-circuit below. The extractor can
   // legitimately return ONLY structured offers (e.g. "пост 50000 + условия")
   // with no legacy `data_points` — short-circuiting on `drafts.length === 0`
   // alone would silently drop that extraction.
-  const structuredOffersEnabled = getFeatureFlags().get('structured_placement_offers');
-  const placementOfferDrafts: PlacementOfferDraft[] = structuredOffersEnabled
-    ? (rate?.placement_offers ?? [])
-    : [];
-  const attributeProposals: PlacementAttributeProposalDraft[] = structuredOffersEnabled
-    ? (rate?.attribute_proposals ?? [])
-    : [];
+  const placementOfferDrafts: PlacementOfferDraft[] = rate?.placement_offers ?? [];
+  const attributeProposals: PlacementAttributeProposalDraft[] = rate?.attribute_proposals ?? [];
 
   if (
     drafts.length === 0 &&
@@ -263,7 +259,7 @@ export async function handleProfileExtract(data: {
     // (profileId, sourceMessageId, field='placement.offer', extractedBy) PLUS
     // the offer's rawSnippet (so two distinct offers from the same message —
     // e.g. day vs month post — both persist, but a re-run does not duplicate).
-    if (structuredOffersEnabled) {
+    {
       const capturedAt = now.toISOString();
       for (const draft of placementOfferDrafts) {
         const offer = stampOfferProvenance(draft, {
@@ -355,11 +351,10 @@ export async function handleProfileExtract(data: {
         reach: rolled.reach,
         avgViews: rolled.avgViews,
         capturedAt: rolled.capturedAt ? new Date(rolled.capturedAt) : null,
-        // Structured placement offers (entity-style-rate-cards). The roll-up
-        // populates `rolled.placementOffers` from the `placement.offer` data
-        // points; we persist it onto the new column. Only when the flag is on
-        // (so flag-off behavior is byte-identical to today).
-        ...(structuredOffersEnabled ? { placementOffers: rolled.placementOffers as never } : {}),
+        // Structured placement offers are canonical: always persist the rolled-up
+        // `placementOffers` (harden-reply-extraction D3), so the catalog is
+        // structurally complete regardless of the matching/planner-preference flag.
+        placementOffers: rolled.placementOffers as never,
       },
     });
 

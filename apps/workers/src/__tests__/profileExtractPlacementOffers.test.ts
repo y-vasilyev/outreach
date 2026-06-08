@@ -111,15 +111,20 @@ beforeEach(() => {
 });
 
 describe('handleProfileExtract — structured placement offers', () => {
-  it('does NOT write placement.offer rows or proposals when the flag is OFF', async () => {
+  it('writes placement.offer rows + proposals even when the flag is OFF (canonical write path)', async () => {
+    // harden-reply-extraction D3: structured persistence no longer depends on
+    // `structured_placement_offers`. With the flag OFF the catalog is still
+    // structurally complete; the flag now governs matching/planner preference.
+    mocks.flagState.structured_placement_offers = false;
     await handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1' });
     const created = mocks.prisma.profileDataPoint.create.mock.calls.map(
       (c) => (c[0] as { data: { field: string } }).data,
     );
-    // Only legacy data points; no placement.offer rows.
-    expect(created.some((d) => d.field === 'placement.offer')).toBe(false);
-    expect(created.length).toBe(2);
-    expect(mocks.prisma.placementAttribute.create).not.toHaveBeenCalled();
+    // Structured offers persisted (2 distinct) AND legacy dual-write rows.
+    expect(created.filter((d) => d.field === 'placement.offer')).toHaveLength(2);
+    expect(created.some((d) => d.field === 'rate.telegram_post_day')).toBe(true);
+    // Attribute proposals persisted regardless of the flag.
+    expect(mocks.prisma.placementAttribute.create).toHaveBeenCalledTimes(1);
   });
 
   it('writes placement.offer rows + proposals when the flag is ON', async () => {

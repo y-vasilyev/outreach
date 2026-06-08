@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { ProfileExtractionOutputZ } from '@nosquare/shared';
+import {
+  PlacementAttributeProposalDraftZ,
+  PlacementOfferDraftZ,
+  ProfileDataPointDraftZ,
+  ProfileExtractionOutputZ,
+} from '@nosquare/shared';
 
 import type { Agent } from '../types.js';
 import { invokeJson } from './_runtime.js';
@@ -104,6 +109,11 @@ export const audienceStatsExtractor: Agent<
       outputSchema: audienceStatsExtractorOutputSchema,
       fallbackSystemPrompt: FALLBACK_SYSTEM,
       fallbackUserPromptTemplate: FALLBACK_USER,
+      tolerantArrayFields: {
+        data_points: ProfileDataPointDraftZ,
+        placement_offers: PlacementOfferDraftZ,
+        attribute_proposals: PlacementAttributeProposalDraftZ,
+      },
     });
 
     // Deterministic guard: keep ALL points (incl. low-confidence). Backfill
