@@ -350,18 +350,22 @@ export const discoveryGuidedService = {
           provenance: { ...prov, scrapeGeneration: generation } as object,
         },
       });
+      // Reopen a terminal run BEFORE enqueueing the scrape (BUG #3): the
+      // scrape→review hook only fires for running|enriching runs, and a fast
+      // scrape could otherwise complete and call `triggerGuidedReview` while the
+      // run was still `done`, dropping the re-review and stranding the re-armed
+      // candidate. With the reopen first, any immediate scrape completion finds
+      // the run actionable; the completion check returns it to `done`. A
+      // `failed` run is left as-is.
+      await prisma.discoveryRun.updateMany({
+        where: { id: runId, status: 'done' },
+        data: { status: 'enriching', completedAt: null },
+      });
       await getQueues().channelScrape.add(
         'scrape',
         { channelId: candidate.channelId },
         { attempts: 1 },
       );
-      // Reopen a terminal run so the scrape→review hook (which only fires for
-      // running|enriching runs) re-fires; the completion check returns it to
-      // `done`. A `failed` run is left as-is.
-      await prisma.discoveryRun.updateMany({
-        where: { id: runId, status: 'done' },
-        data: { status: 'enriching', completedAt: null },
-      });
       return { ok: true };
     }
 

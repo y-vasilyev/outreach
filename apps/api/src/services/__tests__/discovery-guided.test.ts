@@ -263,6 +263,12 @@ describe('discoveryGuidedService.candidateAction', () => {
     expect(mocks.prisma.discoveryRun.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'run_1', status: 'done' }, data: expect.objectContaining({ status: 'enriching' }) }),
     );
+    // BUG #3: the run MUST be reopened BEFORE the scrape is enqueued, otherwise a
+    // fast scrape could call triggerGuidedReview while the run is still `done`
+    // (that hook ignores done runs) and strand the re-armed candidate.
+    const reopenOrder = mocks.prisma.discoveryRun.updateMany.mock.invocationCallOrder[0]!;
+    const scrapeOrder = mocks.scrapeAdd.mock.invocationCallOrder[0]!;
+    expect(reopenOrder).toBeLessThan(scrapeOrder);
   });
 
   it('throws not_found for a candidate outside the run', async () => {

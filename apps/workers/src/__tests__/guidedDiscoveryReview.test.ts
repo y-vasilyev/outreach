@@ -40,7 +40,10 @@ const mocks = vi.hoisted(() => {
   return { prisma, run };
 });
 
-vi.mock('@nosquare/db', () => ({ getPrisma: () => mocks.prisma, Prisma: { JsonNull: null } }));
+vi.mock('@nosquare/db', () => ({
+  getPrisma: () => mocks.prisma,
+  Prisma: { JsonNull: null, DbNull: '__DB_NULL__', AnyNull: '__ANY_NULL__' },
+}));
 vi.mock('bullmq', () => {
   class Queue {
     add = vi.fn(async () => ({}));
@@ -163,6 +166,26 @@ describe('guided-discovery-review', () => {
     mocks.prisma.channel.findUnique.mockResolvedValue({ id: 'ch1', status: 'scraped', title: 'T', rawData: { posts: [{ id: 'p', text: 'x', urls: [] }] } });
     // One reviewed, one still pending (review null).
     mocks.prisma.discoveryRunCandidate.findMany.mockResolvedValue([{ review: { rationale: 'ok' } }, { review: null }]);
+    mocks.run.mockResolvedValue({ score: 0.8, recommendation: 'strong_fit', rationale: '', risk_notes: [], evidence: [], insufficient_evidence_reason: null });
+
+    await handleReview({ runId: 'run_1', candidateId: 'c1', scrapeOutcome: 'ok' });
+
+    expect(mocks.prisma.discoveryRun.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('does NOT flip to done when a re-armed candidate has a stale review (BUG #4)', async () => {
+    mocks.prisma.discoveryRunCandidate.findUnique.mockResolvedValue({
+      id: 'c1', runId: 'run_1', channelId: 'ch1', platform: 'telegram', handle: 'h', enrichmentStatus: 'needs_scrape', review: null,
+    });
+    mocks.prisma.channel.findUnique.mockResolvedValue({ id: 'ch1', status: 'scraped', title: 'T', rawData: { posts: [{ id: 'p', text: 'x', urls: [] }] } });
+    // Completion recompute: this candidate now reviewed, but a SECOND candidate
+    // was re-armed by scrape_refresh — it carries a STALE non-null review while
+    // enrichmentStatus='pending_enrichment'. It must still count as pending so
+    // the run stays open until its re-review job runs.
+    mocks.prisma.discoveryRunCandidate.findMany.mockResolvedValue([
+      { review: { rationale: 'ok' }, enrichmentStatus: 'enriched' },
+      { review: { rationale: 'stale' }, enrichmentStatus: 'pending_enrichment' },
+    ]);
     mocks.run.mockResolvedValue({ score: 0.8, recommendation: 'strong_fit', rationale: '', risk_notes: [], evidence: [], insufficient_evidence_reason: null });
 
     await handleReview({ runId: 'run_1', candidateId: 'c1', scrapeOutcome: 'ok' });

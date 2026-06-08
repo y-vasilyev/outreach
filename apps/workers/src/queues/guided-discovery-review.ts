@@ -109,7 +109,8 @@ async function handleReview(data: GuidedDiscoveryReviewJob): Promise<void> {
     const open = await prisma.discoveryRunCandidate.findMany({
       where: {
         runId: run.id,
-        OR: [{ review: { equals: Prisma.JsonNull } }, { enrichmentStatus: 'pending_enrichment' }],
+        // AnyNull matches both fresh (SQL NULL) and re-cleared (JSON null) rows.
+        OR: [{ review: { equals: Prisma.AnyNull } }, { enrichmentStatus: 'pending_enrichment' }],
       },
       select: { id: true, handle: true, review: true },
     });
@@ -357,9 +358,16 @@ async function closeRunIfComplete(
   const prisma = getPrisma();
   const rows = await prisma.discoveryRunCandidate.findMany({
     where: { runId },
-    select: { review: true },
+    select: { review: true, enrichmentStatus: true },
   });
-  const pendingReview = rows.filter((r) => !isReviewed(r.review)).length;
+  // A candidate is pending when it has no review OR it has been re-armed by
+  // `scrape_refresh` (enrichmentStatus='pending_enrichment') — the latter still
+  // carries a STALE `review` until its re-review job runs, so counting only the
+  // `review` column would prematurely close the run and strand the re-review at
+  // the terminal-run guard (BUG #4).
+  const pendingReview = rows.filter(
+    (r) => !isReviewed(r.review) || r.enrichmentStatus === 'pending_enrichment',
+  ).length;
   summary.pendingReview = pendingReview;
 
   if (pendingReview === 0) {

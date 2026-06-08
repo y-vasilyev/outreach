@@ -336,6 +336,17 @@ export const campaignsService = {
         for (const ct of reachable) {
           const existing = ct.conversations[0];
           let convId = existing?.id;
+          if (convId && convMode === 'manual') {
+            // prepareOnly + an EXISTING conversation (BUG #2): the create/upsert
+            // branch below is skipped, so the `manual` override would never be
+            // applied — an existing `semi_auto`/`auto` conversation could
+            // auto-send the enqueued opener via `tryAutoApprove`. Force it to
+            // `manual` here so launch-into-work keeps its human-approval gate.
+            await prisma.conversation.update({
+              where: { id: convId },
+              data: { mode: 'manual' },
+            });
+          }
           if (!convId) {
             const acct = accounts[i % accounts.length]!;
             i += 1;

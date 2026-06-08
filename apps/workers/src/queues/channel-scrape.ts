@@ -45,7 +45,11 @@ async function triggerGuidedReview(channelId: string, scrapeOk: boolean): Promis
       where: {
         channelId,
         run: { status: { in: ['running', 'enriching'] } },
-        OR: [{ review: { equals: Prisma.JsonNull } }, { enrichmentStatus: 'pending_enrichment' }],
+        // Fresh candidates carry SQL NULL in `review`; a re-armed candidate
+        // cleared by the reviewer carries JSON null. `Prisma.AnyNull` matches
+        // BOTH (DbNull + JsonNull) — `Prisma.JsonNull` alone would miss the
+        // common fresh-candidate case and wedge the run in `enriching`.
+        OR: [{ review: { equals: Prisma.AnyNull } }, { enrichmentStatus: 'pending_enrichment' }],
       },
       select: { id: true, runId: true, provenance: true },
     });

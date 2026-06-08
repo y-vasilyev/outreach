@@ -17,7 +17,12 @@ const mocks = vi.hoisted(() => {
   return { prisma, reviewAdd };
 });
 
-vi.mock('@nosquare/db', () => ({ getPrisma: () => mocks.prisma, Prisma: { JsonNull: null } }));
+// AnyNull is a distinct sentinel from JsonNull so the test proves the selector
+// uses AnyNull (matches both SQL NULL and JSON null), not JsonNull (BUG #1).
+vi.mock('@nosquare/db', () => ({
+  getPrisma: () => mocks.prisma,
+  Prisma: { JsonNull: '__JSON_NULL__', DbNull: '__DB_NULL__', AnyNull: '__ANY_NULL__' },
+}));
 vi.mock('bullmq', () => {
   class Queue {
     add = mocks.reviewAdd;
@@ -85,8 +90,10 @@ describe('triggerGuidedReview', () => {
     const where = (mocks.prisma.discoveryRunCandidate.findMany.mock.calls[0]?.[0] as { where: Record<string, unknown> }).where;
     expect(where.channelId).toBe('chX');
     expect(where.run).toEqual({ status: { in: ['running', 'enriching'] } });
+    // Must use AnyNull (matches fresh SQL NULL + re-cleared JSON null), not
+    // JsonNull which would miss fresh candidates and wedge the run (BUG #1).
     expect(where.OR).toEqual([
-      { review: { equals: null } },
+      { review: { equals: '__ANY_NULL__' } },
       { enrichmentStatus: 'pending_enrichment' },
     ]);
   });
