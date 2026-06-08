@@ -39,6 +39,7 @@ export {
   type InstagramProfile,
   type InstagramPost,
   type InstagramPostsResult,
+  type PublicPostMetrics,
   type YoutubeChannel,
   type YoutubeVideo,
   type YoutubeVideosResult,

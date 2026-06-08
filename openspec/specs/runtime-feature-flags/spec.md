@@ -80,7 +80,7 @@ The system SHALL provide an admin-only API to read and update feature flags, and
 
 ### Requirement: Behavior-preserving cutover
 
-Replacing the compile-time flag reads with the accessor SHALL be behavior-preserving given the seeded values match the prior constants (all off). The public `/config` endpoint consumed by the web SHALL serve the DB-backed flag state. Once the cutover is complete, the compile-time `flags.ts` module SHALL NOT contain operational rollout/kill-switch flags; any remaining product constants there shall either be wired to a real consumer or removed.
+Replacing the compile-time flag reads with the accessor SHALL be behavior-preserving given the seeded values match the prior constants (all off). The public `/config` endpoint consumed by the web SHALL serve the DB-backed flag state, and its snapshot SHALL include the `data_collection_hud` flag (in addition to the agency-rollout flags) so the web can gate client-side data-collection requests on it. Once the cutover is complete, the compile-time `flags.ts` module SHALL NOT contain operational rollout/kill-switch flags; any remaining product constants there shall either be wired to a real consumer or removed.
 
 #### Scenario: No behavior change on deploy
 
@@ -91,6 +91,11 @@ Replacing the compile-time flag reads with the accessor SHALL be behavior-preser
 
 - **WHEN** the web fetches `/config` after a flag is toggled on
 - **THEN** the response reflects the new flag state from the database
+
+#### Scenario: /config exposes the data-collection HUD flag
+
+- **WHEN** the web fetches `/config`
+- **THEN** the snapshot includes a `dataCollectionHud` boolean mirroring the `data_collection_hud` DB-backed flag state
 
 #### Scenario: No parallel compile-time flag module remains
 
