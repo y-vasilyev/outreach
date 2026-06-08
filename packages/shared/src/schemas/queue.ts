@@ -11,6 +11,7 @@ export const QueueNames = {
   profileExtract: 'profile-extract',
   discoveryBatch: 'discovery-batch',
   guidedDiscovery: 'guided-discovery',
+  guidedDiscoveryReview: 'guided-discovery-review',
 } as const;
 
 export type QueueName = (typeof QueueNames)[keyof typeof QueueNames];
@@ -84,6 +85,23 @@ export const GuidedDiscoveryJobZ = z.object({
   runId: z.string(),
 });
 
+/**
+ * Per-candidate review step of the guided-discovery evidence loop
+ * (fix-guided-discovery-evidence-loop). Triggered by the `channel-scrape`
+ * success/failure hook (one job per open candidate of the scraped channel),
+ * the `scrape_refresh` re-arm, or a bounded sweep that closes a wedged run.
+ */
+export const GuidedDiscoveryReviewJobZ = z.object({
+  /** The `DiscoveryRun.id` the candidate(s) belong to. */
+  runId: z.string(),
+  /** The `DiscoveryRunCandidate.id` to review. Absent for a sweep job. */
+  candidateId: z.string().optional(),
+  /** Outcome of the scrape that triggered this review (drives no-LLM failure). */
+  scrapeOutcome: z.enum(['ok', 'failed']).optional(),
+  /** When true, force-close all still-open candidates (deadline sweep). */
+  sweep: z.boolean().optional(),
+});
+
 export const ProfileExtractJobZ = z.object({
   /** The conversation whose latest inbound triggered extraction. */
   conversationId: z.string(),
@@ -97,6 +115,7 @@ export const ProfileExtractJobZ = z.object({
 export type ChannelScrapeJob = z.infer<typeof ChannelScrapeJobZ>;
 export type DiscoveryBatchJob = z.infer<typeof DiscoveryBatchJobZ>;
 export type GuidedDiscoveryJob = z.infer<typeof GuidedDiscoveryJobZ>;
+export type GuidedDiscoveryReviewJob = z.infer<typeof GuidedDiscoveryReviewJobZ>;
 export type ProfileExtractJob = z.infer<typeof ProfileExtractJobZ>;
 export type ContactExtractJob = z.infer<typeof ContactExtractJobZ>;
 export type TgSendJob = z.infer<typeof TgSendJobZ>;

@@ -93,11 +93,15 @@ export function guidedPollInterval(
   return data.status === 'done' || data.status === 'failed' ? false : 2500;
 }
 
-/** Map a guided run status to the existing pill tone vocabulary. */
+/**
+ * Map a guided run status to the existing pill tone vocabulary. `enriching` is
+ * a non-terminal "still working" state — accent (live), NOT `ok` — so the UI
+ * never shows green while candidates still await an evidence-backed review.
+ */
 export function guidedStatusPill(s: GuidedRunStatusEnum): PillTone {
   if (s === 'done') return 'ok';
   if (s === 'failed') return 'bad';
-  if (s === 'running') return 'accent';
+  if (s === 'running' || s === 'enriching') return 'accent';
   return 'ghost';
 }
 

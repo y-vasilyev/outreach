@@ -1,5 +1,5 @@
 import { getPrisma } from '@nosquare/db';
-import { Errors, extractAjtbdView } from '@nosquare/shared';
+import { AppError, Errors, extractAjtbdView } from '@nosquare/shared';
 import {
   GuidedRunBudgetsZ,
   GuidedRunInputSnapshotZ,
@@ -25,6 +25,8 @@ import type {
 } from '@nosquare/shared';
 
 import { getQueues } from '../queues.js';
+import { campaignsService } from './campaigns.js';
+import { getFeatureFlags } from '../feature-flags.js';
 
 /**
  * Guided blogger discovery (ajtbd-guided-blogger-discovery change).
@@ -89,7 +91,7 @@ function briefPreview(brief: string): string {
 
 interface RunRow {
   id: string;
-  status: 'pending' | 'running' | 'done' | 'failed';
+  status: 'pending' | 'running' | 'enriching' | 'done' | 'failed';
   createdAt: Date;
   completedAt: Date | null;
   campaignId: string | null;
@@ -319,11 +321,11 @@ export const discoveryGuidedService = {
     runId: string,
     candidateId: string,
     body: CandidateAction,
-  ): Promise<{ ok: true }> {
+  ): Promise<LaunchResult | { ok: true }> {
     const prisma = getPrisma();
     const candidate = await prisma.discoveryRunCandidate.findFirst({
       where: { id: candidateId, runId },
-      select: { id: true, channelId: true },
+      select: { id: true, channelId: true, provenance: true, decision: true },
     });
     if (!candidate) throw Errors.notFound('discovery_run_candidate', candidateId);
 
@@ -331,12 +333,40 @@ export const discoveryGuidedService = {
       if (!candidate.channelId) {
         throw Errors.badRequest('candidate has no linked channel to scrape');
       }
-      await getQueues().channelScrape.add('scrape', { channelId: candidate.channelId });
+      // Re-arm the candidate so the re-scrape RE-SCORES it (D6): the review step
+      // re-claims (reviewClaimedAt=null) and the scrape→review hook re-selects it
+      // (pending_enrichment matches even when `review` is non-null). Bump the
+      // scrape generation so the new review job is a distinct BullMQ job, not a
+      // swallowed duplicate. Do NOT pre-clear review/score/recommendation — the
+      // operator keeps the prior recommendation until the new one lands.
+      const prov = (candidate.provenance ?? {}) as Record<string, unknown>;
+      const generation =
+        (typeof prov.scrapeGeneration === 'number' ? prov.scrapeGeneration : 0) + 1;
       await prisma.discoveryRunCandidate.update({
         where: { id: candidate.id },
-        data: { enrichmentStatus: 'pending_enrichment' },
+        data: {
+          enrichmentStatus: 'pending_enrichment',
+          reviewClaimedAt: null,
+          provenance: { ...prov, scrapeGeneration: generation } as object,
+        },
+      });
+      await getQueues().channelScrape.add(
+        'scrape',
+        { channelId: candidate.channelId },
+        { attempts: 1 },
+      );
+      // Reopen a terminal run so the scrape→review hook (which only fires for
+      // running|enriching runs) re-fires; the completion check returns it to
+      // `done`. A `failed` run is left as-is.
+      await prisma.discoveryRun.updateMany({
+        where: { id: runId, status: 'done' },
+        data: { status: 'enriching', completedAt: null },
       });
       return { ok: true };
+    }
+
+    if (body.action === 'launch') {
+      return launchCandidate(runId, candidate, body.campaignId);
     }
 
     const decision =
@@ -354,3 +384,91 @@ export const discoveryGuidedService = {
     return { ok: true };
   },
 };
+
+interface LaunchResult {
+  ok: true;
+  campaignId: string;
+  added: number;
+  requested: number;
+  chatsCreated: number;
+  suggestionsQueued: number;
+  blocker: 'no_accounts' | 'no_active_accounts' | null;
+}
+
+/**
+ * Launch-into-work bridge (D7). REUSES the existing downstream path —
+ * `campaignsService.addContacts(..., { prepareOnly: true })` — to put a chosen
+ * blogger's business/ad contacts into a campaign and prepare a PENDING opener
+ * for operator approval. NEVER auto-sends: `prepareOnly` forces the conversation
+ * into `manual` mode so `tryAutoApprove` refuses. Honors the agency_sourcing
+ * human-approval gate, feature gates (route enforces `channel_discovery`), and
+ * business/ad-contact-only selection (CLAUDE.md rules 1, 2, 9).
+ */
+async function launchCandidate(
+  runId: string,
+  candidate: { id: string; channelId: string | null },
+  bodyCampaignId: string | undefined,
+): Promise<LaunchResult> {
+  const prisma = getPrisma();
+  if (!candidate.channelId) {
+    throw Errors.badRequest('candidate has no linked channel');
+  }
+
+  const run = await prisma.discoveryRun.findUnique({
+    where: { id: runId },
+    select: { campaignId: true },
+  });
+  const campaignId = bodyCampaignId ?? run?.campaignId ?? null;
+  if (!campaignId) {
+    throw Errors.badRequest('launch requires a campaign — run has none, pass campaignId');
+  }
+
+  const campaign = await prisma.campaign.findUnique({
+    where: { id: campaignId },
+    include: { type: { select: { key: true } } },
+  });
+  if (!campaign) throw Errors.notFound('campaign', campaignId);
+
+  // agency_sourcing campaigns require the flag on (mirrors campaigns.ts).
+  if (campaign.type?.key === 'agency_sourcing' && !getFeatureFlags().get('agency_sourcing')) {
+    throw new AppError(
+      'AGENCY_SOURCING_DISABLED',
+      'agency_sourcing campaigns require the agency_sourcing feature flag to be on',
+      422,
+    );
+  }
+
+  // Business/ad contacts ONLY (D7, CLAUDE.md rule 2): ad_manager + owner.
+  // generic/bot/unknown are excluded — an operator adds those manually if
+  // warranted.
+  const contacts = await prisma.contact.findMany({
+    where: { channelId: candidate.channelId, roleGuess: { in: ['ad_manager', 'owner'] } },
+    select: { id: true },
+  });
+  if (contacts.length === 0) {
+    throw Errors.badRequest(
+      'no business/ad contact for this channel — run scrape/contact-extract first',
+    );
+  }
+
+  const result = await campaignsService.addContacts(
+    campaignId,
+    contacts.map((c) => c.id),
+    { prepareOnly: true },
+  );
+
+  await prisma.discoveryRunCandidate.update({
+    where: { id: candidate.id },
+    data: { decision: 'launched', launchedCampaignId: campaignId },
+  });
+
+  return {
+    ok: true,
+    campaignId,
+    added: result.added,
+    requested: result.requested,
+    chatsCreated: result.chatsCreated,
+    suggestionsQueued: result.suggestionsQueued,
+    blocker: result.blocker,
+  };
+}

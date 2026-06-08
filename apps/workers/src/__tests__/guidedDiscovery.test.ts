@@ -186,7 +186,7 @@ describe('handleGuidedDiscovery', () => {
     expect(data.summary?.executedQueries).toBe(1);
   });
 
-  it('marks a brand-new candidate needs_scrape and does not review it', async () => {
+  it('leaves a brand-new candidate pending → run enriching, never reviews it inline', async () => {
     mocks.run.mockImplementation(async (name: string) => {
       if (name === 'discovery_query_planner') return { queries: [{ query: 'xx', platform: 'telegram' }] };
       throw new Error('reviewer should not be called for un-scraped candidate');
@@ -206,14 +206,23 @@ describe('handleGuidedDiscovery', () => {
 
     await handleGuidedDiscovery({ runId: 'run_1' });
 
-    expect(mocks.scrapeAdd).toHaveBeenCalledWith('scrape', { channelId: 'ch_new' });
+    // Scrape enqueued with attempts:1 (D3 final-failure hook fires promptly).
+    expect(mocks.scrapeAdd).toHaveBeenCalledWith('scrape', { channelId: 'ch_new' }, { attempts: 1 });
     const needsScrape = candidateUpdateCalls().find(
       (c) => c.data.enrichmentStatus === 'needs_scrape',
     );
     expect(needsScrape).toBeDefined();
+    // BUG #1 fix: the run is NOT done — it is enriching with a pendingReview
+    // count, and a bounded sweep job is enqueued.
     const data = lastRunUpdate();
-    expect(data.status).toBe('done');
+    expect(data.status).toBe('enriching');
     expect(data.summary?.candidatesReviewed).toBe(0);
+    expect(data.summary?.pendingReview).toBe(1);
+    expect(mocks.scrapeAdd).toHaveBeenCalledWith(
+      'sweep',
+      { runId: 'run_1', sweep: true },
+      expect.objectContaining({ jobId: 'sweep:discovery:run_1', attempts: 1 }),
+    );
   });
 
   it('truncates the review budget and records skipped candidates', async () => {

@@ -82,11 +82,20 @@ export interface DiscoveryBatchListItem {
 // ─── Guided blogger discovery (ajtbd-guided-blogger-discovery) ───
 // Mirrors packages/shared/src/schemas/discovery.ts guided shapes.
 
-export type GuidedRunStatusEnum = 'pending' | 'running' | 'done' | 'failed';
+// `enriching` is a non-terminal phase-1-complete state: search/scrape finished
+// but one or more candidates still await an evidence-backed review. The UI keeps
+// polling and must NOT present `done` visuals while in this state.
+export type GuidedRunStatusEnum = 'pending' | 'running' | 'enriching' | 'done' | 'failed';
 export type CandidateRecommendation = 'strong_fit' | 'possible_fit' | 'weak_fit' | 'reject';
 export type CandidateEnrichmentStatus = 'new' | 'needs_scrape' | 'pending_enrichment' | 'enriched';
-export type CandidateDecision = 'saved' | 'shortlisted' | 'rejected';
-export type CandidateActionKind = 'save' | 'shortlist' | 'reject' | 'clear' | 'scrape_refresh';
+export type CandidateDecision = 'saved' | 'shortlisted' | 'rejected' | 'launched';
+export type CandidateActionKind =
+  | 'save'
+  | 'shortlist'
+  | 'reject'
+  | 'clear'
+  | 'scrape_refresh'
+  | 'launch';
 export type DiscoveryTraceStage =
   | 'planner.started'
   | 'planner.completed'
@@ -194,6 +203,12 @@ export interface GuidedRunSummary {
   candidatesFound: number;
   candidatesReviewed: number;
   candidatesSkipped: number;
+  /**
+   * Candidates still awaiting a review (review IS NULL and not budget-skipped)
+   * while the run is `enriching`. Drives the "ожидают разбора" count so the UI
+   * never shows a green `done` while candidates are unreviewed.
+   */
+  pendingReview: number;
   recommended: number;
   newChannels: number;
   knownChannels: number;
@@ -229,4 +244,19 @@ export interface GuidedRunListItem {
 export interface DiscoveryCampaignOption {
   id: string;
   name: string;
+}
+
+/**
+ * Result of a `launch` candidate action — mirrors the API's launch summary.
+ * `prepareOnly` upstream means openers land as PENDING suggestions for operator
+ * approval; nothing is auto-sent.
+ */
+export interface CandidateLaunchResult {
+  ok: true;
+  campaignId: string;
+  added: number;
+  requested: number;
+  chatsCreated: number;
+  suggestionsQueued: number;
+  blocker: 'no_accounts' | 'no_active_accounts' | null;
 }

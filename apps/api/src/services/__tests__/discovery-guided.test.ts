@@ -15,14 +15,17 @@ import { GuidedRunCreateInputZ } from '@nosquare/shared';
 const mocks = vi.hoisted(() => {
   const prisma = {
     campaign: { findUnique: vi.fn() },
-    discoveryRun: { create: vi.fn(), findUnique: vi.fn(), findMany: vi.fn() },
+    discoveryRun: { create: vi.fn(), findUnique: vi.fn(), findMany: vi.fn(), updateMany: vi.fn(async () => ({ count: 1 })) },
     discoveryRunCandidate: { findMany: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
     channel: { findMany: vi.fn() },
     bloggerProfile: { findMany: vi.fn() },
+    contact: { findMany: vi.fn(async (_args: unknown): Promise<Array<{ id: string }>> => []) },
   };
   const guidedAdd = vi.fn(async () => ({}));
   const scrapeAdd = vi.fn(async () => ({}));
-  return { prisma, guidedAdd, scrapeAdd };
+  const addContacts = vi.fn(async () => ({ added: 1, requested: 1, chatsCreated: 1, suggestionsQueued: 1, blocker: null }));
+  const flagGet = vi.fn(() => true);
+  return { prisma, guidedAdd, scrapeAdd, addContacts, flagGet };
 });
 
 vi.mock('@nosquare/db', () => ({ getPrisma: () => mocks.prisma }));
@@ -32,6 +35,12 @@ vi.mock('../../queues.js', () => ({
     channelScrape: { add: mocks.scrapeAdd },
   }),
 }));
+vi.mock('../campaigns.js', () => ({
+  campaignsService: { addContacts: mocks.addContacts },
+}));
+vi.mock('../../feature-flags.js', () => ({
+  getFeatureFlags: () => ({ get: mocks.flagGet }),
+}));
 
 import { discoveryGuidedService } from '../discovery-guided.js';
 
@@ -40,6 +49,10 @@ beforeEach(() => {
   mocks.prisma.channel.findMany.mockResolvedValue([]);
   mocks.prisma.bloggerProfile.findMany.mockResolvedValue([]);
   mocks.prisma.discoveryRunCandidate.findMany.mockResolvedValue([]);
+  mocks.prisma.discoveryRun.updateMany.mockResolvedValue({ count: 1 });
+  mocks.prisma.contact.findMany.mockResolvedValue([]);
+  mocks.flagGet.mockReturnValue(true);
+  mocks.addContacts.mockResolvedValue({ added: 1, requested: 1, chatsCreated: 1, suggestionsQueued: 1, blocker: null });
 });
 
 afterEach(() => {
@@ -236,13 +249,20 @@ describe('discoveryGuidedService.candidateAction', () => {
     expect(updArg.data.decision).toBe('saved');
   });
 
-  it('enqueues a scrape on scrape_refresh and marks pending_enrichment', async () => {
-    mocks.prisma.discoveryRunCandidate.findFirst.mockResolvedValue({ id: 'cand_1', channelId: 'ch_1' });
+  it('scrape_refresh re-arms the candidate, bumps generation, reopens a done run', async () => {
+    mocks.prisma.discoveryRunCandidate.findFirst.mockResolvedValue({ id: 'cand_1', channelId: 'ch_1', provenance: { scrapeGeneration: 2 }, decision: null });
     mocks.prisma.discoveryRunCandidate.update.mockResolvedValue({});
     await discoveryGuidedService.candidateAction('run_1', 'cand_1', { action: 'scrape_refresh' });
-    expect(mocks.scrapeAdd).toHaveBeenCalledWith('scrape', { channelId: 'ch_1' });
-    const updArg = mocks.prisma.discoveryRunCandidate.update.mock.calls[0]![0] as { data: { enrichmentStatus: string } };
+    // attempts:1 so the final-failure hook fires promptly.
+    expect(mocks.scrapeAdd).toHaveBeenCalledWith('scrape', { channelId: 'ch_1' }, { attempts: 1 });
+    const updArg = mocks.prisma.discoveryRunCandidate.update.mock.calls[0]![0] as { data: { enrichmentStatus: string; reviewClaimedAt: Date | null; provenance: { scrapeGeneration: number } } };
     expect(updArg.data.enrichmentStatus).toBe('pending_enrichment');
+    expect(updArg.data.reviewClaimedAt).toBeNull();
+    expect(updArg.data.provenance.scrapeGeneration).toBe(3);
+    // reopens a terminal run (done → enriching).
+    expect(mocks.prisma.discoveryRun.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'run_1', status: 'done' }, data: expect.objectContaining({ status: 'enriching' }) }),
+    );
   });
 
   it('throws not_found for a candidate outside the run', async () => {
@@ -253,5 +273,75 @@ describe('discoveryGuidedService.candidateAction', () => {
     } catch (e) {
       expect(isAppError(e)).toBe(true);
     }
+  });
+});
+
+describe('discoveryGuidedService.candidateAction launch', () => {
+  beforeEach(() => {
+    mocks.prisma.discoveryRunCandidate.findFirst.mockResolvedValue({ id: 'cand_1', channelId: 'ch_1', provenance: {}, decision: 'shortlisted' });
+    mocks.prisma.discoveryRun.findUnique.mockResolvedValue({ campaignId: 'camp_run' });
+    mocks.prisma.campaign.findUnique.mockResolvedValue({ id: 'camp_run', type: { key: 'agency_sourcing' } });
+    mocks.prisma.contact.findMany.mockResolvedValue([{ id: 'contact_1' }]);
+    mocks.prisma.discoveryRunCandidate.update.mockResolvedValue({});
+  });
+
+  it('selects ad_manager/owner contacts, prepares (no send), sets decision=launched', async () => {
+    const res = await discoveryGuidedService.candidateAction('run_1', 'cand_1', { action: 'launch', campaignId: 'camp_x' });
+    // role filter = ad_manager + owner only.
+    const where = (mocks.prisma.contact.findMany.mock.calls[0]![0] as { where: { roleGuess: { in: string[] } } }).where;
+    expect(where.roleGuess.in).toEqual(['ad_manager', 'owner']);
+    // prepareOnly forces no auto-send.
+    expect(mocks.addContacts).toHaveBeenCalledWith('camp_x', ['contact_1'], { prepareOnly: true });
+    const updArg = mocks.prisma.discoveryRunCandidate.update.mock.calls.at(-1)![0] as { data: { decision: string; launchedCampaignId: string } };
+    expect(updArg.data.decision).toBe('launched');
+    expect(updArg.data.launchedCampaignId).toBe('camp_x');
+    expect((res as { suggestionsQueued: number }).suggestionsQueued).toBe(1);
+  });
+
+  it('resolves campaignId from the run when the body omits it', async () => {
+    await discoveryGuidedService.candidateAction('run_1', 'cand_1', { action: 'launch' });
+    expect(mocks.addContacts).toHaveBeenCalledWith('camp_run', ['contact_1'], { prepareOnly: true });
+  });
+
+  it('errors when both body campaignId and run campaign are absent', async () => {
+    mocks.prisma.discoveryRun.findUnique.mockResolvedValue({ campaignId: null });
+    await expect(
+      discoveryGuidedService.candidateAction('run_1', 'cand_1', { action: 'launch' }),
+    ).rejects.toMatchObject({});
+    expect(mocks.addContacts).not.toHaveBeenCalled();
+  });
+
+  it('agency campaign with flag off → 422', async () => {
+    mocks.flagGet.mockReturnValue(false);
+    try {
+      await discoveryGuidedService.candidateAction('run_1', 'cand_1', { action: 'launch', campaignId: 'camp_x' });
+      expect.unreachable();
+    } catch (e) {
+      expect(isAppError(e)).toBe(true);
+      expect((e as { statusCode: number }).statusCode).toBe(422);
+    }
+    expect(mocks.addContacts).not.toHaveBeenCalled();
+  });
+
+  it('no business/ad contact → 400, no addContacts', async () => {
+    mocks.prisma.contact.findMany.mockResolvedValue([]);
+    try {
+      await discoveryGuidedService.candidateAction('run_1', 'cand_1', { action: 'launch', campaignId: 'camp_x' });
+      expect.unreachable();
+    } catch (e) {
+      expect(isAppError(e)).toBe(true);
+    }
+    expect(mocks.addContacts).not.toHaveBeenCalled();
+  });
+
+  it('candidate without a channel → 400', async () => {
+    mocks.prisma.discoveryRunCandidate.findFirst.mockResolvedValue({ id: 'cand_1', channelId: null, provenance: {}, decision: 'saved' });
+    try {
+      await discoveryGuidedService.candidateAction('run_1', 'cand_1', { action: 'launch', campaignId: 'camp_x' });
+      expect.unreachable();
+    } catch (e) {
+      expect(isAppError(e)).toBe(true);
+    }
+    expect(mocks.addContacts).not.toHaveBeenCalled();
   });
 });

@@ -8,6 +8,8 @@ import Spinner from '../../components/Spinner.vue';
 import Pill from '../../components/Pill.vue';
 import EmptyState from '../../components/EmptyState.vue';
 import FeatureOff from '../../components/FeatureOff.vue';
+import SelectInput from '../../components/SelectInput.vue';
+import Modal from '../../components/Modal.vue';
 import { api, ApiError } from '../../lib/api';
 import { isFeatureOff } from '../../lib/featureGate';
 import { toast } from '../../lib/toast';
@@ -22,6 +24,8 @@ import {
 } from './helpers';
 import type {
   CandidateActionKind,
+  CandidateLaunchResult,
+  DiscoveryCampaignOption,
   GuidedRunCandidate,
   GuidedRunDetail,
 } from './types';
@@ -78,16 +82,84 @@ const actionMut = useMutation({
   onSuccess: (_r, vars) => {
     qc.invalidateQueries({ queryKey: ['discovery-guided', id] });
     toast.success(
-      vars.action === 'scrape_refresh' ? 'Scrape поставлен в очередь' : 'Сохранено',
+      vars.action === 'scrape_refresh' ? 'Scrape поставлен в очередь — будет переразбор' : 'Сохранено',
     );
   },
   onError: (e: Error) => toast.error('Действие не удалось', e.message),
 });
 
 function act(candidateId: string, action: CandidateActionKind): void {
-  if (actionMut.isPending.value) return;
+  if (actionMut.isPending.value || launchMut.isPending.value) return;
   actionMut.mutate({ candidateId, action });
 }
+
+// ─── launch-into-work bridge ───
+// Puts a chosen blogger's business/ad contacts into a campaign and prepares a
+// PENDING opener for operator approval (never auto-sends — human-approval gate).
+// Campaign options are best-effort; if none load, the run's own campaign is used
+// (the launch service resolves `campaignId ?? run.campaignId`).
+const { data: campaigns } = useQuery({
+  queryKey: ['discovery-campaign-options'],
+  queryFn: () => api.get<DiscoveryCampaignOption[]>('/campaigns'),
+  enabled: computed(() => !!data.value),
+  retry: false,
+});
+
+const launchFor = ref<GuidedRunCandidate | null>(null);
+const launchCampaignId = ref<string>('');
+
+function openLaunch(c: GuidedRunCandidate): void {
+  launchFor.value = c;
+  launchCampaignId.value = data.value?.campaignId ?? '';
+}
+function closeLaunch(): void {
+  launchFor.value = null;
+  launchCampaignId.value = '';
+}
+
+// Launch needs a campaign: either the operator picks one or the run already has
+// one bound. Without either, the service would 400 — guard the confirm button.
+const launchResolvedCampaignId = computed(
+  () => launchCampaignId.value || data.value?.campaignId || '',
+);
+const canLaunch = computed(() => launchResolvedCampaignId.value.length > 0);
+
+const launchMut = useMutation({
+  mutationFn: (vars: { candidateId: string; campaignId: string }) =>
+    api.post<CandidateLaunchResult>(
+      `/discovery/guided/${id.value}/candidates/${vars.candidateId}/action`,
+      { action: 'launch', campaignId: vars.campaignId },
+    ),
+  onSuccess: (r) => {
+    qc.invalidateQueries({ queryKey: ['discovery-guided', id] });
+    closeLaunch();
+    if (r.blocker) {
+      toast.error(
+        'Запущено, но есть блокер',
+        r.blocker === 'no_accounts'
+          ? 'Нет TG-аккаунтов для отправки'
+          : 'Нет активных TG-аккаунтов',
+      );
+    } else {
+      toast.success(
+        'Запущено в работу',
+        `чатов: ${r.chatsCreated} · черновиков на подтверждение: ${r.suggestionsQueued}`,
+      );
+    }
+  },
+  onError: (e: Error) => toast.error('Не удалось запустить в работу', e.message),
+});
+
+function confirmLaunch(): void {
+  const c = launchFor.value;
+  if (!c || !canLaunch.value || launchMut.isPending.value) return;
+  launchMut.mutate({ candidateId: c.id, campaignId: launchResolvedCampaignId.value });
+}
+
+const campaignOpts = computed(() => [
+  { value: '', label: data.value?.campaignId ? 'Кампания запуска (по умолчанию)' : '— выберите кампанию —' },
+  ...(campaigns.value ?? []).map((c) => ({ value: c.id, label: c.name })),
+]);
 
 function openChannel(): void {
   router.push('/channels');
@@ -99,8 +171,22 @@ function openProfile(profileId: string): void {
 function decisionPill(d: GuidedRunCandidate['decision']): 'ghost' | 'ok' | 'accent' | 'bad' {
   if (d === 'saved') return 'ok';
   if (d === 'shortlisted') return 'accent';
+  if (d === 'launched') return 'accent';
   if (d === 'rejected') return 'bad';
   return 'ghost';
+}
+
+function decisionLabel(d: GuidedRunCandidate['decision']): string {
+  if (d === 'saved') return 'сохранён';
+  if (d === 'shortlisted') return 'в шортлисте';
+  if (d === 'launched') return 'в работе';
+  if (d === 'rejected') return 'отклонён';
+  return '—';
+}
+
+/** Launch is offered only for saved/shortlisted candidates with a linked channel. */
+function canOfferLaunch(c: GuidedRunCandidate): boolean {
+  return !!c.channelId && (c.decision === 'saved' || c.decision === 'shortlisted');
 }
 </script>
 
@@ -152,18 +238,27 @@ function decisionPill(d: GuidedRunCandidate['decision']): 'ghost' | 'ok' | 'acce
 
         <div v-if="data.input.brief" class="muted" style="font-size: 12.5px;">{{ data.input.brief }}</div>
 
-        <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px;">
+        <div style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px;">
           <div v-for="t in [
-            { l: 'Запросов', v: data.summary.plannedQueries },
-            { l: 'Выполнено', v: data.summary.executedQueries },
-            { l: 'Ошибок', v: data.summary.failedQueries },
-            { l: 'Найдено', v: data.summary.candidatesFound },
-            { l: 'Разобрано', v: data.summary.candidatesReviewed },
-            { l: 'Рекоменд.', v: data.summary.recommended },
+            { l: 'Запросов', v: data.summary.plannedQueries, accent: false },
+            { l: 'Выполнено', v: data.summary.executedQueries, accent: false },
+            { l: 'Найдено', v: data.summary.candidatesFound, accent: false },
+            { l: 'Разобрано', v: data.summary.candidatesReviewed, accent: false },
+            { l: 'Ожидают разбора', v: data.summary.pendingReview, accent: data.summary.pendingReview > 0 },
+            { l: 'Рекоменд.', v: data.summary.recommended, accent: false },
+            { l: 'Ошибок', v: data.summary.failedQueries, accent: false },
           ]" :key="t.l">
             <div class="muted-2" style="font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em;">{{ t.l }}</div>
-            <div style="font-size: 17px; font-weight: 600; font-family: var(--font-mono);">{{ formatNumber(t.v) }}</div>
+            <div
+              style="font-size: 17px; font-weight: 600; font-family: var(--font-mono);"
+              :style="{ color: t.accent ? 'var(--accent)' : undefined }"
+              :data-test="t.l === 'Ожидают разбора' ? 'pending-review' : undefined"
+            >{{ formatNumber(t.v) }}</div>
           </div>
+        </div>
+
+        <div v-if="data.status === 'enriching'" class="muted-2" style="font-size: 11.5px; color: var(--accent);">
+          <span class="spinner" /> Идёт разбор по мере поступления данных скрейпа · ожидают разбора: {{ formatNumber(data.summary.pendingReview) }}
         </div>
 
         <div class="muted-2" style="font-size: 11px;">
@@ -238,7 +333,7 @@ function decisionPill(d: GuidedRunCandidate['decision']): 'ghost' | 'ok' | 'acce
               <span class="mono" style="font-size: 12px;">{{ scoreLabel(c.score) }}</span>
               <span v-if="c.followers != null" class="muted-2" style="font-size: 11.5px;">{{ formatNumber(c.followers) }} подп.</span>
               <Pill :cls="enrichmentPill(c.enrichmentStatus)">{{ c.enrichmentStatus }}</Pill>
-              <Pill v-if="c.decision" :cls="decisionPill(c.decision)">{{ c.decision }}</Pill>
+              <Pill v-if="c.decision" :cls="decisionPill(c.decision)">{{ decisionLabel(c.decision) }}</Pill>
             </div>
 
             <div v-if="c.rationale" class="muted" style="font-size: 12px;">{{ c.rationale }}</div>
@@ -254,7 +349,15 @@ function decisionPill(d: GuidedRunCandidate['decision']): 'ghost' | 'ok' | 'acce
               <button class="btn sm" :class="c.decision === 'saved' ? 'ok' : ''" :disabled="actionMut.isPending.value" @click="act(c.id, c.decision === 'saved' ? 'clear' : 'save')"><Icon name="check" :size="11" /> Сохранить</button>
               <button class="btn sm" :class="c.decision === 'shortlisted' ? 'accent' : ''" :disabled="actionMut.isPending.value" @click="act(c.id, c.decision === 'shortlisted' ? 'clear' : 'shortlist')"><Icon name="flag" :size="11" /> В шортлист</button>
               <button class="btn sm" :class="c.decision === 'rejected' ? 'bad' : ''" :disabled="actionMut.isPending.value" @click="act(c.id, c.decision === 'rejected' ? 'clear' : 'reject')"><Icon name="x" :size="11" /> Отклонить</button>
-              <button class="btn sm" :disabled="actionMut.isPending.value || !c.channelId" @click="act(c.id, 'scrape_refresh')"><Icon name="refresh" :size="11" /> Обновить scrape</button>
+              <button class="btn sm" :disabled="actionMut.isPending.value || launchMut.isPending.value || !c.channelId" @click="act(c.id, 'scrape_refresh')"><Icon name="refresh" :size="11" /> Обновить scrape</button>
+              <button
+                v-if="canOfferLaunch(c)"
+                class="btn sm accent"
+                data-test="launch"
+                :disabled="actionMut.isPending.value || launchMut.isPending.value"
+                @click="openLaunch(c)"
+              ><Icon name="zap" :size="11" /> Запустить в работу</button>
+              <span v-else-if="c.decision === 'launched'" class="pill accent" style="font-size: 10.5px;"><Icon name="zap" :size="10" /> в работе</span>
               <a v-if="c.url" class="btn sm ghost" :href="c.url" target="_blank" rel="noopener"><Icon name="arrow_up_right" :size="11" /> Открыть</a>
               <button v-if="c.channelId" class="btn sm ghost" @click="openChannel()"><Icon name="hash" :size="11" /> Канал</button>
               <button v-if="c.bloggerProfileId" class="btn sm ghost" @click="openProfile(c.bloggerProfileId)"><Icon name="user" :size="11" /> Профиль</button>
@@ -289,4 +392,47 @@ function decisionPill(d: GuidedRunCandidate['decision']): 'ghost' | 'ok' | 'acce
       </div>
     </div>
   </div>
+
+  <!-- launch-into-work confirmation -->
+  <Modal
+    :open="launchFor != null"
+    title="Запустить в работу"
+    description="Бизнес-/рекламные контакты канала будут добавлены в кампанию, а опенинг подготовлен как ЧЕРНОВИК на подтверждение оператором. Ничего не отправляется автоматически."
+    size="md"
+    @close="closeLaunch"
+  >
+    <div v-if="launchFor" style="display: flex; flex-direction: column; gap: 12px;">
+      <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+        <span class="mono cell-strong">{{ launchFor.platform }}/{{ launchFor.handle }}</span>
+        <span class="muted" style="font-size: 12px;">{{ launchFor.title || '—' }}</span>
+      </div>
+
+      <div v-if="data?.campaignId" class="muted-2" style="font-size: 12px;">
+        Кампания запуска по умолчанию — кампания этого поиска. Можно выбрать другую.
+      </div>
+      <SelectInput v-model="launchCampaignId" :options="campaignOpts" />
+
+      <div v-if="!canLaunch" class="muted-2" style="font-size: 11.5px; color: var(--bad);">
+        Выберите кампанию — у поиска нет привязанной кампании.
+      </div>
+      <div class="muted-2" style="font-size: 11px;">
+        В работу берутся только явные бизнес-/рекламные контакты (менеджер по рекламе, владелец).
+        Если их нет — сначала выполните scrape / contact-extract.
+      </div>
+    </div>
+
+    <template #footer>
+      <button class="btn" :disabled="launchMut.isPending.value" @click="closeLaunch">Отмена</button>
+      <button
+        class="btn primary"
+        data-test="launch-confirm"
+        :disabled="launchMut.isPending.value || !canLaunch"
+        @click="confirmLaunch"
+      >
+        <span v-if="launchMut.isPending.value" class="spinner" />
+        <Icon v-else name="zap" :size="11" />
+        <span>Запустить в работу</span>
+      </button>
+    </template>
+  </Modal>
 </template>

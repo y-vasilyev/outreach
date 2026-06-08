@@ -1,7 +1,7 @@
 import { Worker, Queue } from 'bullmq';
 import { getRedis } from '../redis.js';
 import { ChannelScrapeJobZ, QueueNames } from '@nosquare/shared';
-import { getPrisma } from '@nosquare/db';
+import { getPrisma, Prisma } from '@nosquare/db';
 import {
   TelegramAdapter,
   InstagramAdapter,
@@ -23,6 +23,50 @@ const adapters = {
   instagram: new InstagramAdapter(),
   youtube: new YoutubeAdapter(),
 };
+
+/**
+ * Guided-discovery evidence loop hook (fix-guided-discovery-evidence-loop, D3).
+ * After a scrape settles (success OR final failure), re-review every still-open
+ * `DiscoveryRunCandidate` that references the scraped channel — this is the
+ * recovery path that closes BUG #2 (phase 1 left new candidates pending) and
+ * makes `scrape_refresh` actually re-score.
+ *
+ * Best-effort: any error here is logged and swallowed so it never fails the
+ * scrape job (the bounded sweep is the backstop). The selector also matches
+ * `enrichmentStatus='pending_enrichment'` so a previously-reviewed candidate
+ * that was re-armed by `scrape_refresh` (non-null `review`) is re-selected.
+ * A deterministic `jobId` (with the per-candidate scrape generation) dedups
+ * duplicate hook fires at enqueue time.
+ */
+async function triggerGuidedReview(channelId: string, scrapeOk: boolean): Promise<void> {
+  try {
+    const prisma = getPrisma();
+    const open = await prisma.discoveryRunCandidate.findMany({
+      where: {
+        channelId,
+        run: { status: { in: ['running', 'enriching'] } },
+        OR: [{ review: { equals: Prisma.JsonNull } }, { enrichmentStatus: 'pending_enrichment' }],
+      },
+      select: { id: true, runId: true, provenance: true },
+    });
+    if (open.length === 0) return;
+    const reviewQueue = new Queue(QueueNames.guidedDiscoveryReview, { connection: getRedis() });
+    for (const c of open) {
+      const generation =
+        ((c.provenance as { scrapeGeneration?: unknown } | null)?.scrapeGeneration as number) ?? 0;
+      await reviewQueue.add(
+        'review',
+        { runId: c.runId, candidateId: c.id, scrapeOutcome: scrapeOk ? 'ok' : 'failed' },
+        { jobId: `review:discovery:${c.runId}:${c.id}:${generation}`, attempts: 1 },
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      { channelId, err: err instanceof Error ? err.message : String(err) },
+      'guided-discovery review hook failed (non-fatal)',
+    );
+  }
+}
 
 export function startChannelScrapeWorker() {
   const worker = new Worker(
@@ -143,6 +187,9 @@ export function startChannelScrapeWorker() {
         // chain into contact-extract
         const extractQueue = new Queue(QueueNames.contactExtract, { connection: getRedis() });
         await extractQueue.add('extract', { channelId });
+        // Guided-discovery success hook (D3): re-review open candidates now that
+        // public evidence exists. Best-effort; never fails the scrape.
+        await triggerGuidedReview(channelId, true);
         return { ok: true };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -163,17 +210,31 @@ export function startChannelScrapeWorker() {
     { connection: getRedis(), concurrency: 4 },
   );
 
-  worker.on('failed', (job, err) =>
+  worker.on('failed', (job, err) => {
+    const channelId = (job?.data as { channelId?: string } | undefined)?.channelId;
     logger.error(
       {
         jobId: job?.id,
-        channelId: (job?.data as { channelId?: string } | undefined)?.channelId,
+        channelId,
         errName: err?.name,
         err: err?.message,
         stack: err?.stack,
       },
       'channel-scrape failed',
-    ),
-  );
+    );
+    // Guided-discovery FINAL-failure hook (D3): only after BullMQ has exhausted
+    // retries — otherwise a candidate could be terminally marked
+    // insufficient-evidence before a successful retry scrapes the channel.
+    // Discovery-originated scrapes use `attempts: 1`, so this fires promptly.
+    if (job && channelId) {
+      const attempts = job.opts.attempts ?? 1;
+      if (job.attemptsMade >= attempts) {
+        void triggerGuidedReview(channelId, false);
+      }
+    }
+  });
   return worker;
 }
+
+// Exported for unit tests (guided-discovery review hook, D3).
+export const __testHook = { triggerGuidedReview };

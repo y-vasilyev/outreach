@@ -434,6 +434,20 @@ Quality-gate авто-режима: оценивает goal-fit черновик
 ### 15. BloggerDiscoveryReviewer — `blogger_discovery_reviewer`
 Направляемый поиск блогеров (ajtbd-guided-blogger-discovery). Оценивает ОДНОГО обогащённого кандидата против AJTBD/брифа: `score` 0..1, `recommendation` (`strong_fit`/`possible_fit`/`weak_fit`/`reject`), обоснование, риски и доказательные посты. Анти-фабрикация — детерминированная: evidence грубо привязывается к переданным публичным постам (совпадение `post_id` ИЛИ verbatim-подстрока snippet), невалидные ссылки отбрасываются; при отсутствии постов evidence принудительно пустой и проставляется `insufficient_evidence_reason`. Никогда не выдумывает охваты/прайс/контакты. Использует только публичные данные канала/профиля и недавние публичные посты. **Модель**: дешёвая (Haiku-class).
 
+#### Цикл evidence→review направляемого поиска (fix-guided-discovery-evidence-loop)
+
+`blogger_discovery_reviewer` вызывается НЕ в одном проходе с поиском, а событийно — когда у кандидата появились публичные доказательства. Конвейер:
+
+1. **Фаза 1** (`guided-discovery`): план → поиск → нормализация → создание/переиспользование `Channel` → постановка `channel-scrape` (`attempts: 1`). Инлайн ревьюятся ТОЛЬКО уже известные каналы с доказательствами (в рамках `maxReviewed`). Новые каналы (ещё скрейпятся) остаются `needs_scrape`/`pending_enrichment` — НЕ «пропущены и забыты». Если есть pending-кандидаты → статус run `enriching` (нетерминальный), `summary.pendingReview = N`, и ставится отложенный sweep-job на дедлайн (`RUN_ENRICH_DEADLINE_MS`, 15 мин). Иначе → `done`.
+2. **Хук `channel-scrape`** (D3): по успеху (после `contact-extract`) и по ФИНАЛЬНОМу провалу (событие `worker.on('failed')`, когда `attemptsMade >= attempts`) ставит per-candidate `guided-discovery-review` job для всех открытых кандидатов канала. Детерминированный `jobId` (`review:discovery:<runId>:<candidateId>:<generation>`) дедупит дубли на этапе постановки. Best-effort: ошибка хука логируется, скрейп не валится.
+3. **`guided-discovery-review`** (D4): атомарный claim (`reviewClaimedAt`) ДО любого вызова LLM — проигравший job выходит с нулём потраченных токенов; budget-recompute из БД; при `scrapeOutcome='failed'`/отсутствии данных — терминальный insufficient-evidence БЕЗ вызова LLM; иначе — `blogger_discovery_reviewer` через `getRunner().run` (учёт `agent_run`). Completion-check (`updateMany where status='enriching'`) переводит run в `done` ровно когда закрыт последний кандидат.
+4. **Sweep** (D5): на дедлайне принудительно закрывает оставшиеся открытые кандидаты (`scrape did not complete in time`) → `done`. Гарантирует, что не пришедший скрейп не зависит run навсегда.
+5. **`scrape_refresh`** (D6): пере-вооружает кандидата (`pending_enrichment`, `reviewClaimedAt=null`, bump `provenance.scrapeGeneration`), ставит скрейп заново и реоткрывает `done`-run в `enriching` — кнопка «Обновить scrape» реально пере-скорит.
+
+#### Launch-into-work (запуск в работу, fix-guided-discovery-evidence-loop D7)
+
+Операторское действие `launch` на сохранённом/шортлистнутом кандидате ПЕРЕИСПОЛЬЗУЕТ существующий downstream-путь — `campaignsService.addContacts(campaignId, contactIds, { prepareOnly: true })`. Гейты: фичефлаг `channel_discovery` (роут), роль admin/operator, для `agency_sourcing`-кампании — флаг `agency_sourcing` (иначе `AGENCY_SOURCING_DISABLED` 422). Кандидат обязан иметь `channelId`; `campaignId = body.campaignId ?? run.campaignId` (иначе 400). Берутся ТОЛЬКО business/ad контакты (`roleGuess ∈ {ad_manager, owner}` — `generic`/`bot`/`unknown` исключены, оператор добавляет вручную). `prepareOnly` форсит conversation `mode='manual'` НЕЗАВИСИМО от `campaign.defaultMode`, поэтому opener (`outreach_first_message`) падает как **pending** suggestion, который `tryAutoApprove` отклоняет (manual → false). Никакой авто-отправки: «запуск в работу» = подготовить работу под подтверждение оператора (CLAUDE.md правила 1, 2, 9 + дефолтный human-approval gate `agency_sourcing`). Кандидат помечается `decision='launched'` + `launchedCampaignId` (отдельная колонка, чтобы пере-review не затёр provenance).
+
 ---
 
 ## Режимы диалога (`Conversation.mode`)

@@ -27,6 +27,14 @@ interface YandexSearchConfig {
   baseUrl?: string;
 }
 
+/**
+ * Bounded enrichment deadline (D5). When phase 1 leaves candidates pending, a
+ * delayed sweep job is enqueued at this offset; if scrapes never land it
+ * force-closes the still-open candidates so a run cannot stay `enriching`
+ * forever. A worker constant (no DB/schema cost).
+ */
+const RUN_ENRICH_DEADLINE_MS = 15 * 60 * 1000;
+
 interface PlannerOutput {
   queries: Array<{
     query: string;
@@ -260,7 +268,9 @@ async function handleGuidedDiscovery(data: { runId: string }): Promise<void> {
           });
           channelId = ch.id;
           summary.newChannels += 1;
-          await scrapeQueue.add('scrape', { channelId });
+          // attempts:1 so the channel-scrape FINAL-failure hook (D3) fires
+          // promptly for discovery scrapes and never wedges a candidate.
+          await scrapeQueue.add('scrape', { channelId }, { attempts: 1 });
           addTrace({ stage: 'scrape.queued', handle: c.handle });
         } catch {
           // Lost a findUnique→create race; treat as known.
@@ -314,11 +324,8 @@ async function handleGuidedDiscovery(data: { runId: string }): Promise<void> {
     let reviewed = 0;
     let skipped = 0;
     let recommended = 0;
+    let pending = 0;
     for (const cand of work) {
-      if (reviewed >= budgets.maxReviewed) {
-        skipped += 1;
-        continue;
-      }
       // Load public channel metadata, recent public posts, profile (task 4.5).
       const ch = cand.channelId
         ? await prisma.channel.findUnique({ where: { id: cand.channelId } })
@@ -328,20 +335,36 @@ async function handleGuidedDiscovery(data: { runId: string }): Promise<void> {
         ch && (ch.status === 'scraped' || posts.length > 0 || ch.title || ch.description),
       );
 
-      if (!hasData) {
-        // No public evidence yet — don't pretend it exists (spec). Leave the
-        // candidate for a later refresh once scrape completes.
+      // Phase-1 evidence-first rule (D2): review inline ONLY candidates that
+      // already have public evidence (alreadyKnown channels). Brand-new
+      // channels are still scraping — they are LEFT pending (not skipped) and
+      // the channel-scrape→review hook (D3) reviews them once evidence lands.
+      // This is the fix for BUG #1 (the old code reviewed nothing on a fresh
+      // niche because every new candidate's scrape hadn't run yet).
+      if (!cand.alreadyKnown || !hasData) {
         await prisma.discoveryRunCandidate.update({
           where: { id: cand.candidateId },
-          data: { enrichmentStatus: 'needs_scrape' },
+          data: { enrichmentStatus: cand.alreadyKnown ? 'pending_enrichment' : 'needs_scrape' },
         });
         addTrace({
           stage: 'candidate.normalized',
           status: 'info',
           handle: cand.handle,
           candidateId: cand.candidateId,
-          message: 'awaiting scrape — no public evidence yet',
+          message: 'awaiting scrape evidence — review deferred to scrape hook',
         });
+        pending += 1;
+        continue;
+      }
+
+      if (reviewed >= budgets.maxReviewed) {
+        // Budget exhausted: mark a stable budget-skip so the completion check
+        // does NOT count it as pending (it will never be reviewed).
+        await prisma.discoveryRunCandidate.update({
+          where: { id: cand.candidateId },
+          data: { review: { skipped: 'budget' } as object },
+        });
+        skipped += 1;
         continue;
       }
 
@@ -388,6 +411,9 @@ async function handleGuidedDiscovery(data: { runId: string }): Promise<void> {
           candidateId: cand.candidateId,
           error: `reviewer failed: ${(err as Error).message}`,
         });
+        // Leave it pending so a refresh / sweep can recover it rather than
+        // silently dropping the candidate.
+        pending += 1;
         continue;
       }
 
@@ -397,7 +423,7 @@ async function handleGuidedDiscovery(data: { runId: string }): Promise<void> {
       await prisma.discoveryRunCandidate.update({
         where: { id: cand.candidateId },
         data: {
-          enrichmentStatus: posts.length > 0 ? 'enriched' : 'pending_enrichment',
+          enrichmentStatus: 'enriched',
           score: review.score,
           recommendation: review.recommendation,
           review: {
@@ -430,10 +456,31 @@ async function handleGuidedDiscovery(data: { runId: string }): Promise<void> {
     summary.candidatesReviewed = reviewed;
     summary.candidatesSkipped = skipped;
     summary.recommended = recommended;
+    summary.pendingReview = pending;
 
-    addTrace({ stage: 'review.completed', message: `reviewed ${reviewed}, skipped ${skipped}` });
-    await persist({ status: 'done', completedAt: new Date() });
-    logger.info({ runId: run.id, reviewed, recommended, skipped }, 'guided-discovery: done');
+    addTrace({ stage: 'review.completed', message: `reviewed ${reviewed}, skipped ${skipped}, pending ${pending}` });
+
+    // D1/D2: the run is only `done` if nothing is still awaiting evidence-backed
+    // review. When candidates are pending (the common fresh-niche case), enter
+    // the non-terminal `enriching` state — the scrape→review hook (D3) closes
+    // each candidate and the completion check flips the run to `done`. A bounded
+    // sweep (D5) guarantees a never-arriving scrape cannot wedge the run.
+    if (pending > 0) {
+      await persist({ status: 'enriching' });
+      const reviewQueue = new Queue(QueueNames.guidedDiscoveryReview, { connection: getRedis() });
+      await reviewQueue.add(
+        'sweep',
+        { runId: run.id, sweep: true },
+        { jobId: `sweep:discovery:${run.id}`, delay: RUN_ENRICH_DEADLINE_MS, attempts: 1 },
+      );
+      logger.info(
+        { runId: run.id, reviewed, recommended, skipped, pending },
+        'guided-discovery: phase-1 done, enriching',
+      );
+    } else {
+      await persist({ status: 'done', completedAt: new Date() });
+      logger.info({ runId: run.id, reviewed, recommended, skipped }, 'guided-discovery: done');
+    }
   } catch (err) {
     summary.fatalError = `worker error: ${(err as Error).message}`;
     addTrace({ stage: 'error', status: 'error', error: summary.fatalError });

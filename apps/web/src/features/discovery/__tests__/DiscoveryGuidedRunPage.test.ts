@@ -96,6 +96,7 @@ function detail(over: Partial<GuidedRunDetail> = {}): GuidedRunDetail {
       candidatesFound: 1,
       candidatesReviewed: 1,
       candidatesSkipped: 0,
+      pendingReview: 0,
       recommended: 1,
       newChannels: 0,
       knownChannels: 1,
@@ -105,12 +106,22 @@ function detail(over: Partial<GuidedRunDetail> = {}): GuidedRunDetail {
   };
 }
 
+/** Route-aware GET mock: run detail on the guided path, campaign options on /campaigns. */
+function getMock(d: GuidedRunDetail = detail()) {
+  return (path: string) => {
+    if (path === '/campaigns') {
+      return Promise.resolve([{ id: 'camp_1', name: 'Q3 outreach' }]);
+    }
+    return Promise.resolve(d);
+  };
+}
+
 beforeEach(() => {
   apiGet.mockReset();
   apiPost.mockReset();
   routerPush.mockReset();
   flagState.value.channelDiscovery = true;
-  apiGet.mockResolvedValue(detail());
+  apiGet.mockImplementation(getMock());
 });
 
 async function mountAndSettle() {
@@ -181,5 +192,67 @@ describe('DiscoveryGuidedRunPage', () => {
     apiGet.mockRejectedValue(new (ApiError as any)('FEATURE_DISABLED', 'off', 404));
     const { wrapper } = await mountAndSettle();
     expect(wrapper.text()).toContain('channel_discovery');
+  });
+
+  it('shows the enriching status and pending-review count without done visuals', async () => {
+    apiGet.mockImplementation(
+      getMock(
+        detail({
+          status: 'enriching',
+          completedAt: null,
+          summary: { ...detail().summary, pendingReview: 3, candidatesReviewed: 0, recommended: 0 },
+        }),
+      ),
+    );
+    const { wrapper } = await mountAndSettle();
+    expect(wrapper.text()).toContain('enriching');
+    expect(wrapper.find('[data-test="pending-review"]').text()).toBe('3');
+    expect(wrapper.text()).toContain('Идёт разбор');
+  });
+
+  it('does not offer launch for an undecided candidate', async () => {
+    const { wrapper } = await mountAndSettle();
+    expect(wrapper.find('[data-test="launch"]').exists()).toBe(false);
+  });
+
+  it('launches a saved candidate with the run/selected campaign and never auto-sends', async () => {
+    apiGet.mockImplementation(
+      getMock(
+        detail({
+          campaignId: 'camp_run',
+          candidates: [{ ...detail().candidates[0]!, decision: 'saved' }],
+        }),
+      ),
+    );
+    apiPost.mockResolvedValue({
+      ok: true,
+      campaignId: 'camp_run',
+      added: 1,
+      requested: 1,
+      chatsCreated: 1,
+      suggestionsQueued: 1,
+      blocker: null,
+    });
+    const { wrapper } = await mountAndSettle();
+    await wrapper.find('[data-test="launch"]').trigger('click');
+    await flushPromises();
+    // Modal teleports to document.body — query the confirm button there.
+    const confirm = document.querySelector<HTMLButtonElement>('[data-test="launch-confirm"]');
+    expect(confirm).not.toBeNull();
+    confirm!.click();
+    await flushPromises();
+    expect(apiPost).toHaveBeenCalledWith(
+      '/discovery/guided/run_1/candidates/cand_1/action',
+      { action: 'launch', campaignId: 'camp_run' },
+    );
+  });
+
+  it('shows a launched candidate as in-work and hides the launch button', async () => {
+    apiGet.mockImplementation(
+      getMock(detail({ candidates: [{ ...detail().candidates[0]!, decision: 'launched' }] })),
+    );
+    const { wrapper } = await mountAndSettle();
+    expect(wrapper.find('[data-test="launch"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain('в работе');
   });
 });

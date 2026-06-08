@@ -131,7 +131,16 @@ export async function discoveryRoutes(app: FastifyInstance) {
         action: 'discovery.guided.candidate_action',
         targetType: 'discovery_run_candidate',
         targetId: params.candidateId,
-        payload: { runId: params.id, action: body.action },
+        payload: {
+          runId: params.id,
+          action: body.action,
+          ...(body.action === 'launch'
+            ? {
+                campaignId:
+                  'campaignId' in result ? result.campaignId : (body.campaignId ?? null),
+              }
+            : {}),
+        },
       });
       return result;
     },

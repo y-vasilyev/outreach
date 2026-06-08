@@ -12,6 +12,7 @@ import { startQualityReviewScheduler } from './queues/quality-review-scheduler.j
 import { startProfileExtractWorker } from './queues/profile-extract.js';
 import { startDiscoveryBatchWorker } from './queues/discovery-batch.js';
 import { startGuidedDiscoveryWorker } from './queues/guided-discovery.js';
+import { startGuidedDiscoveryReviewWorker } from './queues/guided-discovery-review.js';
 import { initFeatureFlags } from './feature-flags.js';
 import { startCooldownHealer } from './services/cooldown-healer.js';
 import { startWarmupPromoter } from './services/warmup-promoter.js';
@@ -34,6 +35,7 @@ async function main() {
     startProfileExtractWorker(),
     startDiscoveryBatchWorker(),
     startGuidedDiscoveryWorker(),
+    startGuidedDiscoveryReviewWorker(),
   ];
   const dispatcher = startCampaignDispatcher();
   const followups = startFollowupScheduler();

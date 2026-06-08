@@ -668,6 +668,9 @@ model DiscoveryBatch {
 enum DiscoveryRunStatus {
   pending
   running
+  // Phase-1 search/scrape done; one or more candidates still await an
+  // evidence-backed review (scrape hook + sweep close the loop). Non-terminal.
+  enriching
   done
   failed
 
@@ -729,13 +732,21 @@ model DiscoveryRunCandidate {
   score            Decimal?
   // Denormalised recommendation enum for compact list rows.
   recommendation   String?
-  // Operator decision: null | saved | shortlisted | rejected.
+  // Operator decision: null | saved | shortlisted | rejected | launched.
   decision         String?
+  // Atomic-claim guard: set the instant a review job wins the candidate, BEFORE
+  // any reviewer LLM call, so a duplicate job exits with zero tokens spent
+  // (D4 step 0). `scrape_refresh` resets it to null to re-arm a re-review.
+  reviewClaimedAt  DateTime?    @map("review_claimed_at")
+  // Launch provenance — the campaign the operator launched this blogger into.
+  // Stored separately from `review` so a re-review can't clobber it (D7).
+  launchedCampaignId String?    @map("launched_campaign_id")
   createdAt        DateTime     @default(now()) @map("created_at")
   updatedAt        DateTime     @updatedAt @map("updated_at")
 
   @@unique([runId, platform, handle])
   @@index([runId])
+  @@index([channelId])
   @@map("discovery_run_candidate")
 }
 

@@ -249,7 +249,7 @@ export const CandidateEnrichmentStatusZ = z.enum([
   'enriched',
 ]);
 
-export const CandidateDecisionZ = z.enum(['saved', 'shortlisted', 'rejected']);
+export const CandidateDecisionZ = z.enum(['saved', 'shortlisted', 'rejected', 'launched']);
 
 /** Full candidate shape for the run detail response. */
 export const GuidedRunCandidateZ = z.object({
@@ -289,12 +289,27 @@ export const GuidedRunSummaryZ = z.object({
   recommended: z.number().int().default(0),
   newChannels: z.number().int().default(0),
   knownChannels: z.number().int().default(0),
+  /**
+   * Candidates still awaiting a review (review IS NULL and not budget-skipped)
+   * while the run is `enriching`. Drives the operator-visible "ожидают разбора"
+   * count so the UI never shows a green `done` while candidates are unreviewed.
+   */
+  pendingReview: z.number().int().default(0),
   budgets: GuidedRunBudgetsZ,
   /** Set only when the worker could not start (integration missing, etc.). */
   fatalError: z.string().optional(),
 });
 
-export const GuidedRunStatusEnumZ = z.enum(['pending', 'running', 'done', 'failed']);
+export const GuidedRunStatusEnumZ = z.enum([
+  'pending',
+  'running',
+  // Phase-1 search/scrape finished but one or more candidates still await an
+  // evidence-backed review (scrape hooks + sweep close the loop). Non-terminal
+  // — the UI keeps polling and must not present `done` visuals.
+  'enriching',
+  'done',
+  'failed',
+]);
 
 export const GuidedRunDetailZ = z.object({
   id: z.string(),
@@ -323,7 +338,14 @@ export const GuidedRunListItemZ = z.object({
 });
 
 export const CandidateActionZ = z.object({
-  action: z.enum(['save', 'shortlist', 'reject', 'clear', 'scrape_refresh']),
+  action: z.enum(['save', 'shortlist', 'reject', 'clear', 'scrape_refresh', 'launch']),
+  /**
+   * Target campaign for `launch`. OPTIONAL for every action (including
+   * `launch`): the service resolves `campaignId ?? run.campaignId` and errors
+   * only when both are absent (D7). Deliberately NOT refined to required for
+   * `launch` so the schema and service stay in agreement.
+   */
+  campaignId: z.string().optional(),
 });
 
 export type GuidedRunBudgets = z.infer<typeof GuidedRunBudgetsZ>;

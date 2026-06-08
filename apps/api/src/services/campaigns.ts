@@ -260,8 +260,19 @@ export const campaignsService = {
    * operators expect pending suggestions to appear right after adding
    * contacts, even when the campaign is paused or outside work hours.
    */
-  async addContacts(id: string, contactIds: string[]) {
+  async addContacts(
+    id: string,
+    contactIds: string[],
+    opts?: { prepareOnly?: boolean },
+  ) {
     const prisma = getPrisma();
+    // `prepareOnly` (guided-discovery launch-into-work, D7): force the
+    // conversation into `manual` mode regardless of `campaign.defaultMode` so
+    // the enqueued opener lands as a PENDING suggestion that `tryAutoApprove`
+    // refuses (manual → no auto-send). This closes the auto-send blocker where
+    // a `semi_auto`/`auto` campaign would otherwise auto-send a `first_touch`
+    // opener without a goal-fit gate. Existing callers default to off.
+    const convMode = opts?.prepareOnly ? 'manual' : undefined;
     const c = await prisma.campaign.findUnique({ where: { id } });
     if (!c) throw Errors.notFound('campaign', id);
     const tag = `cmp:${id}`;
@@ -330,13 +341,13 @@ export const campaignsService = {
             i += 1;
             const conv = await prisma.conversation.upsert({
               where: { tgAccountId_contactId: { tgAccountId: acct.id, contactId: ct.id } },
-              update: { campaignId: id, mode: c.defaultMode },
+              update: { campaignId: id, mode: convMode ?? c.defaultMode },
               create: {
                 tgAccountId: acct.id,
                 contactId: ct.id,
                 campaignId: id,
                 status: 'active',
-                mode: c.defaultMode,
+                mode: convMode ?? c.defaultMode,
               },
             });
             convId = conv.id;
