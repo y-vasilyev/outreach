@@ -14,6 +14,7 @@ interface QueueMap {
   discoveryBatch: Queue;
   guidedDiscovery: Queue;
   guidedDiscoveryReview: Queue;
+  profileExtract: Queue;
 }
 
 let _queues: QueueMap | undefined;
@@ -30,6 +31,7 @@ export function getQueues(): QueueMap {
       discoveryBatch: new Queue(QueueNames.discoveryBatch, conn()),
       guidedDiscovery: new Queue(QueueNames.guidedDiscovery, conn()),
       guidedDiscoveryReview: new Queue(QueueNames.guidedDiscoveryReview, conn()),
+      profileExtract: new Queue(QueueNames.profileExtract, conn()),
     };
   }
   return _queues;

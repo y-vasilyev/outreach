@@ -14,22 +14,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const prisma = {
     conversation: { findUnique: vi.fn() },
-    message: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn() },
+    message: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
     bloggerProfile: { upsert: vi.fn(), update: vi.fn() },
-    profileDataPoint: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn() },
-    placementAttribute: { create: vi.fn(), findFirst: vi.fn() },
-    mediaAsset: { updateMany: vi.fn() },
+    profileDataPoint: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn() },
+    placementAttribute: { create: vi.fn(), findFirst: vi.fn(), deleteMany: vi.fn() },
+    extractionHint: { findMany: vi.fn() },
+    mediaAsset: { updateMany: vi.fn(), deleteMany: vi.fn(), create: vi.fn() },
     $transaction: vi.fn(),
   };
   const runAgentSafe = vi.fn();
+  const publishRealtime = vi.fn();
   const flagState: Record<string, boolean> = {};
-  return { prisma, runAgentSafe, flagState };
+  return { prisma, runAgentSafe, publishRealtime, flagState };
 });
 
 vi.mock('@nosquare/db', () => ({ getPrisma: () => mocks.prisma, Prisma: { JsonNull: null } }));
 vi.mock('bullmq', () => ({ Worker: class {} }));
 vi.mock('../redis.js', () => ({ getRedis: () => ({}) }));
 vi.mock('../services/run-agent-safe.js', () => ({ runAgentSafe: mocks.runAgentSafe }));
+vi.mock('../services/realtime-emit.js', () => ({ publishRealtime: mocks.publishRealtime }));
 vi.mock('../feature-flags.js', () => ({
   getFeatureFlags: () => ({ get: (k: string) => mocks.flagState[k] ?? false }),
 }));
@@ -91,7 +94,14 @@ beforeEach(() => {
   mocks.prisma.profileDataPoint.findMany.mockResolvedValue([]);
   mocks.prisma.placementAttribute.create.mockResolvedValue({});
   mocks.prisma.placementAttribute.findFirst.mockResolvedValue(null);
+  mocks.prisma.placementAttribute.deleteMany.mockResolvedValue({ count: 0 });
+  mocks.prisma.profileDataPoint.deleteMany.mockResolvedValue({ count: 0 });
+  mocks.prisma.extractionHint.findMany.mockResolvedValue([]);
+  mocks.prisma.message.update.mockResolvedValue({});
+  mocks.publishRealtime.mockResolvedValue(undefined);
   mocks.prisma.mediaAsset.updateMany.mockResolvedValue({ count: 0 });
+  mocks.prisma.mediaAsset.deleteMany.mockResolvedValue({ count: 0 });
+  mocks.prisma.mediaAsset.create.mockResolvedValue({});
   mocks.prisma.$transaction.mockImplementation(
     async (fn: (tx: typeof mocks.prisma) => Promise<unknown>) => fn(mocks.prisma),
   );
@@ -244,5 +254,62 @@ describe('handleProfileExtract — structured placement offers', () => {
     );
     expect(created.some((d) => d.field === 'placement.offer')).toBe(false);
     expect(mocks.prisma.placementAttribute.create).not.toHaveBeenCalled();
+  });
+
+  it('supersede deletes prior rows (not operator points) before writing', async () => {
+    await handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1', supersede: true });
+    // Prior data points for this message deleted, excluding operator origin.
+    const del = mocks.prisma.profileDataPoint.deleteMany.mock.calls[0]![0] as {
+      where: { profileId: string; sourceMessageId: string; extractedBy: { not: string } };
+    };
+    expect(del.where.sourceMessageId).toBe('m1');
+    expect(del.where.extractedBy.not).toBe('operator');
+    // Prior PROPOSED attribute proposals + raw-payload media deleted; an
+    // admin-approved `active` registry row is preserved (status filter).
+    expect(mocks.prisma.placementAttribute.deleteMany).toHaveBeenCalledWith({
+      where: { sourceMessageId: 'm1', status: 'proposed' },
+    });
+    expect(mocks.prisma.mediaAsset.deleteMany).toHaveBeenCalled();
+  });
+
+  it('supersede with an EMPTY re-extraction still clears the prior rows (codex P2.2)', async () => {
+    mocks.runAgentSafe.mockResolvedValue({ data_points: [], placement_offers: [], attribute_proposals: [] });
+    await handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1', supersede: true });
+    // Entered the tx and cleared old rows even though nothing new was extracted.
+    expect(mocks.prisma.profileDataPoint.deleteMany).toHaveBeenCalled();
+    expect(mocks.prisma.bloggerProfile.update).toHaveBeenCalled(); // re-rolled
+    const stamped = mocks.prisma.message.update.mock.calls.find(
+      (c) => (c[0] as { data: { extractionStatus?: string } }).data.extractionStatus === 'empty',
+    );
+    expect(stamped).toBeTruthy();
+  });
+
+  it('does NOT delete prior rows when supersede is absent', async () => {
+    await handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1' });
+    expect(mocks.prisma.profileDataPoint.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('stamps extractionStatus ok on a successful write', async () => {
+    await handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1' });
+    const okCall = mocks.prisma.message.update.mock.calls.find(
+      (c) => (c[0] as { data: { extractionStatus?: string } }).data.extractionStatus === 'ok',
+    );
+    expect(okCall).toBeTruthy();
+    // And emits the realtime status event.
+    expect(
+      mocks.publishRealtime.mock.calls.some(
+        (c) => (c[1] as { type?: string }).type === 'message.extraction_status.changed',
+      ),
+    ).toBe(true);
+  });
+
+  it('passes operator hints into the extractor input', async () => {
+    mocks.prisma.extractionHint.findMany.mockResolvedValue([
+      { guidance: 'МАХ = MAX messenger', exampleInput: null, exampleOutput: null, targetField: 'platform' },
+    ]);
+    await handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1' });
+    const rateCall = mocks.runAgentSafe.mock.calls.find((c) => c[0] === 'rate_card_extractor');
+    const input = rateCall![1] as { operator_hints?: string[] };
+    expect(input.operator_hints?.[0]).toContain('МАХ = MAX messenger');
   });
 });

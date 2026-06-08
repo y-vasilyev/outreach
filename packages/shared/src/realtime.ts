@@ -39,6 +39,18 @@ export interface MessageEvent {
   };
 }
 
+/**
+ * Per-message extraction status changed (operator-reanalyze-and-markup). Lets
+ * the inbox show pending→result for a re-run without polling.
+ */
+export interface MessageExtractionStatusEvent {
+  type: 'message.extraction_status.changed';
+  conversationId: string;
+  messageId: string;
+  extractionStatus: 'pending' | 'ok' | 'empty' | 'no_signal' | 'failed';
+  extractionError?: string | null;
+}
+
 export interface SuggestionEvent {
   type: 'suggestion.new';
   conversationId: string;
@@ -181,6 +193,7 @@ export interface DataCollectionUpdatedEvent {
 
 export type RealtimeEvent =
   | MessageEvent
+  | MessageExtractionStatusEvent
   | SuggestionEvent
   | SuggestionApprovedEvent
   | StatusChangedEvent

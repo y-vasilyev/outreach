@@ -22,7 +22,7 @@ import {
   type CampaignSchedule,
   type PlacementOffer,
 } from '@nosquare/shared';
-import { handleProfileExtract } from './profile-extract.js';
+import { handleProfileExtract, stampExtractionStatus } from './profile-extract.js';
 import { Errors } from '@nosquare/shared/errors';
 import { getPrisma } from '@nosquare/db';
 import { logger } from '../logger.js';
@@ -633,6 +633,15 @@ export async function handleOnInbound(data: { conversationId?: string }): Promis
                 },
                 'sync profile-extract failed; planner reads pre-failure snapshot',
               );
+              // Terminal for the sync path (operator-reanalyze-and-markup): the
+              // inbound hot path does not retry, so stamp the message `failed`
+              // so the operator can see it and re-run.
+              await stampExtractionStatus({
+                conversationId: conv.id,
+                messageId: last.id,
+                status: 'failed',
+                error: (err as Error).message,
+              }).catch(() => undefined);
             }
           }
 

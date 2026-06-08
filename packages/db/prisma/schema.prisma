@@ -451,11 +451,44 @@ model Message {
   // `opening_composer` or `agency_opening_composer`; drives per-variant
   // sent/replied/replyRate aggregates served by /campaigns/:id/opener-stats.
   openerVariant  String?          @map("opener_variant")
+  // Per-message profile-extraction outcome (operator-reanalyze-and-markup):
+  // pending | ok | empty | no_signal | failed. `failed` is stamped only on a
+  // terminal failure (sync catch / BullMQ retry exhaustion), never per-throw.
+  extractionStatus String?        @default("pending") @map("extraction_status")
+  extractionError  String?        @map("extraction_error")
+  extractedAt      DateTime?      @map("extracted_at")
   mediaAssets    MediaAsset[]
 
   @@index([conversationId, createdAt])
   @@index([conversationId, openerVariant])
+  @@index([conversationId, extractionStatus])
   @@map("message")
+}
+
+// Operator-authored guidance the profile-extract agents consume at run time
+// (operator-reanalyze-and-markup). Advisory parsing rules — NEVER evidence and
+// NEVER consumed by the outbound composer. Scoped global|channel|conversation.
+model ExtractionHint {
+  id             String   @id @default(cuid())
+  // 'global' | 'channel' | 'conversation'
+  scope          String
+  // Plain indexed references (no FK), like the rest of the catalog graph.
+  channelId      String?  @map("channel_id")
+  conversationId String?  @map("conversation_id")
+  // Optional field the hint is about (e.g. 'rate.post', 'platform').
+  targetField    String?  @map("target_field")
+  guidance       String
+  exampleInput   String?  @map("example_input")
+  exampleOutput  String?  @map("example_output")
+  active         Boolean  @default(true)
+  createdById    String?  @map("created_by_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([scope, active])
+  @@index([channelId])
+  @@index([conversationId])
+  @@map("extraction_hint")
 }
 
 model Suggestion {

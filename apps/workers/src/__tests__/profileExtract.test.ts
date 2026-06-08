@@ -9,24 +9,28 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const prisma = {
     conversation: { findUnique: vi.fn() },
-    message: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn() },
+    message: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
     bloggerProfile: { upsert: vi.fn(), update: vi.fn() },
-    profileDataPoint: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn() },
+    profileDataPoint: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn() },
+    placementAttribute: { findFirst: vi.fn(), create: vi.fn(), deleteMany: vi.fn() },
+    extractionHint: { findMany: vi.fn() },
     // harden-agency-sourcing-pipeline: profile-extract backfills
     // pre-profile media assets when the catalog profile appears.
-    mediaAsset: { updateMany: vi.fn() },
+    mediaAsset: { updateMany: vi.fn(), deleteMany: vi.fn(), create: vi.fn() },
     $transaction: vi.fn(),
   };
   const runAgentSafe = vi.fn();
+  const publishRealtime = vi.fn();
   // Feature flag mock — tests can flip object_storage etc. via this state.
   const flagState: Record<string, boolean> = {};
-  return { prisma, runAgentSafe, flagState };
+  return { prisma, runAgentSafe, publishRealtime, flagState };
 });
 
 vi.mock('@nosquare/db', () => ({ getPrisma: () => mocks.prisma, Prisma: { JsonNull: null } }));
 vi.mock('bullmq', () => ({ Worker: class {} }));
 vi.mock('../redis.js', () => ({ getRedis: () => ({}) }));
 vi.mock('../services/run-agent-safe.js', () => ({ runAgentSafe: mocks.runAgentSafe }));
+vi.mock('../services/realtime-emit.js', () => ({ publishRealtime: mocks.publishRealtime }));
 vi.mock('../feature-flags.js', () => ({
   getFeatureFlags: () => ({ get: (k: string) => mocks.flagState[k] ?? false }),
 }));
@@ -59,7 +63,17 @@ beforeEach(() => {
   mocks.prisma.bloggerProfile.update.mockResolvedValue({});
   mocks.prisma.profileDataPoint.create.mockResolvedValue({});
   mocks.prisma.profileDataPoint.findFirst.mockResolvedValue(null);
+  mocks.prisma.profileDataPoint.findMany.mockResolvedValue([]);
+  mocks.prisma.profileDataPoint.deleteMany.mockResolvedValue({ count: 0 });
+  mocks.prisma.placementAttribute.findFirst.mockResolvedValue(null);
+  mocks.prisma.placementAttribute.create.mockResolvedValue({});
+  mocks.prisma.placementAttribute.deleteMany.mockResolvedValue({ count: 0 });
+  mocks.prisma.extractionHint.findMany.mockResolvedValue([]);
+  mocks.prisma.message.update.mockResolvedValue({});
+  mocks.publishRealtime.mockResolvedValue(undefined);
   mocks.prisma.mediaAsset.updateMany.mockResolvedValue({ count: 0 });
+  mocks.prisma.mediaAsset.deleteMany.mockResolvedValue({ count: 0 });
+  mocks.prisma.mediaAsset.create.mockResolvedValue({});
   mocks.prisma.$transaction.mockImplementation(
     async (fn: (tx: typeof mocks.prisma) => Promise<unknown>) => fn(mocks.prisma),
   );

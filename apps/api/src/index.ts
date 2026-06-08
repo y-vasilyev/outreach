@@ -19,6 +19,7 @@ import { campaignTypesRoutes } from './routes/campaign-types.js';
 import { campaignTypeBuilderRoutes } from './routes/campaign-type-builder.js';
 import { bloggerProfilesRoutes } from './routes/blogger-profiles.js';
 import { placementAttributesRoutes } from './routes/placement-attributes.js';
+import { operatorMarkupRoutes } from './routes/operator-markup.js';
 import { mediaAssetsRoutes } from './routes/media-assets.js';
 import { matchingRoutes } from './routes/matching.js';
 import { discoveryRoutes } from './routes/discovery.js';
@@ -72,6 +73,7 @@ async function main() {
   await app.register(campaignTypeBuilderRoutes);
   await app.register(bloggerProfilesRoutes);
   await app.register(placementAttributesRoutes);
+  await app.register(operatorMarkupRoutes);
   await app.register(mediaAssetsRoutes);
   await app.register(matchingRoutes);
   await app.register(discoveryRoutes);

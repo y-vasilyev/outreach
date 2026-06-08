@@ -2,7 +2,9 @@ import { Worker } from 'bullmq';
 import { getRedis } from '../redis.js';
 import {
   buildHudTargetRow,
+  EXTRACTION_HINT_LIMIT,
   getSuggestionTargetField,
+  hintsToOperatorStrings,
   PlacementOfferZ,
   preGateExtraction,
   ProfileExtractJobZ,
@@ -44,9 +46,44 @@ interface ExtractionOut {
  * (behind ENABLE_AGENCY_SOURCING) and on demand via the queue. Errors degrade
  * gracefully — extraction is advisory; it never blocks the inbound pipeline.
  */
+type ExtractionStatus = 'ok' | 'empty' | 'no_signal' | 'failed';
+
+/**
+ * Stamp a message's per-message extraction status + emit the realtime event
+ * (operator-reanalyze-and-markup). Best-effort: never throws into the caller.
+ * Exported so the synchronous on_inbound caller can stamp `failed` on its catch
+ * (the only place a terminal sync failure is observable).
+ */
+export async function stampExtractionStatus(opts: {
+  conversationId: string;
+  messageId: string;
+  status: ExtractionStatus;
+  error?: string | null;
+}): Promise<void> {
+  const prisma = getPrisma();
+  await prisma.message
+    .update({
+      where: { id: opts.messageId },
+      data: {
+        extractionStatus: opts.status,
+        extractionError: opts.error ?? null,
+        extractedAt: new Date(),
+      },
+    })
+    .catch((e) => logger.warn({ err: (e as Error).message }, 'stamp extraction status failed'));
+  await publishRealtime(`conversation:${opts.conversationId}`, {
+    type: 'message.extraction_status.changed',
+    conversationId: opts.conversationId,
+    messageId: opts.messageId,
+    extractionStatus: opts.status,
+    ...(opts.error ? { extractionError: opts.error } : {}),
+  }).catch(() => undefined);
+}
+
 export async function handleProfileExtract(data: {
   conversationId?: string;
   sourceMessageId?: string;
+  supersede?: boolean;
 }): Promise<unknown> {
   const prisma = getPrisma();
   if (!data.conversationId) throw new Error('conversationId required');
@@ -108,7 +145,10 @@ export async function handleProfileExtract(data: {
   // attribute points to (provenance unit). `replies` is a one-element array so
   // the extractor-agent input shape is unchanged.
   const replies = sourceMessage.text ? [sourceMessage.text] : [];
-  if (replies.length === 0) return { ok: true, skipped: 'empty_inbound' };
+  if (replies.length === 0) {
+    await stampExtractionStatus({ conversationId: conv.id, messageId: sourceMessageId, status: 'no_signal' });
+    return { ok: true, skipped: 'empty_inbound' };
+  }
 
   // Deterministic pre-gate: skip the two extractor LLM calls on
   // obviously empty service-talk turns ("ок", "напишу в 5"). The classifier
@@ -126,6 +166,7 @@ export async function handleProfileExtract(data: {
       },
       'profile-extract pre-gate skipped: no extraction signal',
     );
+    await stampExtractionStatus({ conversationId: conv.id, messageId: sourceMessageId, status: 'no_signal' });
     return { ok: true, skipped: 'no_signal', reason: gate.reason };
   }
   logger.info(
@@ -140,11 +181,37 @@ export async function handleProfileExtract(data: {
 
   const channelTitle = conv.contact.channel?.title ?? '';
   const language = conv.contact.channel?.language ?? 'ru';
+
+  // Operator hints (operator-reanalyze-and-markup): advisory parsing rules the
+  // operator added — global, for this channel, or for this conversation. Capped
+  // and rendered into a fenced block by the agents.
+  const hintRows = await prisma.extractionHint.findMany({
+    where: {
+      active: true,
+      OR: [
+        { scope: 'global' },
+        { scope: 'channel', channelId },
+        { scope: 'conversation', conversationId: conv.id },
+      ],
+    },
+    orderBy: { createdAt: 'desc' },
+    take: EXTRACTION_HINT_LIMIT,
+  });
+  const operatorHints = hintsToOperatorStrings(
+    hintRows.map((h) => ({
+      guidance: h.guidance,
+      exampleInput: h.exampleInput,
+      exampleOutput: h.exampleOutput,
+      targetField: h.targetField,
+    })),
+  );
+
   const extractorInput = {
     replies,
     last_inbound: replies[replies.length - 1] ?? '',
     channel_title: channelTitle,
     language,
+    operator_hints: operatorHints,
   };
 
   const [rate, audience] = await Promise.all([
@@ -195,11 +262,14 @@ export async function handleProfileExtract(data: {
   const placementOfferDrafts: PlacementOfferDraft[] = rate?.placement_offers ?? [];
   const attributeProposals: PlacementAttributeProposalDraft[] = rate?.attribute_proposals ?? [];
 
-  if (
-    drafts.length === 0 &&
-    placementOfferDrafts.length === 0 &&
-    attributeProposals.length === 0
-  ) {
+  const nothingExtracted =
+    drafts.length === 0 && placementOfferDrafts.length === 0 && attributeProposals.length === 0;
+  // Normally a clean-but-empty extraction short-circuits. But on an operator
+  // SUPERSEDE re-run we must still enter the transaction to DELETE the prior
+  // (false-positive) rows and re-roll — otherwise reanalyze couldn't clear bad
+  // data (codex). So only short-circuit when not superseding.
+  if (nothingExtracted && !data.supersede) {
+    await stampExtractionStatus({ conversationId: conv.id, messageId: sourceMessageId, status: 'empty' });
     return { ok: true, channelId, dataPoints: 0 };
   }
 
@@ -225,6 +295,26 @@ export async function handleProfileExtract(data: {
       where: { conversationId: conv.id, profileId: null },
       data: { profileId: profile.id },
     });
+
+    // Operator re-run supersede (operator-reanalyze-and-markup): after both
+    // extractors succeeded, delete the PRIOR rows for this (profileId,
+    // sourceMessageId) so the fresh extraction REPLACES them instead of being
+    // skipped by the idempotency `findFirst` below. Runs only on an explicit
+    // re-run; never touches operator-origin points (sourceMessageId is null on
+    // those). Deleting here — after extraction, inside the write tx — means a
+    // failed re-extraction never lost the old data (it threw before this tx).
+    if (data.supersede) {
+      await tx.profileDataPoint.deleteMany({
+        where: { profileId: profile.id, sourceMessageId, extractedBy: { not: 'operator' } },
+      });
+      // Only proposed (unreviewed) attributes — an admin-approved `active` row
+      // is a curated registry entry the planner uses; a message re-run must not
+      // silently remove it (codex).
+      await tx.placementAttribute.deleteMany({ where: { sourceMessageId, status: 'proposed' } });
+      await tx.mediaAsset.deleteMany({
+        where: { profileId: profile.id, messageId: sourceMessageId, kind: 'raw_payload' },
+      });
+    }
 
     for (const { extractedBy, draft } of drafts) {
       // Idempotency: the same (profileId, sourceMessageId, field, extractedBy)
@@ -392,6 +482,10 @@ export async function handleProfileExtract(data: {
           data: {
             conversationId: conv.id,
             profileId: result.profileId,
+            // messageId ties the raw-payload row to its source message so an
+            // operator re-run supersede can find+delete the prior one
+            // (operator-reanalyze-and-markup).
+            messageId: sourceMessageId,
             kind: 'raw_payload',
             s3Key: snapshotKey,
             mime: 'application/json',
@@ -437,6 +531,13 @@ export async function handleProfileExtract(data: {
     );
   }
 
+  await stampExtractionStatus({
+    conversationId: conv.id,
+    messageId: sourceMessageId,
+    // A superseding re-run that extracted nothing still cleared the old rows —
+    // its outcome is `empty`, not `ok`.
+    status: nothingExtracted ? 'empty' : 'ok',
+  });
   return { ok: true, ...result };
 }
 
@@ -529,8 +630,23 @@ export function startProfileExtractWorker() {
     },
     { connection: getRedis(), concurrency: 2 },
   );
-  worker.on('failed', (job, err) =>
-    logger.error({ jobId: job?.id, err: err?.message }, 'profile-extract failed'),
-  );
+  worker.on('failed', (job, err) => {
+    logger.error({ jobId: job?.id, err: err?.message }, 'profile-extract failed');
+    // Stamp `failed` only on TERMINAL exhaustion (operator-reanalyze-and-markup):
+    // between automatic retries the message stays `pending`, so a transient
+    // failure is not shown as a terminal one. Requires an explicit sourceMessageId
+    // (the operator re-run path always carries it).
+    const data = job?.data as { conversationId?: string; sourceMessageId?: string } | undefined;
+    const attemptsMade = job?.attemptsMade ?? 0;
+    const maxAttempts = job?.opts?.attempts ?? 1;
+    if (data?.conversationId && data.sourceMessageId && attemptsMade >= maxAttempts) {
+      void stampExtractionStatus({
+        conversationId: data.conversationId,
+        messageId: data.sourceMessageId,
+        status: 'failed',
+        error: err?.message ?? 'extraction failed',
+      });
+    }
+  });
   return worker;
 }

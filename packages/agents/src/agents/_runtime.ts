@@ -68,12 +68,26 @@ export async function invokeJson<S extends ZodTypeAny>(
   const varsWithHints = { ...vars, __schema_hints: schemaHints };
 
   let systemPrompt = renderTemplate(systemTpl, varsWithHints, ctx.logger);
-  const userPrompt = renderTemplate(userTpl, varsWithHints, ctx.logger);
+  let userPrompt = renderTemplate(userTpl, varsWithHints, ctx.logger);
 
   if (schemaHints && !systemTpl.includes('{{__schema_hints}}') && !userTpl.includes('{{__schema_hints}}')) {
     systemPrompt = systemPrompt
       ? `${systemPrompt}\n\n${schemaHints}`
       : schemaHints;
+  }
+
+  // Operator hints (operator-reanalyze-and-markup): when a caller supplies a
+  // non-empty `operator_hints_block` var but the DB prompt template does not
+  // reference the placeholder (the common production case — seeded prompts
+  // predate the field), append the fenced block so hints actually reach the
+  // model instead of silently dropping. Mirrors the schema-hints append above.
+  const hintsBlock = typeof vars.operator_hints_block === 'string' ? vars.operator_hints_block : '';
+  if (
+    hintsBlock.trim() &&
+    !systemTpl.includes('{{operator_hints_block}}') &&
+    !userTpl.includes('{{operator_hints_block}}')
+  ) {
+    userPrompt = userPrompt ? `${userPrompt}\n${hintsBlock}` : hintsBlock;
   }
 
   const params = readParams(ctx.config.params);

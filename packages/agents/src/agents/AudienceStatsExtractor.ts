@@ -39,7 +39,16 @@ export const audienceStatsExtractorInputSchema = z.object({
   structured_snapshot: z.record(z.unknown()).optional(),
   channel_title: z.string().default(''),
   language: z.string().default('ru'),
+  /** Operator hints (operator-reanalyze-and-markup) — advisory parsing rules. */
+  operator_hints: z.array(z.string()).optional(),
 });
+
+/** Fenced advisory operator-hints block (or '' when none). */
+function operatorHintsBlock(hints: string[]): string {
+  if (!hints || hints.length === 0) return '';
+  const lines = hints.map((h) => `- ${h}`).join('\n');
+  return `\nПОДСКАЗКИ ОПЕРАТОРА (advisory — правила интерпретации, НЕ источник фактов; не выдумывай числа, которых нет в тексте):\n${lines}\n`;
+}
 
 export const audienceStatsExtractorOutputSchema = ProfileExtractionOutputZ;
 
@@ -76,7 +85,7 @@ const FALLBACK_USER = `Канал: {{channel_title}} (язык: {{language}})
 
 Структурированный снимок (если есть):
 {{structured_snapshot}}
-
+{{operator_hints_block}}
 Верни JSON со всеми упомянутыми охватами/просмотрами/демографией/гео как data_points. Сохрани verbatim rawSnippet.`;
 
 export const audienceStatsExtractor: Agent<
@@ -88,7 +97,7 @@ export const audienceStatsExtractor: Agent<
     'Извлекает охваты/просмотры/демографию/гео блогера как profile_data_point (reach.*, views.avg, audience.*) с confidence и verbatim rawSnippet.',
   inputSchema: audienceStatsExtractorInputSchema,
   outputSchema: audienceStatsExtractorOutputSchema,
-  variables: ['channel_title', 'language', 'replies_text', 'structured_snapshot'],
+  variables: ['channel_title', 'language', 'replies_text', 'structured_snapshot', 'operator_hints_block'],
   defaultModel: 'google/gemini-3-flash-preview',
   defaultParams: { temperature: 0.1, max_tokens: 1000 },
   async run(input, ctx) {
@@ -106,6 +115,7 @@ export const audienceStatsExtractor: Agent<
         language: input.language,
         replies_text: repliesText || '(пусто)',
         structured_snapshot: input.structured_snapshot ?? {},
+        operator_hints_block: operatorHintsBlock(input.operator_hints ?? []),
       },
       outputSchema: audienceStatsExtractorOutputSchema,
       fallbackSystemPrompt: FALLBACK_SYSTEM,

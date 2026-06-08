@@ -47,6 +47,12 @@ export const rateCardExtractorInputSchema = z.object({
   /** Light context so the model can disambiguate currency/format. */
   channel_title: z.string().default(''),
   language: z.string().default('ru'),
+  /**
+   * Operator hints (operator-reanalyze-and-markup): advisory parsing rules the
+   * operator added for this channel/conversation. Rendered into a fenced block;
+   * they steer interpretation but never license inventing facts.
+   */
+  operator_hints: z.array(z.string()).optional(),
 });
 
 export const rateCardExtractorOutputSchema = ProfileExtractionOutputZ;
@@ -84,8 +90,19 @@ const FALLBACK_USER = `Канал: {{channel_title}} (язык: {{language}})
 
 Структурированный снимок (если есть):
 {{structured_snapshot}}
-
+{{operator_hints_block}}
 Верни JSON: data_points (легаси), placement_offers (структурированные размещения), attribute_proposals (новые атрибуты вне реестра). Сохрани verbatim rawSnippet.`;
+
+/**
+ * Render operator hints into a fenced advisory block, or '' when none. Hints
+ * are interpretation rules — NEVER a source of facts (operator-reanalyze-and-
+ * markup safety: do not invent prices/reach absent from the source text).
+ */
+function operatorHintsBlock(hints: string[]): string {
+  if (!hints || hints.length === 0) return '';
+  const lines = hints.map((h) => `- ${h}`).join('\n');
+  return `\nПОДСКАЗКИ ОПЕРАТОРА (advisory — правила интерпретации, НЕ источник фактов; не выдумывай цены/охваты, которых нет в тексте):\n${lines}\n`;
+}
 
 export const rateCardExtractor: Agent<RateCardExtractorInput, RateCardExtractorOutput> = {
   name: 'rate_card_extractor',
@@ -93,7 +110,7 @@ export const rateCardExtractor: Agent<RateCardExtractorInput, RateCardExtractorO
     'Извлекает из ответов блогера прайс по форматам как profile_data_point (rate.<format>) с confidence и verbatim rawSnippet.',
   inputSchema: rateCardExtractorInputSchema,
   outputSchema: rateCardExtractorOutputSchema,
-  variables: ['channel_title', 'language', 'replies_text', 'structured_snapshot'],
+  variables: ['channel_title', 'language', 'replies_text', 'structured_snapshot', 'operator_hints_block'],
   defaultModel: 'google/gemini-3-flash-preview',
   defaultParams: { temperature: 0.1, max_tokens: 900 },
   async run(input, ctx) {
@@ -111,6 +128,7 @@ export const rateCardExtractor: Agent<RateCardExtractorInput, RateCardExtractorO
         language: input.language,
         replies_text: repliesText || '(пусто)',
         structured_snapshot: input.structured_snapshot ?? {},
+        operator_hints_block: operatorHintsBlock(input.operator_hints ?? []),
       },
       outputSchema: rateCardExtractorOutputSchema,
       fallbackSystemPrompt: FALLBACK_SYSTEM,

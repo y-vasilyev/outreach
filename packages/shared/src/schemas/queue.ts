@@ -110,6 +110,14 @@ export const ProfileExtractJobZ = z.object({
    * absent the worker resolves the latest inbound message of the conversation.
    */
   sourceMessageId: z.string().optional(),
+  /**
+   * Operator re-run (operator-reanalyze-and-markup): when true, the worker
+   * deletes the prior rows for this (profileId, sourceMessageId) — after
+   * successful extraction, inside the write transaction — before writing the
+   * fresh ones, so a re-run replaces stale rows instead of being skipped by
+   * write idempotency. Never set for the normal on_inbound path.
+   */
+  supersede: z.boolean().optional(),
 });
 
 export type ChannelScrapeJob = z.infer<typeof ChannelScrapeJobZ>;
