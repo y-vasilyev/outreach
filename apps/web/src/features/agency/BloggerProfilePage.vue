@@ -138,10 +138,36 @@ function postMetricLabel(post: BloggerPostInsight): string {
 }
 
 function postFreshnessLabel(post: BloggerPostInsight): string {
-  if (post.freshness.state === 'fresh') return `fresh · ${post.freshness.ageDays ?? 0} д`;
-  if (post.freshness.state === 'stale') return `stale · ${post.freshness.ageDays ?? '?'} д`;
+  if (post.freshness.state === 'fresh') return `свежие · ${post.freshness.ageDays ?? 0} д`;
+  if (post.freshness.state === 'stale') return `устарели · ${post.freshness.ageDays ?? '?'} д`;
   if (post.freshness.state === 'pending') return 'обновляется';
   return 'нет метрик';
+}
+
+// Tone for the freshness badge (green = fresh, amber = stale, neutral else).
+function postFreshnessTone(post: BloggerPostInsight): string {
+  if (post.freshness.state === 'fresh') return 'ok';
+  if (post.freshness.state === 'stale') return 'warn';
+  return '';
+}
+
+// Metrics as discrete stat tiles (value + label) instead of one cramped mono
+// string — readable at a glance in a card grid.
+function postMetricChips(post: BloggerPostInsight): Array<{ label: string; value: string }> {
+  const m = post.metrics;
+  const out: Array<{ label: string; value: string }> = [];
+  if (m.views != null) out.push({ label: 'просмотры', value: formatCompact(m.views) });
+  if (m.likes != null) out.push({ label: 'лайки', value: formatCompact(m.likes) });
+  if (m.reactions != null) out.push({ label: 'реакции', value: formatCompact(m.reactions) });
+  if (m.comments != null) out.push({ label: 'комменты', value: formatCompact(m.comments) });
+  if (m.forwards != null) out.push({ label: 'репосты', value: formatCompact(m.forwards) });
+  if (m.shares != null) out.push({ label: 'шеры', value: formatCompact(m.shares) });
+  if (m.saves != null) out.push({ label: 'сохран.', value: formatCompact(m.saves) });
+  if (m.engagementRate != null) {
+    const er = m.engagementRate <= 1 ? m.engagementRate * 100 : m.engagementRate;
+    out.push({ label: 'ER', value: `${er.toFixed(1)}%` });
+  }
+  return out;
 }
 
 function profileTitle(): string {
@@ -239,6 +265,7 @@ function submitHint(): void {
     </template>
   </PageHead>
 
+  <div class="page-scroll">
   <FeatureOff v-if="featureOff" flag="ENABLE_AGENCY_SOURCING" />
   <div v-else-if="isLoading" class="center"><Spinner /></div>
   <EmptyState
@@ -272,39 +299,52 @@ function submitHint(): void {
         <div v-else-if="profile.postInsightRefreshStatus === 'unsupported'" class="placeholder" style="min-height: 44px;">Источник не поддерживает обновление постов: {{ profile.postInsightRefreshError ?? 'нет публичного канала' }}</div>
         <div v-else-if="profile.postInsightRefreshStatus === 'failed'" class="placeholder" style="min-height: 44px;">Последнее обновление постов завершилось ошибкой: {{ profile.postInsightRefreshError ?? '—' }}</div>
         <div v-if="!postInsights.length" class="placeholder" style="min-height: 48px;">Посты с метриками пока не собраны.</div>
-        <div v-else style="display: grid; gap: 8px;">
-          <div
-            v-for="post in postInsights.slice(0, 12)"
-            :key="post.id"
-            style="border: 1px solid var(--line); border-radius: 8px; padding: 10px;"
-          >
-            <div style="display: flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap;">
-              <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+        <div v-else class="post-grid">
+          <div v-for="post in postInsights.slice(0, 12)" :key="post.id" class="post-card">
+            <!-- Post-example image (blogger-profile-who-is-this): visual «who is this». -->
+            <S3Image
+              v-if="post.hasImage"
+              class="post-card__media"
+              :url-path="`/blogger-post-insights/${post.id}/image-url`"
+              :alt="post.textSnippet"
+              :size="120"
+            />
+            <div v-else class="post-card__media post-card__media--empty">
+              <Icon name="eye" :size="18" />
+            </div>
+
+            <div class="post-card__body">
+              <div class="post-card__head">
                 <Tag :platform="post.platform">{{ post.platform }}</Tag>
-                <span class="mono muted-2" style="font-size: 11px;">{{ post.mediaKind }}</span>
-                <span class="mono cell-strong" style="font-size: 12px;">{{ postMetricLabel(post) }}</span>
+                <span class="muted-2" style="font-size: 11px;">{{ post.mediaKind }}</span>
+                <span class="post-fresh" :class="postFreshnessTone(post)">{{ postFreshnessLabel(post) }}</span>
               </div>
-              <div style="display: flex; align-items: center; gap: 8px;">
-                <span class="muted-2" style="font-size: 11px;">{{ postFreshnessLabel(post) }}</span>
-                <a v-if="post.url" class="btn ghost icon-only sm" :href="post.url" target="_blank" rel="noreferrer" title="Открыть пост">
+
+              <div class="post-metrics" :title="postMetricLabel(post)">
+                <template v-if="postMetricChips(post).length">
+                  <div v-for="mc in postMetricChips(post)" :key="mc.label" class="post-metric">
+                    <span class="post-metric__v">{{ mc.value }}</span>
+                    <span class="post-metric__l">{{ mc.label }}</span>
+                  </div>
+                </template>
+                <span v-else class="muted-2" style="font-size: 11.5px;">метрик нет</span>
+              </div>
+
+              <p class="post-card__snippet">{{ post.textSnippet || '—' }}</p>
+
+              <div class="post-card__foot">
+                <span class="muted-2" style="font-size: 10.5px;">{{ formatRelative(post.publishedAt) }}</span>
+                <a
+                  v-if="post.url"
+                  class="btn ghost icon-only sm"
+                  :href="post.url"
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Открыть пост"
+                >
                   <Icon name="arrow_up_right" :size="12" />
                 </a>
               </div>
-            </div>
-            <div style="display: flex; gap: 9px; margin-top: 7px;">
-              <!-- Post-example image (blogger-profile-who-is-this): visual «who is this». -->
-              <S3Image
-                v-if="post.hasImage"
-                :url-path="`/blogger-post-insights/${post.id}/image-url`"
-                :alt="post.textSnippet"
-                :size="84"
-              />
-              <div class="muted" style="font-size: 12.5px; line-height: 1.45; min-width: 0; flex: 1;">
-                {{ post.textSnippet || '—' }}
-              </div>
-            </div>
-            <div class="muted-2" style="font-size: 10.5px; margin-top: 7px;">
-              опубликован {{ formatRelative(post.publishedAt) }} · метрики {{ formatRelative(post.metricCapturedAt) }} · source {{ post.source }}
             </div>
           </div>
         </div>
@@ -561,4 +601,110 @@ function submitHint(): void {
       </div>
     </div>
   </template>
+  </div>
 </template>
+
+<style scoped>
+.post-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 10px;
+}
+.post-card {
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--paper);
+}
+.post-card__media {
+  flex: none;
+}
+.post-card__media--empty {
+  width: 120px;
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--paper-2);
+  color: var(--ink-4);
+  border-right: 1px solid var(--line);
+}
+.post-card__body {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.post-card__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.post-fresh {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--paper-3, rgba(0, 0, 0, 0.06));
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.post-fresh.ok {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+.post-fresh.warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+.post-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.post-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 46px;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  line-height: 1.15;
+}
+.post-metric__v {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--ink);
+}
+.post-metric__l {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--ink-4);
+}
+.post-card__snippet {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-3);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.post-card__foot {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+</style>

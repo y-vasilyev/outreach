@@ -580,6 +580,18 @@ table.tbl tbody tr.selected td { background: var(--accent-bg); }
   overflow: auto;
 }
 
+/* Generic vertical scroll region for non-grid pages (e.g. the blogger profile,
+ * a stack of cards taller than the viewport). Same rationale as `.cards`:
+ * `.main` is `overflow: hidden`, so a page that doesn't host its own scroll
+ * container gets clipped. `flex: 1` + `min-height: 0` claims the leftover
+ * height below the page chrome and scrolls within it. */
+.page-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 22px 22px;
+}
+
 /**
  * Persistent action bar pinned to the bottom of a page. Use AFTER `.cards`
  * inside `.main` — `.cards` fills the remaining space, this strip stays
