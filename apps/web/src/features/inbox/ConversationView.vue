@@ -84,6 +84,22 @@ watch(
 useRoom(() => room.value, 'suggestion.new', () => {
   qc.invalidateQueries({ queryKey: ['conversation-suggestions', cId.value] });
 });
+// Per-message extraction status changed (operator-reanalyze-and-markup) — refresh
+// the message list so the badge updates pending→result live.
+useRoom(() => room.value, 'message.extraction_status.changed', () => {
+  qc.invalidateQueries({ queryKey: ['conversation-messages', cId.value] });
+});
+
+// Operator re-run of extraction for one inbound message (supersede). The
+// MessageBubble emits `reanalyze` with the message id.
+const reanalyzeMut = useMutation({
+  mutationFn: (messageId: string) =>
+    api.post(`/conversations/${cId.value}/messages/${messageId}/reanalyze`, {}),
+  onSuccess: () => qc.invalidateQueries({ queryKey: ['conversation-messages', cId.value] }),
+});
+function onReanalyze(messageId: string): void {
+  reanalyzeMut.mutate(messageId);
+}
 useRoom(() => room.value, 'mode.changed', () => {
   qc.invalidateQueries({ queryKey: ['conversation', cId.value] });
 });
@@ -387,7 +403,7 @@ onBeforeUnmount(() => window.removeEventListener('inbox:draft-request', onDraftR
           <div style="display: flex; justify-content: center; margin: 4px 0 12px;">
             <span style="font-size: 10.5px; color: var(--ink-4); font-family: var(--font-mono); padding: 2px 9px; background: var(--paper-3); border: 1px solid var(--line); border-radius: 999px;">{{ g.day }}</span>
           </div>
-          <MessageBubble v-for="m in g.items" :key="m.id" :msg="m" />
+          <MessageBubble v-for="m in g.items" :key="m.id" :msg="m" @reanalyze="onReanalyze" />
         </div>
         <div
           v-if="c.lastReadAt"

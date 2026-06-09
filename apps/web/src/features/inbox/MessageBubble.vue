@@ -6,8 +6,38 @@ import { formatTime } from '../../lib/format';
 import type { ChatMessage, MessageAttachment } from './types';
 
 const props = defineProps<{ msg: ChatMessage }>();
+const emit = defineEmits<{ (e: 'reanalyze', messageId: string): void }>();
 
 const isOut = computed(() => props.msg.direction === 'out_');
+const isInbound = computed(() => props.msg.direction === 'in_');
+
+// Per-message extraction status (operator-reanalyze-and-markup). Shown on
+// inbound messages so the operator sees which replies produced catalog data and
+// can re-run the analysis.
+const EXTRACTION_LABEL: Record<string, string> = {
+  pending: 'анализ…',
+  ok: 'извлечено',
+  empty: 'пусто',
+  no_signal: 'нет сигнала',
+  failed: 'ошибка',
+};
+const EXTRACTION_COLOR: Record<string, string> = {
+  pending: 'var(--ink-4)',
+  ok: 'var(--ok)',
+  empty: 'var(--ink-4)',
+  no_signal: 'var(--ink-4)',
+  failed: 'var(--bad)',
+};
+const extractionStatus = computed(() => props.msg.extractionStatus ?? null);
+const reanalyzing = computed(() => extractionStatus.value === 'pending');
+
+const OCR_LABEL: Record<string, string> = {
+  ok: 'распознано',
+  processing: 'распознаётся…',
+  failed: 'OCR ошибка',
+  unsupported: 'без OCR',
+  pending: '',
+};
 const senderLabel = computed(() => {
   switch (props.msg.sender) {
     case 'ai': return 'AI';
@@ -77,11 +107,13 @@ const attachmentMetaColor = computed(() => (isOut.value ? 'var(--paper-3, rgba(2
           :style="{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: hasText ? '8px' : '0' }"
         >
           <template v-for="(a, i) in attachments" :key="i">
-            <AttachmentImage
-              v-if="a.kind === 'image' && a.assetId"
-              :asset-id="a.assetId"
-              :alt="a.fileName"
-            />
+            <div v-if="a.kind === 'image' && a.assetId">
+              <AttachmentImage :asset-id="a.assetId" :alt="a.fileName" />
+              <span
+                v-if="a.ocrStatus && OCR_LABEL[a.ocrStatus]"
+                :style="{ fontSize: '10px', color: a.ocrStatus === 'failed' ? 'var(--bad)' : 'var(--ink-4)', fontFamily: 'var(--font-mono)' }"
+              >{{ OCR_LABEL[a.ocrStatus] }}</span>
+            </div>
             <div
               v-else
               :style="{
@@ -124,6 +156,29 @@ const attachmentMetaColor = computed(() => (isOut.value ? 'var(--paper-3, rgba(2
           <span v-if="msg.status === 'failed'" style="color: var(--bad); display: inline-flex;"><Icon name="warn" :size="10" /></span>
           <span v-else-if="msg.status === 'pending' || msg.status === 'sending'" style="color: var(--ink-4); display: inline-flex;"><Icon name="clock" :size="10" /></span>
           <span v-else style="color: var(--ok); display: inline-flex;"><Icon name="check" :size="10" /></span>
+        </template>
+        <!-- Per-message extraction status + re-run (operator-reanalyze-and-markup) -->
+        <template v-if="isInbound && extractionStatus">
+          <span
+            :title="msg.extractionError ?? ''"
+            :style="{ color: EXTRACTION_COLOR[extractionStatus] ?? 'var(--ink-4)' }"
+          >· {{ EXTRACTION_LABEL[extractionStatus] ?? extractionStatus }}</span>
+          <button
+            type="button"
+            :disabled="reanalyzing"
+            title="Переанализировать это сообщение"
+            :style="{
+              background: 'none',
+              border: 'none',
+              padding: '0',
+              cursor: reanalyzing ? 'default' : 'pointer',
+              color: 'var(--accent-2)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              opacity: reanalyzing ? 0.5 : 1,
+            }"
+            @click="emit('reanalyze', msg.id)"
+          ><Icon name="refresh" :size="10" /></button>
         </template>
       </div>
     </div>

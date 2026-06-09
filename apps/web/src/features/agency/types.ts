@@ -98,6 +98,9 @@ export interface BloggerPostInsight {
   metricCapturedAt: string | null;
   source: 'scrapecreators' | 'telegram_public_parse' | 'manual_import';
   sourceRawRef?: string | null;
+  /** Post-example image (blogger-profile-who-is-this). */
+  hasImage?: boolean;
+  imageStatus?: 'pending' | 'processing' | 'ok' | 'failed' | 'unsupported' | null;
   freshness: PostMetricFreshness;
   performanceScore: number;
   createdAt?: string;

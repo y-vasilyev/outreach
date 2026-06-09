@@ -1,5 +1,7 @@
 import { getPrisma } from '@nosquare/db';
+import { getObjectStore } from '@nosquare/storage';
 import {
+  AppError,
   BloggerPostMetricsZ,
   buildFitBreakdown,
   buildBloggerProfilePresentation,
@@ -609,5 +611,36 @@ export const bloggerProfilesService = {
     });
     await getQueues().channelScrape.add('refresh-post-insights', { channelId: channel.id });
     return { id, postInsightRefreshStatus: 'pending', postInsightRefreshError: null };
+  },
+
+  /**
+   * Resolve a post-example image to a URL the UI can render
+   * (blogger-profile-who-is-this). YouTube → the deterministic public thumbnail
+   * (stored as an http URL); Telegram → a presigned S3 GET when the photo is
+   * stored. 404 when the insight is missing; 409 when there is no usable image.
+   */
+  async postInsightImageUrl(id: string): Promise<{ url: string; kind: 'direct' | 'presigned' }> {
+    const prisma = getPrisma();
+    const insight = await prisma.bloggerPostInsight.findUnique({
+      where: { id },
+      select: { id: true, imageS3Key: true, imageStatus: true },
+    });
+    if (!insight) throw Errors.notFound('blogger_post_insight', id);
+    const key = (insight as { imageS3Key?: string | null }).imageS3Key ?? null;
+    if (insight.imageStatus !== 'ok' || !key) {
+      throw new AppError('CONFLICT', 'post has no usable image', 409);
+    }
+    // YouTube thumbnails are stored as a public http URL → serve directly.
+    if (/^https?:\/\//i.test(key)) return { url: key, kind: 'direct' };
+    // Telegram (or other) stored object → presign if it exists.
+    const store = getObjectStore();
+    if (!store) throw new AppError('CONFLICT', 'object storage disabled', 409);
+    const exists = await store.headObject(key);
+    if (!exists) {
+      // The public re-fetch (downloadPublicPostMedia) is a follow-up; until then
+      // a missing object is a conflict, not a broken image.
+      throw new AppError('CONFLICT', 'image object missing', 409);
+    }
+    return { url: await store.getPresignedGetUrl(key), kind: 'presigned' };
   },
 };

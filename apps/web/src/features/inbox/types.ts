@@ -87,6 +87,9 @@ export interface ChatMessage {
   text: string;
   attachments?: MessageAttachment[];
   status?: 'pending' | 'sending' | 'sent' | 'failed' | 'received';
+  /** Per-message profile-extraction outcome (operator-reanalyze-and-markup). */
+  extractionStatus?: ExtractionStatus | null;
+  extractionError?: string | null;
   createdAt: string;
   sentAt?: string | null;
   agentName?: string;

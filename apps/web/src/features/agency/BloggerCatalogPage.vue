@@ -26,6 +26,7 @@ const qc = useQueryClient();
 
 type BloggerTab = 'all' | 'with_rates' | 'with_audience' | 'needs_data';
 const tab = ref<BloggerTab>('all');
+const query = ref('');
 const platformFilter = ref('');
 const langFilter = ref('');
 const formatFilter = ref('');
@@ -76,7 +77,28 @@ function hasRates(p: BloggerProfile): boolean {
 }
 
 function hasAudience(p: BloggerProfile): boolean {
-  return p.reach != null || p.avgViews != null;
+  return p.reach != null || p.avgViews != null || (p.platformAudience?.length ?? 0) > 0;
+}
+
+// Side-by-side compare (blogger-profile-who-is-this, Path A). Select 2–4 bloggers
+// and align them on per-platform audience + prices per format.
+const compareIds = ref<string[]>([]);
+function toggleCompare(pid: string): void {
+  const i = compareIds.value.indexOf(pid);
+  if (i >= 0) compareIds.value.splice(i, 1);
+  else if (compareIds.value.length < 4) compareIds.value.push(pid);
+}
+const compareItems = computed<BloggerProfile[]>(() =>
+  compareIds.value.map((cid) => items.value.find((p) => p.id === cid)).filter((p): p is BloggerProfile => !!p),
+);
+const showCompare = computed(() => compareItems.value.length >= 2);
+const comparePlatforms = computed(() => {
+  const set = new Set<string>();
+  for (const p of compareItems.value) for (const pa of p.platformAudience ?? []) set.add(pa.platform);
+  return [...set].sort();
+});
+function platformSubs(p: BloggerProfile, platform: string): number | null {
+  return p.platformAudience?.find((pa) => pa.platform === platform)?.subscribers ?? null;
 }
 
 function hasUsablePostMetric(p: BloggerProfile): boolean {
@@ -115,6 +137,20 @@ const filteredItems = computed(() => {
   }
   if (langFilter.value) xs = xs.filter((p) => p.languages.includes(langFilter.value));
   if (formatFilter.value) xs = xs.filter((p) => p.formats.includes(formatFilter.value));
+  // Free-text search over name / topics / social handle (blogger-profile-who-is-this).
+  const q = query.value.trim().toLowerCase();
+  if (q) {
+    xs = xs.filter((p) => {
+      const hay = [
+        profileName(p),
+        ...(p.topics ?? []),
+        ...((p.socialLinks ?? []).map((l) => l.handle ?? l.url)),
+      ]
+        .join(' ')
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }
   if (requirePostMetrics.value) xs = xs.filter(hasUsablePostMetric);
   xs = [...xs];
   if (sortMode.value === 'relevance') {
@@ -263,6 +299,12 @@ function rowActions(p: BloggerProfile): Array<{
   <template v-else>
     <Tabs :tabs="tabsList" :active="tab" @change="(id) => (tab = id as BloggerTab)" />
     <FilterBar>
+      <input
+        v-model="query"
+        class="input"
+        style="height: 30px; width: 200px;"
+        placeholder="Поиск: имя / тема / ник"
+      />
       <FilterChipSelect
         v-model="platformFilter"
         label="Платформа"
@@ -348,7 +390,15 @@ function rowActions(p: BloggerProfile): Array<{
             class="clickable"
             @click="router.push(`/bloggers/${row.id}`)"
           >
-            <td @click.stop><input type="checkbox" /></td>
+            <td @click.stop>
+              <input
+                type="checkbox"
+                title="Добавить в сравнение"
+                :checked="compareIds.includes(row.id)"
+                :disabled="!compareIds.includes(row.id) && compareIds.length >= 4"
+                @change="toggleCompare(row.id)"
+              />
+            </td>
             <td>
               <div style="display: flex; align-items: center; gap: 9px">
                 <Avatar :text="initials(profileName(row))" :color="avatarColor(row.id)" />
@@ -436,6 +486,44 @@ function rowActions(p: BloggerProfile): Array<{
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <!-- Side-by-side compare (Path A): pick 2–4 bloggers via the row checkboxes. -->
+    <div v-if="showCompare" class="card" style="margin-top: 12px;">
+      <div class="card-head">
+        <Icon name="layers" :size="12" /><span>Сравнение ({{ compareItems.length }})</span>
+        <button class="btn" style="margin-left: auto;" @click="compareIds = []">Очистить</button>
+      </div>
+      <div class="card-body" style="overflow-x: auto;">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th></th>
+              <th v-for="p in compareItems" :key="p.id">{{ profileName(p) }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="plat in comparePlatforms" :key="plat">
+              <td class="mono" style="text-transform: capitalize;">{{ plat }} подписчики</td>
+              <td v-for="p in compareItems" :key="p.id" class="mono">
+                {{ platformSubs(p, plat) != null ? formatCompact(platformSubs(p, plat)!) : '—' }}
+              </td>
+            </tr>
+            <tr>
+              <td class="mono">Охват</td>
+              <td v-for="p in compareItems" :key="p.id" class="mono">{{ p.reach != null ? formatCompact(p.reach) : '—' }}</td>
+            </tr>
+            <tr>
+              <td class="mono">Прайс</td>
+              <td v-for="p in compareItems" :key="p.id" style="font-size: 11.5px;">{{ topRates(p) }}</td>
+            </tr>
+            <tr>
+              <td class="mono">Форматы</td>
+              <td v-for="p in compareItems" :key="p.id" style="font-size: 11.5px;">{{ (p.formats ?? []).slice(0, 4).join(', ') || '—' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </template>
 </template>

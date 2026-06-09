@@ -47,4 +47,17 @@ export async function bloggerProfilesRoutes(app: FastifyInstance) {
       return out;
     },
   );
+
+  // Post-example image URL (blogger-profile-who-is-this). YouTube → the public
+  // thumbnail URL directly; Telegram → a presigned S3 GET when the photo is
+  // stored, else 409 (the public re-fetch downloader is a follow-up). 404 when
+  // the insight is missing; 409 when unsupported / no image / storage off.
+  app.get(
+    '/blogger-post-insights/:id/image-url',
+    { preHandler: [app.requireRole(['admin', 'operator', 'viewer'])] },
+    async (req) => {
+      const { id } = z.object({ id: z.string().min(1) }).parse(req.params);
+      return bloggerProfilesService.postInsightImageUrl(id);
+    },
+  );
 }

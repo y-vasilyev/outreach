@@ -36,6 +36,21 @@ export async function upsertPostInsightsFromSnapshot(opts: {
     if (!post.id) continue;
     const metrics = BloggerPostMetricsZ.parse(post.metrics ?? {});
     const hasMetrics = hasNumericPostMetric(metrics);
+    // Post-example image (blogger-profile-who-is-this). YouTube exposes a
+    // deterministic PUBLIC thumbnail by video id (served directly, no storage).
+    // Telegram public post photos are fetched lazily by the image endpoint via
+    // the parser client → leave `pending`. Others have no public preview →
+    // `unsupported`.
+    const youtubeThumb =
+      opts.snapshot.platform === 'youtube' && post.id
+        ? `https://i.ytimg.com/vi/${encodeURIComponent(post.id)}/hqdefault.jpg`
+        : null;
+    const imageFields =
+      opts.snapshot.platform === 'youtube'
+        ? { imageS3Key: youtubeThumb, imageStatus: youtubeThumb ? 'ok' : 'unsupported' }
+        : opts.snapshot.platform === 'telegram'
+          ? { imageStatus: 'pending' }
+          : { imageStatus: 'unsupported' };
     await prisma.bloggerPostInsight.upsert({
       where: {
         profileId_platform_externalPostId: {
@@ -60,6 +75,7 @@ export async function upsertPostInsightsFromSnapshot(opts: {
             ? 'telegram_public_parse'
             : 'scrapecreators',
         sourceRawRef: `${opts.snapshot.platform}:${opts.snapshot.externalId}:${post.id}`,
+        ...imageFields,
       },
       update: {
         channelId: opts.channelId,

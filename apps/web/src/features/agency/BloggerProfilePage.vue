@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { useRoute, useRouter } from 'vue-router';
 import PageHead from '../../components/PageHead.vue';
 import Spinner from '../../components/Spinner.vue';
 import Icon from '../../components/Icon.vue';
+import S3Image from '../../components/S3Image.vue';
 import Tag from '../../components/Tag.vue';
 import KeyValue, { type KvItem } from '../../components/KeyValue.vue';
 import ConfBar from '../../components/ConfBar.vue';
@@ -166,6 +167,59 @@ const refreshMut = useMutation({
   },
   onError: (e) => toast.error('Не удалось обновить посты', (e as Error).message),
 });
+
+// Per-platform audience (placement-representation-v2) — subscribers per platform.
+const platformAudience = computed(() => profile.value?.platformAudience ?? []);
+
+// Operator corrections (operator-reanalyze-and-markup): delete a wrong machine
+// point; write an operator-origin value that the roll-up prefers.
+const deleteDpMut = useMutation({
+  mutationFn: (dpId: string) => api.del(`/blogger-profiles/${id.value}/data-points/${dpId}`),
+  onSuccess: () => {
+    toast.success('Точка данных удалена; профиль пересчитан');
+    qc.invalidateQueries({ queryKey: ['blogger-profile'] });
+  },
+  onError: (e) => toast.error('Не удалось удалить', (e as Error).message),
+});
+const writeForm = ref<{ field: string; value: string }>({ field: '', value: '' });
+const writeDpMut = useMutation({
+  mutationFn: (body: { field: string; value: unknown }) =>
+    api.post(`/blogger-profiles/${id.value}/data-points`, body),
+  onSuccess: () => {
+    toast.success('Операторская правка сохранена');
+    writeForm.value = { field: '', value: '' };
+    qc.invalidateQueries({ queryKey: ['blogger-profile'] });
+  },
+  onError: (e) => toast.error('Не удалось сохранить', (e as Error).message),
+});
+function submitWrite(): void {
+  const field = writeForm.value.field.trim();
+  if (!field) return;
+  const raw = writeForm.value.value.trim();
+  const num = Number(raw.replace(/[\s,]/g, ''));
+  writeDpMut.mutate({ field, value: Number.isFinite(num) && raw !== '' ? num : raw });
+}
+
+// Extraction hint (operator-reanalyze-and-markup): teach the agents a nuance for
+// this blogger's channel that the next analysis honors.
+const hintText = ref('');
+const hintMut = useMutation({
+  mutationFn: (guidance: string) =>
+    api.post('/extraction-hints', {
+      scope: profile.value?.channelId ? 'channel' : 'global',
+      channelId: profile.value?.channelId ?? null,
+      guidance,
+    }),
+  onSuccess: () => {
+    toast.success('Подсказка сохранена; агенты учтут её при следующем анализе');
+    hintText.value = '';
+  },
+  onError: (e) => toast.error('Не удалось сохранить подсказку', (e as Error).message),
+});
+function submitHint(): void {
+  const g = hintText.value.trim();
+  if (g) hintMut.mutate(g);
+}
 </script>
 
 <template>
@@ -237,8 +291,17 @@ const refreshMut = useMutation({
                 </a>
               </div>
             </div>
-            <div class="muted" style="font-size: 12.5px; line-height: 1.45; margin-top: 7px;">
-              {{ post.textSnippet || '—' }}
+            <div style="display: flex; gap: 9px; margin-top: 7px;">
+              <!-- Post-example image (blogger-profile-who-is-this): visual «who is this». -->
+              <S3Image
+                v-if="post.hasImage"
+                :url-path="`/blogger-post-insights/${post.id}/image-url`"
+                :alt="post.textSnippet"
+                :size="84"
+              />
+              <div class="muted" style="font-size: 12.5px; line-height: 1.45; min-width: 0; flex: 1;">
+                {{ post.textSnippet || '—' }}
+              </div>
             </div>
             <div class="muted-2" style="font-size: 10.5px; margin-top: 7px;">
               опубликован {{ formatRelative(post.publishedAt) }} · метрики {{ formatRelative(post.metricCapturedAt) }} · source {{ post.source }}
@@ -358,6 +421,20 @@ const refreshMut = useMutation({
     <!-- Audience -->
     <div class="card" style="margin-top: 12px;">
       <div class="card-head"><Icon name="globe" :size="12" /><span>Аудитория</span></div>
+      <!-- Per-platform subscribers (placement-representation-v2) -->
+      <div v-if="platformAudience.length" class="card-body" style="padding-bottom: 0;">
+        <div class="muted-2" style="font-size: 11px; text-transform: uppercase; margin-bottom: 6px;">Подписчики по платформам</div>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 4px;">
+          <div
+            v-for="pa in platformAudience"
+            :key="pa.platform"
+            style="display: flex; align-items: baseline; gap: 6px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 7px;"
+          >
+            <span class="muted" style="font-size: 11.5px; text-transform: capitalize;">{{ pa.platform }}</span>
+            <span class="mono cell-strong">{{ formatCompact(pa.subscribers) }}</span>
+          </div>
+        </div>
+      </div>
       <div class="card-body" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
         <div v-for="seg in (['geo', 'age', 'gender'] as const)" :key="seg">
           <div class="muted-2" style="font-size: 11px; text-transform: uppercase; margin-bottom: 6px;">{{ seg }}</div>
@@ -408,12 +485,15 @@ const refreshMut = useMutation({
         <table v-else class="tbl">
           <thead>
             <tr>
-              <th>Поле</th><th>Значение</th><th>Уверенность</th><th>Источник (raw)</th><th>Снято</th>
+              <th>Поле</th><th>Значение</th><th>Уверенность</th><th>Источник (raw)</th><th>Снято</th><th></th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="dp in dataPoints" :key="dp.id">
-              <td class="mono" style="font-size: 12px;">{{ dp.field }}</td>
+              <td class="mono" style="font-size: 12px;">
+                {{ dp.field }}
+                <span v-if="dp.extractedBy === 'operator'" class="mono" style="font-size: 9.5px; color: var(--accent-2);" title="Правка оператора">✎</span>
+              </td>
               <td>
                 <span class="cell-strong">{{ renderValue(dp.value) }}</span>
                 <span v-if="dp.unit" class="muted-2"> {{ dp.unit }}</span>
@@ -428,9 +508,56 @@ const refreshMut = useMutation({
                 <span class="muted-2" style="font-size: 11.5px; font-style: italic;">{{ dp.rawSnippet || '—' }}</span>
               </td>
               <td><span class="muted-2" style="font-size: 11px;">{{ formatDateTime(dp.capturedAt) }}</span></td>
+              <td style="text-align: right;">
+                <button
+                  type="button"
+                  class="btn-icon"
+                  title="Удалить точку данных"
+                  :disabled="deleteDpMut.isPending.value"
+                  style="background: none; border: none; cursor: pointer; color: var(--ink-4);"
+                  @click="deleteDpMut.mutate(dp.id)"
+                ><Icon name="trash" :size="12" /></button>
+              </td>
             </tr>
           </tbody>
         </table>
+        <!-- Operator correction: add an operator-origin value the roll-up prefers
+             (operator-reanalyze-and-markup). Field-aware validation is server-side. -->
+        <form
+          style="display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap;"
+          @submit.prevent="submitWrite"
+        >
+          <input
+            v-model="writeForm.field"
+            class="input mono"
+            style="font-size: 11.5px; width: 200px;"
+            placeholder="поле (напр. reach, rate.post)"
+          />
+          <input
+            v-model="writeForm.value"
+            class="input"
+            style="font-size: 11.5px; width: 160px;"
+            placeholder="значение"
+          />
+          <button class="btn" type="submit" :disabled="writeDpMut.isPending.value || !writeForm.field.trim()">
+            <Icon name="plus" :size="11" /><span>Добавить правку</span>
+          </button>
+        </form>
+        <!-- Extraction hint: teach the agents this blogger's nuance for next time. -->
+        <form
+          style="display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap;"
+          @submit.prevent="submitHint"
+        >
+          <input
+            v-model="hintText"
+            class="input"
+            style="font-size: 11.5px; flex: 1; min-width: 240px;"
+            placeholder="Подсказка агенту (напр. «МАХ — это мессенджер MAX, площадка max»)"
+          />
+          <button class="btn" type="submit" :disabled="hintMut.isPending.value || !hintText.trim()">
+            <Icon name="spark" :size="11" /><span>Сохранить подсказку</span>
+          </button>
+        </form>
       </div>
     </div>
   </template>
