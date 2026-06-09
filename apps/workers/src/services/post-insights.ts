@@ -51,6 +51,11 @@ export async function upsertPostInsightsFromSnapshot(opts: {
         : opts.snapshot.platform === 'telegram'
           ? { imageStatus: 'pending' }
           : { imageStatus: 'unsupported' };
+    // On UPDATE of an existing insight, apply the image fields only for the
+    // DETERMINISTIC platforms (codex) — so an existing row gains the YouTube
+    // thumbnail / unsupported marker on refresh. Telegram is omitted so we never
+    // reset a (future) stored photo back to pending.
+    const imageFieldsForUpdate = opts.snapshot.platform === 'telegram' ? {} : imageFields;
     await prisma.bloggerPostInsight.upsert({
       where: {
         profileId_platform_externalPostId: {
@@ -90,6 +95,7 @@ export async function upsertPostInsightsFromSnapshot(opts: {
             ? 'telegram_public_parse'
             : 'scrapecreators',
         sourceRawRef: `${opts.snapshot.platform}:${opts.snapshot.externalId}:${post.id}`,
+        ...imageFieldsForUpdate,
       },
     });
     upserted += 1;

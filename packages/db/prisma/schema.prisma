@@ -452,9 +452,11 @@ model Message {
   // sent/replied/replyRate aggregates served by /campaigns/:id/opener-stats.
   openerVariant  String?          @map("opener_variant")
   // Per-message profile-extraction outcome (operator-reanalyze-and-markup):
-  // pending | ok | empty | no_signal | failed. `failed` is stamped only on a
-  // terminal failure (sync catch / BullMQ retry exhaustion), never per-throw.
-  extractionStatus String?        @default("pending") @map("extraction_status")
+  // null (idle / never run) | pending (re-run in flight) | ok | empty |
+  // no_signal | failed. NO default: a message only gets a status once extraction
+  // actually runs for it, so unprocessed/non-agency messages show no badge
+  // (default 'pending' would otherwise show «анализ…» forever — codex).
+  extractionStatus String?        @map("extraction_status")
   extractionError  String?        @map("extraction_error")
   extractedAt      DateTime?      @map("extracted_at")
   mediaAssets    MediaAsset[]

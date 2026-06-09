@@ -157,9 +157,12 @@ const attachmentMetaColor = computed(() => (isOut.value ? 'var(--paper-3, rgba(2
           <span v-else-if="msg.status === 'pending' || msg.status === 'sending'" style="color: var(--ink-4); display: inline-flex;"><Icon name="clock" :size="10" /></span>
           <span v-else style="color: var(--ok); display: inline-flex;"><Icon name="check" :size="10" /></span>
         </template>
-        <!-- Per-message extraction status + re-run (operator-reanalyze-and-markup) -->
-        <template v-if="isInbound && extractionStatus">
+        <!-- Per-message extraction status + re-run (operator-reanalyze-and-markup).
+             The badge shows only once extraction has a status; the re-run button
+             is always available on an inbound (so any reply can be re-analyzed). -->
+        <template v-if="isInbound">
           <span
+            v-if="extractionStatus"
             :title="msg.extractionError ?? ''"
             :style="{ color: EXTRACTION_COLOR[extractionStatus] ?? 'var(--ink-4)' }"
           >· {{ EXTRACTION_LABEL[extractionStatus] ?? extractionStatus }}</span>

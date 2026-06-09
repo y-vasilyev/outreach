@@ -3,8 +3,10 @@
 -- correctable (operator data points), and teachable (extraction hints fed to
 -- the extractor agents). Purely additive — defaults keep existing rows valid.
 
--- AlterTable: per-message extraction outcome
-ALTER TABLE "message" ADD COLUMN "extraction_status" TEXT DEFAULT 'pending';
+-- AlterTable: per-message extraction outcome. No default — a message gets a
+-- status only once extraction runs for it (NULL = idle/never-run shows no badge;
+-- a DEFAULT 'pending' would otherwise strand every message at «анализ…»).
+ALTER TABLE "message" ADD COLUMN "extraction_status" TEXT;
 ALTER TABLE "message" ADD COLUMN "extraction_error" TEXT;
 ALTER TABLE "message" ADD COLUMN "extracted_at" TIMESTAMP(3);
 
