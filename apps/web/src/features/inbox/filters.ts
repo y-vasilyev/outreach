@@ -12,15 +12,18 @@ export interface InboxFilters {
   campaignId?: string;
   status?: 'active' | 'paused' | 'done' | 'failed' | 'archived';
   mode?: 'auto' | 'semi_auto' | 'assisted' | 'manual';
-  /** Direction: 'i_messaged' = кому я написал, 'they_replied' = кто мне ответил. */
-  activity?: 'i_messaged' | 'they_replied';
+  /**
+   * Direction: 'i_messaged' = кому я написал, 'not_messaged' = кому я ещё не
+   * написал, 'they_replied' = кто мне ответил.
+   */
+  activity?: 'i_messaged' | 'not_messaged' | 'they_replied';
   assignedOperatorId?: string;
   q?: string;
 }
 
 const STATUS = new Set(['active', 'paused', 'done', 'failed', 'archived']);
 const MODE = new Set(['auto', 'semi_auto', 'assisted', 'manual']);
-const ACTIVITY = new Set(['i_messaged', 'they_replied']);
+const ACTIVITY = new Set(['i_messaged', 'not_messaged', 'they_replied']);
 
 function readString(v: unknown): string | undefined {
   if (typeof v !== 'string') return undefined;

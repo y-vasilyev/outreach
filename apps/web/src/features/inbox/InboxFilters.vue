@@ -39,6 +39,7 @@ const MODE_OPTIONS: Array<{ value: NonNullable<InboxFilters['mode']>; label: str
 ];
 const ACTIVITY_OPTIONS: Array<{ value: NonNullable<InboxFilters['activity']>; label: string }> = [
   { value: 'i_messaged', label: 'Я написал' },
+  { value: 'not_messaged', label: 'Ещё не написал' },
   { value: 'they_replied', label: 'Мне ответили' },
 ];
 
@@ -104,6 +105,35 @@ function clearAssignedOperator(): void {
   emit('update:modelValue', { assignedOperatorId: undefined });
 }
 
+// Collapsible filter bar (it grew tall enough to eat list space). State is
+// persisted so the operator's choice survives navigation/reload.
+const COLLAPSE_KEY = 'inbox-filters-collapsed';
+const collapsed = ref(readCollapsed());
+function readCollapsed(): boolean {
+  try {
+    return localStorage.getItem(COLLAPSE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+function toggleCollapsed(): void {
+  collapsed.value = !collapsed.value;
+  try {
+    localStorage.setItem(COLLAPSE_KEY, collapsed.value ? '1' : '0');
+  } catch {
+    // private mode / storage disabled — collapse still works for the session.
+  }
+}
+
+// Number of applied filters, shown as a badge so a collapsed bar still signals
+// that the list is narrowed (incl. the deep-linked operator filter).
+const activeCount = computed(() => {
+  const f = props.modelValue;
+  return [f.campaignId, f.status, f.mode, f.activity, f.q, f.assignedOperatorId].filter(
+    Boolean,
+  ).length;
+});
+
 const hasResettable = computed(
   () => Boolean(
     props.modelValue.campaignId
@@ -116,7 +146,33 @@ const hasResettable = computed(
 </script>
 
 <template>
-  <div class="inbox-filters">
+  <div class="inbox-filters-wrap">
+    <div class="filters-head">
+      <button
+        class="btn ghost sm filters-toggle"
+        type="button"
+        :aria-expanded="!collapsed"
+        :title="collapsed ? 'Развернуть фильтры' : 'Свернуть фильтры'"
+        @click="toggleCollapsed"
+      >
+        <Icon name="sliders" :size="12" />
+        <span>Фильтры</span>
+        <span v-if="activeCount" class="count-badge">{{ activeCount }}</span>
+        <Icon name="chev_down" :size="11" :class="['chev', { open: !collapsed }]" />
+      </button>
+      <button
+        v-if="collapsed && hasResettable"
+        class="btn ghost sm"
+        type="button"
+        title="Сбросить фильтры"
+        @click="clearAll"
+      >
+        <Icon name="x" :size="11" />
+        <span>Сбросить</span>
+      </button>
+    </div>
+
+    <div v-show="!collapsed" class="inbox-filters">
     <label class="f-group" style="flex: 1 1 140px; max-width: 180px;">
       <span class="f-label">Кампания</span>
       <select class="input sm" :value="modelValue.campaignId ?? ''" @change="setCampaign" aria-label="Фильтр по кампании">
@@ -188,18 +244,51 @@ const hasResettable = computed(
       tone="violet"
       @remove="clearAssignedOperator"
     />
+    </div>
   </div>
 </template>
 
 <style scoped>
+.inbox-filters-wrap {
+  border-bottom: 1px solid var(--line);
+  background: var(--paper-2);
+}
+.filters-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+}
+.filters-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.count-badge {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.chev {
+  transition: transform 0.15s ease;
+}
+.chev.open {
+  transform: rotate(180deg);
+}
 .inbox-filters {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 6px 8px;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--line);
-  background: var(--paper-2);
+  padding: 0 10px 8px;
 }
 .f-group {
   display: flex;

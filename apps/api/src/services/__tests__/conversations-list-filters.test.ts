@@ -89,6 +89,14 @@ describe('conversationsService.list — filter composition', () => {
     });
   });
 
+  it('activity=not_messaged ("кому я ещё не написал") requires no outbound', async () => {
+    await conversationsService.list({ activity: 'not_messaged' });
+    expect(getWhere()).toEqual({
+      status: { not: 'archived' },
+      lastOutboundAt: null,
+    });
+  });
+
   it('activity=they_replied ("кто мне ответил") requires an inbound', async () => {
     await conversationsService.list({ activity: 'they_replied' });
     expect(getWhere()).toEqual({

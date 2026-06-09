@@ -84,8 +84,10 @@ export const conversationsService = {
         ...(filters.campaignId && { campaignId: filters.campaignId }),
         ...(filters.assignedOperatorId && { assignedOperatorId: filters.assignedOperatorId }),
         // Direction filter: "кому я написал" → at least one outbound exists;
-        // "кто мне ответил" → at least one inbound exists.
+        // "кому я ещё не написал" → no outbound yet; "кто мне ответил" → at
+        // least one inbound exists.
         ...(filters.activity === 'i_messaged' && { lastOutboundAt: { not: null } }),
+        ...(filters.activity === 'not_messaged' && { lastOutboundAt: null }),
         ...(filters.activity === 'they_replied' && { lastInboundAt: { not: null } }),
         ...(filters.q && {
           OR: [

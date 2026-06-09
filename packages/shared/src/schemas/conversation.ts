@@ -4,10 +4,11 @@ import { QualityDecisionZ } from './ajtbd.js';
 export const ConversationStatusZ = z.enum(['active', 'paused', 'done', 'failed', 'archived']);
 export const ConversationModeZ = z.enum(['auto', 'semi_auto', 'assisted', 'manual']);
 
-// Direction filter for the inbox ("кому я написал" / "кто мне ответил").
-//   - `i_messaged`   → we have sent at least one outbound (lastOutboundAt set)
-//   - `they_replied` → the contact has answered at least once (lastInboundAt set)
-export const ConversationActivityZ = z.enum(['i_messaged', 'they_replied']);
+// Direction filter for the inbox.
+//   - `i_messaged`    → "кому я написал": at least one outbound (lastOutboundAt set)
+//   - `not_messaged`  → "кому я ещё не написал": no outbound yet (lastOutboundAt null)
+//   - `they_replied`  → "кто мне ответил": the contact answered (lastInboundAt set)
+export const ConversationActivityZ = z.enum(['i_messaged', 'not_messaged', 'they_replied']);
 
 export const ConversationZ = z.object({
   id: z.string(),
