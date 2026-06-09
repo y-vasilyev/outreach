@@ -112,7 +112,9 @@ export const rateCardExtractor: Agent<RateCardExtractorInput, RateCardExtractorO
   outputSchema: rateCardExtractorOutputSchema,
   variables: ['channel_title', 'language', 'replies_text', 'structured_snapshot', 'operator_hints_block'],
   defaultModel: 'google/gemini-3-flash-preview',
-  defaultParams: { temperature: 0.1, max_tokens: 900 },
+  // 2200 mirrors the seed (v6): three representations + verbatim snippets
+  // overrun a smaller budget for multi-format rate cards, truncating the JSON.
+  defaultParams: { temperature: 0.1, max_tokens: 2200 },
   async run(input, ctx) {
     const replies = input.replies.length > 0
       ? input.replies

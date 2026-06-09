@@ -20,6 +20,7 @@ interface Attempt {
   systemPrompt: string;
   userPrompt: string;
   text: string;
+  maxTokens?: number;
 }
 
 /**
@@ -38,7 +39,12 @@ function makeScripted(replies: string[]): {
     listModels: async () => [],
     async complete(req: CompletionRequest): Promise<CompletionResponse> {
       const text = replies[i] ?? replies[replies.length - 1] ?? '';
-      attempts.push({ systemPrompt: req.systemPrompt, userPrompt: req.userPrompt, text });
+      attempts.push({
+        systemPrompt: req.systemPrompt,
+        userPrompt: req.userPrompt,
+        text,
+        ...(req.maxTokens !== undefined && { maxTokens: req.maxTokens }),
+      });
       i += 1;
       return {
         text,
@@ -124,6 +130,33 @@ describe('completeJson repair-loop', () => {
     const err = caught as { code: string };
     expect(err.code).toBe('LLM_SCHEMA_FAILED');
     expect(attempts.length).toBe(2);
+  });
+
+  it('bumps maxTokens on the repair shot when the first response was truncated (unbalanced JSON)', async () => {
+    const { provider, attempts } = makeScripted([
+      // Truncated mid-object → extractJson throws LLM_INVALID_JSON.
+      '{"verdict":"o',
+      // Repair shot returns a complete object.
+      '{"verdict":"ok"}',
+    ]);
+    const wrapped = withRetry(provider, { maxAttempts: 1, baseMs: 1 });
+    const out = await wrapped.completeJson({ ...baseReq, maxTokens: 1000 }, validator);
+    expect(out.value).toEqual({ verdict: 'ok' });
+    expect(attempts.length).toBe(2);
+    // First call used the configured budget; the repair shot got 1.5×.
+    expect(attempts[0]!.maxTokens).toBe(1000);
+    expect(attempts[1]!.maxTokens).toBe(1500);
+  });
+
+  it('does NOT bump maxTokens when the failure is a schema error (not truncation)', async () => {
+    const { provider, attempts } = makeScripted([
+      '{"verdict":"maybe"}',
+      '{"verdict":"ok"}',
+    ]);
+    const wrapped = withRetry(provider, { maxAttempts: 1, baseMs: 1 });
+    const out = await wrapped.completeJson({ ...baseReq, maxTokens: 1000 }, validator);
+    expect(out.value).toEqual({ verdict: 'ok' });
+    expect(attempts[1]!.maxTokens).toBe(1000);
   });
 
   it('does NOT retry on transport errors (those are isTransient — withRetry handles them)', async () => {

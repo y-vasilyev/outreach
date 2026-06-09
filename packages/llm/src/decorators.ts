@@ -252,8 +252,20 @@ function wrap(provider: LLMProvider, around: CompleteFn): LLMProvider {
       } catch (firstErr) {
         if (!isRepairable(firstErr)) throw firstErr;
 
+        // When the first response was TRUNCATED — LLM_INVALID_JSON because the
+        // model ran out of output budget mid-object ("unbalanced JSON") — a
+        // repair shot with the SAME maxTokens just truncates again (now with a
+        // longer prompt, since we feed the broken answer back). Give it more
+        // room. Harmless for the prose-instead-of-JSON case: it only allows a
+        // slightly longer corrected answer.
+        const repairMaxTokens =
+          isInvalidJson(firstErr) && typeof baseReq.maxTokens === 'number'
+            ? Math.ceil(baseReq.maxTokens * 1.5)
+            : baseReq.maxTokens;
+
         const repairReq: CompletionRequest = {
           ...baseReq,
+          ...(typeof repairMaxTokens === 'number' && { maxTokens: repairMaxTokens }),
           systemPrompt: buildRepairSystemPrompt(baseReq.systemPrompt),
           userPrompt: buildRepairUserPrompt(baseReq.userPrompt, meta.text, firstErr),
           // Slightly lower temperature on repair — we want the model to
@@ -284,6 +296,10 @@ function wrap(provider: LLMProvider, around: CompleteFn): LLMProvider {
 function isRepairable(e: unknown): boolean {
   if (!isAppError(e)) return false;
   return e.code === 'LLM_SCHEMA_FAILED' || e.code === 'LLM_INVALID_JSON';
+}
+
+function isInvalidJson(e: unknown): boolean {
+  return isAppError(e) && e.code === 'LLM_INVALID_JSON';
 }
 
 function buildRepairSystemPrompt(original: string): string {
