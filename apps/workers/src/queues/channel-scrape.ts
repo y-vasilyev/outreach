@@ -17,6 +17,7 @@ import {
   markPostInsightRefreshFailedForChannel,
   upsertPostInsightsFromSnapshot,
 } from '../services/post-insights.js';
+import { storeTelegramPostImages } from '../services/post-images.js';
 
 const adapters = {
   telegram: new TelegramAdapter(),
@@ -177,13 +178,33 @@ export function startChannelScrapeWorker() {
           },
         });
 
-        await upsertPostInsightsFromSnapshot({ channelId, snapshot: snap }).catch((err) => {
-          logger.warn(
-            { channelId, err: (err as Error).message },
-            'post insight upsert failed after channel scrape',
+        const upsert = await upsertPostInsightsFromSnapshot({ channelId, snapshot: snap }).catch(
+          (err) => {
+            logger.warn(
+              { channelId, err: (err as Error).message },
+              'post insight upsert failed after channel scrape',
+            );
+            return null;
+          },
+        );
+
+        // Store Telegram post-example preview images to S3 (blogger-profile-who-
+        // is-this). Best-effort, behind object_storage; uses the parser client's
+        // public-post downloader. Other platforms' images are handled at upsert
+        // (YouTube thumbnail) or unsupported.
+        if (upsert?.profileId && snap.platform === 'telegram' && tgHandle) {
+          await storeTelegramPostImages({
+            profileId: upsert.profileId,
+            handle,
+            posts: snap.posts,
+            tg: tgHandle,
+          }).catch((err) =>
+            logger.warn(
+              { channelId, err: (err as Error).message },
+              'telegram post image store failed (non-fatal)',
+            ),
           );
-          return null;
-        });
+        }
 
         await publishRealtime(`channel:${channelId}`, {
           type: 'channel.progress',

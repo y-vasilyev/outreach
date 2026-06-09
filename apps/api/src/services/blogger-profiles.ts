@@ -637,8 +637,9 @@ export const bloggerProfilesService = {
     if (!store) throw new AppError('CONFLICT', 'object storage disabled', 409);
     const exists = await store.headObject(key);
     if (!exists) {
-      // The public re-fetch (downloadPublicPostMedia) is a follow-up; until then
-      // a missing object is a conflict, not a broken image.
+      // Telegram post photos are stored to S3 during post-insight refresh (the
+      // worker's downloadPublicPostMedia path). A missing object means the next
+      // refresh hasn't re-stored it yet — a conflict, not a broken image.
       throw new AppError('CONFLICT', 'image object missing', 409);
     }
     return { url: await store.getPresignedGetUrl(key), kind: 'presigned' };

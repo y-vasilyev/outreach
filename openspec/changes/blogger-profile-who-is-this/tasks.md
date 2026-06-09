@@ -7,7 +7,7 @@
 ## 2. Platform media contract + Telegram public downloader (packages/platforms, packages/tg-client, apps/workers)
 
 - [ ] 2.0 Extend the platform post contract (`ChannelSnapshotPost`/adapters) with `previewImageUrl?` (e.g. YouTube thumbnail by video id) and `publicMediaRef?` (Telegram handle+postId).
-- [ ] 2.1 NEW `downloadPublicPostMedia({ handle, postId })` in tg-client (parser accounts only): resolve the PUBLIC channel post and download its photo/image-document bytes. Distinct from `downloadInboundMedia` (inbound-DM-bound).
+- [x] 2.1 NEW `downloadPublicPostMedia({ handle, postId })` in tg-client (parser accounts only): resolve the PUBLIC channel post and download its photo/image-document bytes. Distinct from `downloadInboundMedia` (inbound-DM-bound).
 - [x] 2.2 In post-insight refresh: YouTube → set `imageStatus='ok'` + the public thumbnail URL (no storage); Telegram → `downloadPublicPostMedia` → `putObject` under a SAFE key `bloggers/{profileId}/posts/{platform}/{encodeURIComponent(externalPostId)}` → `imageStatus='ok'`; others/no media → `unsupported`; error → `failed`. Degrade safely.
 - [ ] 2.3 Tests: Telegram post → image stored + status ok; Telegram no-media → unsupported; YouTube → thumbnail URL + ok; Instagram/ScrapeCreators → unsupported (no media field).
 

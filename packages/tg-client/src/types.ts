@@ -270,6 +270,18 @@ export interface TelegramClientHandle {
   }): Promise<Uint8Array | null>;
 
   /**
+   * Download the media bytes of a PUBLIC channel post by handle + post id
+   * (blogger-profile-who-is-this). Used to store a post-example preview image
+   * for the catalog. Same best-effort contract as `downloadInboundMedia`:
+   * returns the photo bytes, or `null` when the post / its media can't be
+   * resolved; NEVER throws. Parser-account / public-data only.
+   */
+  downloadPublicPostMedia(opts: {
+    handle: string;
+    postId: string;
+  }): Promise<Uint8Array | null>;
+
+  /**
    * Subscribe to incoming TG private messages on this session. Returns an
    * unsubscribe function. Only fires for `direct` messages from users (not
    * channels/groups). Call repeatedly to register multiple consumers.

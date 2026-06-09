@@ -791,6 +791,19 @@ export class SessionManager {
         );
       },
 
+      async downloadPublicPostMedia(opts: { handle: string; postId: string }) {
+        requireAuth();
+        // A public channel post is fetched the same way as an inbound message —
+        // `getMessages(target, { ids: [...] }) + downloadMedia` — where the
+        // target is the public @handle instead of a DM peer key. Reuse the
+        // tested helper (blogger-profile-who-is-this). Best-effort → null.
+        const handle = opts.handle.startsWith('@') ? opts.handle : `@${opts.handle}`;
+        return downloadPublicPostMediaWithClient(client as DownloadMediaClient, tgAccountId, {
+          handle,
+          postId: opts.postId,
+        });
+      },
+
       subscribeIncoming(cb: IncomingHandler) {
         incomingSubs.add(cb);
         if (!gramJsBound) {
@@ -1410,6 +1423,42 @@ export async function downloadInboundMediaWithClient(
   } catch (err) {
     console.warn(
       `[tg-client] downloadInboundMedia failed tgAccountId=${tgAccountId} msg=${opts.tgMsgId}: ${(err as Error).message}`,
+    );
+    return null;
+  }
+}
+
+/**
+ * Standalone helper for `downloadPublicPostMedia` — fetch a PUBLIC channel
+ * post by @handle + id and download its photo bytes (blogger-profile-who-is-
+ * this). Mirrors `downloadInboundMediaWithClient` (GramJS `getMessages(target,
+ * { ids: [...] }) + downloadMedia`); the only difference is the target is a
+ * public username, not a DM peer key. Best-effort: any failure resolves to
+ * null (never throws).
+ */
+export async function downloadPublicPostMediaWithClient(
+  client: DownloadMediaClient,
+  tgAccountId: string,
+  opts: { handle: string; postId: string },
+): Promise<Uint8Array | null> {
+  try {
+    const id = Number(opts.postId);
+    if (!Number.isFinite(id)) return null;
+    const fetched = (await client.getMessages(opts.handle, { ids: [id] })) as
+      | Array<{ media?: unknown } | null>
+      | undefined;
+    const message = Array.isArray(fetched) ? fetched[0] : undefined;
+    if (!message || !message.media) return null;
+    const dl = client.downloadMedia;
+    if (typeof dl !== 'function') return null;
+    const bytes = await dl.call(client, message);
+    if (bytes == null) return null;
+    if (bytes instanceof Uint8Array) return bytes;
+    if (typeof bytes === 'string') return new TextEncoder().encode(bytes);
+    return null;
+  } catch (err) {
+    console.warn(
+      `[tg-client] downloadPublicPostMedia failed tgAccountId=${tgAccountId} handle=${opts.handle} post=${opts.postId}: ${(err as Error).message}`,
     );
     return null;
   }

@@ -101,6 +101,13 @@ export function mockTelegramClientHandle(
       return null;
     },
 
+    async downloadPublicPostMedia(_opts: {
+      handle: string;
+      postId: string;
+    }): Promise<Uint8Array | null> {
+      return null;
+    },
+
     async startLogin(_phone: string) {
       return { phoneCodeHash: 'mock_phone_code_hash' };
     },
