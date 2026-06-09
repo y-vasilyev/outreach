@@ -11,15 +11,20 @@ import type { ConversationListItem } from './types';
 const props = defineProps<{
   items: ConversationListItem[];
   activeId?: string;
+  hasMore?: boolean;
 }>();
 
-const emit = defineEmits<{ (e: 'pick', id: string): void }>();
+const emit = defineEmits<{
+  (e: 'pick', id: string): void;
+  (e: 'load-more'): void;
+}>();
 
 type QuickFilterId = 'all' | 'ai' | 'op' | 'meets';
 
 interface Tab {
   id: QuickFilterId;
   icon: 'list' | 'sparkle' | 'user' | 'flag';
+  label: string;
   count: number;
 }
 
@@ -39,10 +44,10 @@ function matchesQuickFilter(item: ConversationListItem, filter: QuickFilterId): 
 }
 
 const tabs = computed<Tab[]>(() => [
-  { id: 'all', icon: 'list', count: props.items.length },
-  { id: 'ai', icon: 'sparkle', count: props.items.filter((c) => (c.pendingSuggestions ?? 0) > 0).length },
-  { id: 'op', icon: 'user', count: props.items.filter((c) => c.mode === 'manual').length },
-  { id: 'meets', icon: 'flag', count: 0 },
+  { id: 'all', icon: 'list', label: 'Все', count: props.items.length },
+  { id: 'ai', icon: 'sparkle', label: 'ИИ', count: props.items.filter((c) => (c.pendingSuggestions ?? 0) > 0).length },
+  { id: 'op', icon: 'user', label: 'Оператор', count: props.items.filter((c) => c.mode === 'manual').length },
+  { id: 'meets', icon: 'flag', label: 'Встречи', count: 0 },
 ]);
 
 // Local quick-filter pill (all/ai/op/meets) runs as a client-side post-filter
@@ -95,11 +100,12 @@ function listStage(item: ConversationListItem): ListStage {
         :key="t.id"
         type="button"
         :class="['chip', activeFilter === t.id ? 'applied accent' : '']"
-        :title="t.id"
+        :title="t.label"
         :aria-pressed="activeFilter === t.id"
         @click="activeFilter = t.id"
       >
         <Icon :name="t.icon" :size="11" />
+        <span class="label">{{ t.label }}</span>
         <span class="v">{{ t.count }}</span>
       </button>
     </div>
@@ -164,6 +170,12 @@ function listStage(item: ConversationListItem): ListStage {
           </div>
         </div>
       </template>
+      <div v-if="hasMore" style="padding: 8px 12px; display: flex; justify-content: center; border-top: 1px solid var(--line);">
+        <button class="btn ghost sm" type="button" @click="emit('load-more')">
+          <Icon name="plus" :size="11" />
+          <span>Показать ещё</span>
+        </button>
+      </div>
     </div>
   </div>
 </template>

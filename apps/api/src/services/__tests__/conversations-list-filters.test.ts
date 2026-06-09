@@ -81,6 +81,34 @@ describe('conversationsService.list — filter composition', () => {
     expect(getWhere()).toEqual({ assignedOperatorId: 'op-7', status: { not: 'archived' } });
   });
 
+  it('activity=i_messaged ("кому я написал") requires an outbound', async () => {
+    await conversationsService.list({ activity: 'i_messaged' });
+    expect(getWhere()).toEqual({
+      status: { not: 'archived' },
+      lastOutboundAt: { not: null },
+    });
+  });
+
+  it('activity=they_replied ("кто мне ответил") requires an inbound', async () => {
+    await conversationsService.list({ activity: 'they_replied' });
+    expect(getWhere()).toEqual({
+      status: { not: 'archived' },
+      lastInboundAt: { not: null },
+    });
+  });
+
+  it('honours an explicit limit (growing-window pager)', async () => {
+    await conversationsService.list({ limit: 250 });
+    const call = mocks.prisma.conversation.findMany.mock.calls[0]?.[0];
+    expect(call?.take).toBe(250);
+  });
+
+  it('defaults take to 100 when no limit is given', async () => {
+    await conversationsService.list({});
+    const call = mocks.prisma.conversation.findMany.mock.calls[0]?.[0];
+    expect(call?.take).toBe(100);
+  });
+
   it('q produces an OR across contact value / handle / title with insensitive contains', async () => {
     await conversationsService.list({ q: 'acme' });
     const where = getWhere();

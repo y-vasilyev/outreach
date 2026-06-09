@@ -64,15 +64,42 @@ const campaignRoom = computed(() =>
   filters.value.campaignId ? `campaign:${filters.value.campaignId}` : null,
 );
 
+// Growing-window pager. The inbox is live (re-fetched every 5s, reordered by
+// new inbound), so offset pages would shuffle rows; instead "Показать ещё"
+// raises the server `take`. Reset to one page whenever the filter VALUES
+// change (keyed on a stable serialization so merely selecting another
+// conversation — which keeps the same query — does not reset the window).
+const PAGE_SIZE = 100;
+const pageLimit = ref(PAGE_SIZE);
+watch(
+  () => JSON.stringify(filters.value),
+  () => {
+    pageLimit.value = PAGE_SIZE;
+  },
+);
+
 const { data: conversations } = useQuery({
-  // The queryKey carries the filter object so React Query re-fetches
-  // whenever the URL filters change — single source of truth.
-  queryKey: ['conversations', filters],
-  queryFn: () => api.get<ConversationListItem[]>('/conversations', { params: { ...filters.value } }),
+  // The queryKey carries the filter object + page size so the query re-fetches
+  // whenever the URL filters change or the operator loads more — single source
+  // of truth.
+  queryKey: ['conversations', filters, pageLimit],
+  queryFn: () =>
+    api.get<ConversationListItem[]>('/conversations', {
+      params: { ...filters.value, limit: pageLimit.value },
+    }),
   refetchInterval: 5_000,
 });
 
 const list = computed<ConversationListItem[]>(() => conversations.value ?? []);
+
+// If the server returned a full window, there may be more behind it. Exact
+// boundary (server has exactly `pageLimit`) costs one extra fetch that then
+// returns the same count — harmless.
+const hasMore = computed(() => list.value.length >= pageLimit.value);
+
+function loadMore(): void {
+  pageLimit.value += PAGE_SIZE;
+}
 
 const { data: details } = useQuery({
   queryKey: ['conversation', conversationId],
@@ -168,7 +195,13 @@ useRoom(() => campaignRoom.value, 'message.new', () => {
           <span>Убрать дубли</span>
         </button>
       </div>
-      <ConversationList :items="list" :active-id="conversationId" @pick="pick" />
+      <ConversationList
+        :items="list"
+        :active-id="conversationId"
+        :has-more="hasMore"
+        @pick="pick"
+        @load-more="loadMore"
+      />
     </div>
     <template v-if="current">
       <ConversationView

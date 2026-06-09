@@ -37,6 +37,10 @@ const MODE_OPTIONS: Array<{ value: NonNullable<InboxFilters['mode']>; label: str
   { value: 'assisted', label: 'Assisted' },
   { value: 'manual', label: 'Manual' },
 ];
+const ACTIVITY_OPTIONS: Array<{ value: NonNullable<InboxFilters['activity']>; label: string }> = [
+  { value: 'i_messaged', label: 'Я написал' },
+  { value: 'they_replied', label: 'Мне ответили' },
+];
 
 // q input has a 250ms debounce so typing doesn't push a router entry per
 // keystroke. Local ref drives the input; debounced commit flows up.
@@ -77,6 +81,10 @@ function setMode(e: Event): void {
   const v = (e.target as HTMLSelectElement).value as InboxFilters['mode'] | '';
   emit('update:modelValue', { mode: v || undefined });
 }
+function setActivity(e: Event): void {
+  const v = (e.target as HTMLSelectElement).value as InboxFilters['activity'] | '';
+  emit('update:modelValue', { activity: v || undefined });
+}
 
 function clearAll(): void {
   // `assignedOperatorId` is intentionally not cleared — see Decision 5
@@ -86,6 +94,7 @@ function clearAll(): void {
     campaignId: undefined,
     status: undefined,
     mode: undefined,
+    activity: undefined,
     q: undefined,
   });
   localQ.value = '';
@@ -100,49 +109,62 @@ const hasResettable = computed(
     props.modelValue.campaignId
     || props.modelValue.status
     || props.modelValue.mode
+    || props.modelValue.activity
     || props.modelValue.q,
   ),
 );
 </script>
 
 <template>
-  <div
-    class="inbox-filters"
-    style="display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--paper-2);"
-  >
-    <select
-      class="input sm"
-      :value="modelValue.campaignId ?? ''"
-      @change="setCampaign"
-      style="max-width: 180px; flex: 1 1 140px;"
-    >
-      <option value="">Все кампании</option>
-      <option v-for="c in campaignOptions" :key="c.id" :value="c.id">{{ c.name }}</option>
-    </select>
+  <div class="inbox-filters">
+    <label class="f-group" style="flex: 1 1 140px; max-width: 180px;">
+      <span class="f-label">Кампания</span>
+      <select class="input sm" :value="modelValue.campaignId ?? ''" @change="setCampaign" aria-label="Фильтр по кампании">
+        <option value="">Все кампании</option>
+        <option v-for="c in campaignOptions" :key="c.id" :value="c.id">{{ c.name }}</option>
+      </select>
+    </label>
 
-    <select class="input sm" :value="modelValue.status ?? ''" @change="setStatus" style="max-width: 130px;">
-      <option value="">Любой статус</option>
-      <option v-for="o in STATUS_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
-    </select>
+    <label class="f-group" style="max-width: 150px;">
+      <span class="f-label">Переписка</span>
+      <select class="input sm" :value="modelValue.activity ?? ''" @change="setActivity" aria-label="Фильтр по направлению переписки">
+        <option value="">Любая</option>
+        <option v-for="o in ACTIVITY_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+      </select>
+    </label>
 
-    <select class="input sm" :value="modelValue.mode ?? ''" @change="setMode" style="max-width: 130px;">
-      <option value="">Любой режим</option>
-      <option v-for="o in MODE_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
-    </select>
+    <label class="f-group" style="max-width: 130px;">
+      <span class="f-label">Статус</span>
+      <select class="input sm" :value="modelValue.status ?? ''" @change="setStatus" aria-label="Фильтр по статусу">
+        <option value="">Любой статус</option>
+        <option v-for="o in STATUS_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+      </select>
+    </label>
 
-    <input
-      class="input sm"
-      type="text"
-      :value="localQ"
-      @input="onQInput"
-      placeholder="Поиск по контакту / каналу"
-      maxlength="200"
-      style="flex: 2 1 180px; min-width: 140px;"
-    />
+    <label class="f-group" style="max-width: 130px;">
+      <span class="f-label">Режим</span>
+      <select class="input sm" :value="modelValue.mode ?? ''" @change="setMode" aria-label="Фильтр по режиму">
+        <option value="">Любой режим</option>
+        <option v-for="o in MODE_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+      </select>
+    </label>
+
+    <label class="f-group" style="flex: 2 1 180px; min-width: 140px;">
+      <span class="f-label">Поиск</span>
+      <input
+        class="input sm"
+        type="text"
+        :value="localQ"
+        @input="onQInput"
+        placeholder="Контакт / канал"
+        maxlength="200"
+        aria-label="Поиск по контакту или каналу"
+      />
+    </label>
 
     <button
       v-if="hasResettable"
-      class="btn ghost sm"
+      class="btn ghost sm f-reset"
       type="button"
       @click="clearAll"
       title="Сбросить фильтры"
@@ -168,3 +190,35 @@ const hasResettable = computed(
     />
   </div>
 </template>
+
+<style scoped>
+.inbox-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 6px 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--paper-2);
+}
+.f-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.f-label {
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+}
+.f-group .input {
+  width: 100%;
+}
+.f-reset {
+  align-self: flex-end;
+}
+</style>

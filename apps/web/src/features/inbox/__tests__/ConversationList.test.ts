@@ -55,19 +55,19 @@ describe('ConversationList quick filters', () => {
     expect(wrapper.text()).toContain('Needs Operator');
     expect(wrapper.text()).toContain('Plain Dialog');
 
-    await wrapper.get('button[title="ai"]').trigger('click');
+    await wrapper.get('button[title="ИИ"]').trigger('click');
     expect(wrapper.text()).toContain('AI Draft');
     expect(wrapper.text()).not.toContain('Needs Operator');
     expect(wrapper.text()).not.toContain('Plain Dialog');
-    expect(wrapper.get('button[title="ai"]').attributes('aria-pressed')).toBe('true');
+    expect(wrapper.get('button[title="ИИ"]').attributes('aria-pressed')).toBe('true');
 
-    await wrapper.get('button[title="op"]').trigger('click');
+    await wrapper.get('button[title="Оператор"]').trigger('click');
     expect(wrapper.text()).not.toContain('AI Draft');
     expect(wrapper.text()).toContain('Needs Operator');
     expect(wrapper.text()).not.toContain('Plain Dialog');
-    expect(wrapper.get('button[title="op"]').attributes('aria-pressed')).toBe('true');
+    expect(wrapper.get('button[title="Оператор"]').attributes('aria-pressed')).toBe('true');
 
-    await wrapper.get('button[title="all"]').trigger('click');
+    await wrapper.get('button[title="Все"]').trigger('click');
     expect(wrapper.text()).toContain('AI Draft');
     expect(wrapper.text()).toContain('Needs Operator');
     expect(wrapper.text()).toContain('Plain Dialog');
