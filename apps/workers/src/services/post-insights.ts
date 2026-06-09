@@ -101,6 +101,35 @@ export async function upsertPostInsightsFromSnapshot(opts: {
     upserted += 1;
   }
 
+  // Prune stale Telegram album leftovers (very-strange-post-list bug). Albums
+  // used to be stored as one insight per photo; now `collapseAlbums` folds an
+  // album into a single post keyed by its anchor id, so the other members'
+  // rows would linger and duplicate the post in the catalog forever. Delete any
+  // `telegram_public_parse` insight that sits INSIDE the freshly-fetched window
+  // (id ≥ the smallest id we just re-emitted) but is no longer in the snapshot.
+  // Older history below the window is untouched — it just wasn't re-fetched.
+  if (opts.snapshot.platform === 'telegram') {
+    const keptIds = new Set(opts.snapshot.posts.map((p) => p.id).filter(Boolean));
+    const keptNums = [...keptIds].map(Number).filter((n) => Number.isFinite(n));
+    if (keptNums.length > 0) {
+      const windowMin = Math.min(...keptNums);
+      const existing = await prisma.bloggerPostInsight.findMany({
+        where: { profileId: profile.id, platform: 'telegram', source: 'telegram_public_parse' },
+        select: { id: true, externalPostId: true },
+      });
+      const staleIds = existing
+        .filter((row) => {
+          if (keptIds.has(row.externalPostId)) return false; // re-emitted this run
+          const n = Number(row.externalPostId);
+          return Number.isFinite(n) && n >= windowMin; // inside the fetch window
+        })
+        .map((row) => row.id);
+      if (staleIds.length > 0) {
+        await prisma.bloggerPostInsight.deleteMany({ where: { id: { in: staleIds } } });
+      }
+    }
+  }
+
   await prisma.bloggerProfile.update({
     where: { id: profile.id },
     data: {

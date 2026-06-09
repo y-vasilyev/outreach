@@ -570,7 +570,7 @@ export class SessionManager {
           const messages = (await client.getMessages(handleStr, {
             limit,
           })) as Array<Record<string, unknown>>;
-          return messages.map((m) => mapMessage(m));
+          return collapseAlbums(messages);
         });
       },
 
@@ -1334,6 +1334,75 @@ function mapMessage(m: Record<string, unknown>): RecentPost {
     urls,
     ...(Object.keys(metrics).length > 0 && { metrics }),
   };
+}
+
+/**
+ * Collapse Telegram albums (grouped media) into one RecentPost each.
+ *
+ * An album is N separate messages sharing a `groupedId`; Telegram puts the
+ * caption on only one member and the canonical view/reaction counts are the
+ * same across members. Mapping one RecentPost per message therefore (a)
+ * duplicated the album across the catalog's "top posts" — one card per photo —
+ * and (b) lost the caption on every member but one. We fold each album into a
+ * single post keyed by its SMALLEST message id (the album anchor, which is also
+ * what the public `t.me/<handle>/<id>` URL points at), keep the non-empty
+ * caption, union the urls, and take the max of each metric across members.
+ * Non-album messages pass through unchanged. Order is preserved (newest first).
+ */
+export function collapseAlbums(messages: Array<Record<string, unknown>>): RecentPost[] {
+  const out: RecentPost[] = [];
+  const albumSlot = new Map<string, number>(); // groupedId -> index in `out`
+  for (const m of messages) {
+    const post = mapMessage(m);
+    const groupedId = stringifyBigInt(m.groupedId);
+    if (!groupedId || groupedId === '0') {
+      out.push(post);
+      continue;
+    }
+    const slot = albumSlot.get(groupedId);
+    if (slot === undefined) {
+      albumSlot.set(groupedId, out.length);
+      out.push(post);
+    } else {
+      out[slot] = mergeAlbumPost(out[slot]!, post);
+    }
+  }
+  return out;
+}
+
+function mergeAlbumPost(a: RecentPost, b: RecentPost): RecentPost {
+  // Album anchor = smallest id (matches the public album URL); carry its date.
+  const anchorIsA = a.id <= b.id;
+  const metrics = mergeMetricsMax(a.metrics, b.metrics);
+  return {
+    id: Math.min(a.id, b.id),
+    dateIso: anchorIsA ? a.dateIso : b.dateIso,
+    // Keep whichever member actually has the caption (the other is blank).
+    text: a.text.trim() ? a.text : b.text,
+    urls: Array.from(new Set([...a.urls, ...b.urls])),
+    ...(metrics && Object.keys(metrics).length > 0 && { metrics }),
+  };
+}
+
+function mergeMetricsMax(
+  a: RecentPost['metrics'],
+  b: RecentPost['metrics'],
+): RecentPost['metrics'] | undefined {
+  if (!a && !b) return undefined;
+  const pick = (x?: number, y?: number): number | undefined => {
+    if (x === undefined) return y;
+    if (y === undefined) return x;
+    return Math.max(x, y);
+  };
+  const views = pick(a?.views, b?.views);
+  const forwards = pick(a?.forwards, b?.forwards);
+  const reactions = pick(a?.reactions, b?.reactions);
+  const out = {
+    ...(views !== undefined && { views }),
+    ...(forwards !== undefined && { forwards }),
+    ...(reactions !== undefined && { reactions }),
+  };
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function finiteNumber(value: unknown): number | undefined {
