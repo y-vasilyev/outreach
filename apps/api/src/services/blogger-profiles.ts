@@ -1,4 +1,4 @@
-import { getPrisma } from '@nosquare/db';
+import { getPrisma, type Prisma } from '@nosquare/db';
 import { getObjectStore } from '@nosquare/storage';
 import {
   AppError,
@@ -29,8 +29,13 @@ import {
   type CatalogFit,
   type MatchableProfile,
   type SocialProfileLink,
+  CatalogOfferFiltersZ,
+  labelOfferStaleness,
+  type CatalogOfferFilters,
 } from '@nosquare/shared';
 import { getFeatureFlags } from '../feature-flags.js';
+import { logger } from '../logger.js';
+import { offerFilterWhere, profileOfferFilterWhere } from './catalog-offer-filters.js';
 import { getQueues } from '../queues.js';
 
 type ProfileDataPointSource = {
@@ -442,7 +447,14 @@ function fitFromMatchResult(row: {
  * on read from the data points — see `blogger-profile-freshness` change.
  */
 export const bloggerProfilesService = {
-  async list(opts: { limit?: number; offset?: number; campaignId?: string; briefId?: string } = {}) {
+  async list(
+    opts: {
+      limit?: number;
+      offset?: number;
+      campaignId?: string;
+      briefId?: string;
+    } & Partial<CatalogOfferFilters> = {},
+  ) {
     if (opts.campaignId && opts.briefId) {
       throw Errors.badRequest('campaignId and briefId are mutually exclusive');
     }
@@ -457,25 +469,74 @@ export const bloggerProfilesService = {
             return toBrief(b);
           })
         : null;
-    const [items, total] = await Promise.all([
-      prisma.bloggerProfile.findMany({
+    // Offer-level SQL filters + sort (catalog-sql-search). With no new params
+    // the where is {} and sort is `updated` — byte-identical to the
+    // pre-change behavior.
+    const filters = CatalogOfferFiltersZ.parse(opts);
+    const now = new Date();
+    const startedAt = Date.now();
+    const where = profileOfferFilterWhere(filters, now);
+    const includeShape = {
+      _count: { select: { dataPoints: true } },
+      dataPoints: {
+        select: { sourceMessageId: true, rawSnippet: true },
+        orderBy: { capturedAt: 'desc' },
+      },
+      postInsights: {
+        orderBy: [{ metricCapturedAt: 'desc' }, { publishedAt: 'desc' }],
+        take: 20,
+      },
+    } satisfies Prisma.BloggerProfileInclude;
+    let items: Prisma.BloggerProfileGetPayload<{ include: typeof includeShape }>[];
+    let total: number;
+    if (filters.sort === 'updated') {
+      [items, total] = await Promise.all([
+        prisma.bloggerProfile.findMany({
+          where,
+          orderBy: { updatedAt: 'desc' },
+          take,
+          skip,
+          include: includeShape,
+        }),
+        prisma.bloggerProfile.count({ where }),
+      ]);
+    } else {
+      // price_asc / cpm_asc: order by the BEST QUALIFYING offer of each
+      // profile (min over rows that satisfy the current filters — sorting by
+      // an offer the filter excluded would look broken). NULL keys sort last.
+      const sortKey = filters.sort === 'price_asc' ? 'priceRubMin' : 'cpmRub';
+      const grouped = await prisma.placementOfferRow.groupBy({
+        by: ['profileId'],
+        where: offerFilterWhere(filters, now),
+        _min: { priceRubMin: true, cpmRub: true },
+      });
+      const keyByProfile = new Map(
+        grouped.map((g) => [g.profileId, g._min[sortKey] === null ? null : Number(g._min[sortKey])]),
+      );
+      const matching = await prisma.bloggerProfile.findMany({
+        where,
         orderBy: { updatedAt: 'desc' },
-        take,
-        skip,
-        include: {
-          _count: { select: { dataPoints: true } },
-          dataPoints: {
-            select: { sourceMessageId: true, rawSnippet: true },
-            orderBy: { capturedAt: 'desc' },
-          },
-          postInsights: {
-            orderBy: [{ metricCapturedAt: 'desc' }, { publishedAt: 'desc' }],
-            take: 20,
-          },
-        },
-      }),
-      prisma.bloggerProfile.count(),
-    ]);
+        select: { id: true },
+      });
+      total = matching.length;
+      const orderedIds = matching
+        .map((p) => p.id)
+        .sort((a, b) => {
+          const ka = keyByProfile.get(a) ?? null;
+          const kb = keyByProfile.get(b) ?? null;
+          if (ka === null && kb === null) return 0;
+          if (ka === null) return 1;
+          if (kb === null) return -1;
+          return ka - kb;
+        })
+        .slice(skip, skip + take);
+      const page = await prisma.bloggerProfile.findMany({
+        where: { id: { in: orderedIds } },
+        include: includeShape,
+      });
+      const byId = new Map(page.map((p) => [p.id, p]));
+      items = orderedIds.map((id) => byId.get(id)!).filter(Boolean);
+    }
     const channelIds = [...new Set(items.map((p) => p.channelId).filter((id): id is string => !!id))];
     const sourceIds = [...new Set(items.flatMap((p) => collectSourceMessageIds(p.dataPoints)))];
     const [channels, messages] = await Promise.all([
@@ -493,6 +554,24 @@ export const bloggerProfilesService = {
       : [];
     const matchByProfile = new Map(persistedMatches.map((m) => [m.profileId, m]));
     const useStructuredOffers = getFeatureFlags().get('structured_placement_offers');
+    logger.info(
+      {
+        event: 'catalog_query',
+        filters: {
+          platform: filters.platform,
+          kind: filters.kind,
+          duration: filters.duration,
+          priceRubMax: filters.priceRubMax,
+          cpmRubMax: filters.cpmRubMax,
+          offerFreshDays: filters.offerFreshDays,
+          hasOffers: filters.hasOffers,
+          sort: filters.sort,
+        },
+        total,
+        durationMs: Date.now() - startedAt,
+      },
+      'catalog list query',
+    );
     return {
       items: items.map((p) => {
         const { dataPoints, ...profile } = p;
@@ -501,13 +580,18 @@ export const bloggerProfilesService = {
           dataPoints,
           messagesById,
         });
-        if (!brief) return presented;
+        // Staleness labels (catalog-sql-search): never hidden, always marked.
+        const labeled = {
+          ...presented,
+          placementOffers: labelOfferStaleness(presented.placementOffers, now),
+        };
+        if (!brief) return labeled;
         const match = matchByProfile.get(p.id);
-        if (match) return { ...presented, fit: fitFromMatchResult(match) };
+        if (match) return { ...labeled, fit: fitFromMatchResult(match) };
         const scored = scoreProfile(brief, toMatchable(p), { useStructuredOffers });
         return {
-          ...presented,
-          fit: buildFitBreakdown(brief, presented, scored, presented.postInsights ?? [], 'deterministic'),
+          ...labeled,
+          fit: buildFitBreakdown(brief, labeled, scored, labeled.postInsights ?? [], 'deterministic'),
         };
       }),
       total,
@@ -576,11 +660,14 @@ export const bloggerProfilesService = {
       postInsights: profile.postInsights,
       freshness,
     };
-    return withPresentation(serialized, {
+    const presented = withPresentation(serialized, {
       channel,
       dataPoints: serialized.dataPoints,
       messagesById,
     });
+    // Staleness labels on the detail view too (catalog-sql-search): stale
+    // prices stay visible, marked.
+    return { ...presented, placementOffers: labelOfferStaleness(presented.placementOffers) };
   },
 
   async requestPostInsightRefresh(id: string) {

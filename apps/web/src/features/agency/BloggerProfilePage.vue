@@ -431,6 +431,7 @@ function submitHint(): void {
             <div style="display: flex; align-items: center; gap: 6px;">
               <Tag>{{ offerKindLabel(o) }}</Tag>
               <span v-if="o.platform" class="muted-2" style="font-size: 12px;">{{ o.platform }}</span>
+              <span v-if="o.stale" style="font-size: 11px; color: var(--warn, #b8860b);" title="Цена старше TTL прайсов — уточните актуальность">устарело</span>
             </div>
             <span class="cell-strong mono">
               {{ offerPriceLabel(o) }}

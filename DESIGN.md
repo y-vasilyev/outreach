@@ -603,6 +603,24 @@ db:backfill:offers` (идемпотентный, хронологический 
 `fitSignals.placement` информационно, веса скоринга не тронуты. Один
 прогон по существующим строкам: `pnpm db:renormalize:offers`.
 
+### SQL-поиск каталога (catalog-sql-search)
+
+Офферные фильтры `GET /blogger-profiles` (platform, kind, duration,
+priceRubMax, cpmRubMax, offerFreshDays, hasOffers, sort=updated|price_asc|
+cpm_asc) выполняются в SQL по `placement_offer`. Семантика — ЧИСТЫЙ предикат
+в `packages/shared/src/catalog-offer-filters.ts` (профиль подходит, когда ХОТЯ
+БЫ ОДИН active-оффер удовлетворяет всем условиям сразу); компиляция в Prisma —
+один модуль `apps/api/src/services/catalog-offer-filters.ts` (его используют
+каталог И pre-cut матчинга). Сортировка price/cpm — по лучшему ПОДХОДЯЩЕМУ
+офферу профиля, NULL в конце. Устаревшие цены (старше TTL rateCards) везде
+видимы с меткой `stale`; `offerFreshDays` отсекает их явно. Stage-1 матчинга:
+SQL pre-cut ТОЛЬКО по бюджету (платформа/формат из RU-брифов небезопасны для
+SQL) с гарантией суперсета — профили без active-строк всегда включены
+(легаси-фолбэк, включая only-low_confidence), priceless/ненормализованные
+строки считаются «прайс неизвестен»; in-memory `isShortlisted` бежит без
+изменений поверх. Паритет закреплён тестом `precutIncludesProfile ⊇
+shortlist`. Ops-логи: `catalog_query`, `prefilter_cut`, `rollup_source`.
+
 ### Object storage (`packages/storage`)
 
 `ObjectStore` — обёртка над S3-совместимым SDK (MinIO в dev, `S3_*` env),

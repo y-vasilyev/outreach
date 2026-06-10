@@ -44,6 +44,8 @@ export interface PlacementOffer {
   sourceMessageId: string | null;
   extractedBy: string;
   capturedAt: string | null;
+  /** Older than the rate-card freshness TTL (catalog-sql-search) — visible, marked. */
+  stale?: boolean;
   /** Derived ₽-normalization (present when it adds info: fx conversion / CPM). */
   normalized?: {
     priceRubMin: number | null;

@@ -18,6 +18,7 @@ export * from './blogger-post-insights.js';
 export * from './placement-offers.js';
 export * from './placement-offer-rows.js';
 export * from './offer-normalization.js';
+export * from './catalog-offer-filters.js';
 export * from './data-collection-targets.js';
 export * from './matching.js';
 export * from './capability-map.js';

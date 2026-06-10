@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { CatalogOfferFiltersZ } from '@nosquare/shared';
 import { bloggerProfilesService } from '../services/blogger-profiles.js';
 import { requireFeature } from '../require-feature.js';
 
@@ -23,6 +24,9 @@ export async function bloggerProfilesRoutes(app: FastifyInstance) {
           campaignId: z.string().optional(),
           briefId: z.string().optional(),
         })
+        // Offer-level SQL filters + sort (catalog-sql-search): platform, kind,
+        // duration, priceRubMax, cpmRubMax, offerFreshDays, hasOffers, sort.
+        .merge(CatalogOfferFiltersZ)
         .parse(req.query);
       return bloggerProfilesService.list(q);
     },

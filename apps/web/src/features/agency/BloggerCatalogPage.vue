@@ -32,15 +32,44 @@ const langFilter = ref('');
 const formatFilter = ref('');
 const contextType = ref<'none' | 'campaign' | 'brief'>('none');
 const contextId = ref('');
-const sortMode = ref<'updated' | 'relevance' | 'top_posts'>('updated');
+const sortMode = ref<'updated' | 'relevance' | 'top_posts' | 'price_asc' | 'cpm_asc'>('updated');
 const requirePostMetrics = ref(false);
 
+// Server-side OFFER filters (catalog-sql-search): executed in SQL over the
+// placement_offer rows — price/CPM caps, kind, прайс-freshness, server sorts.
+// Facet split: offer-facts = server; text/topic/platform/language = client.
+const serverKind = ref('');
+const serverPriceMax = ref('');
+const serverCpmMax = ref('');
+const serverFreshDays = ref('');
+
+const serverSort = computed(() =>
+  sortMode.value === 'price_asc' || sortMode.value === 'cpm_asc' ? sortMode.value : 'updated',
+);
+
 const { data, isLoading, isFetching, error } = useQuery({
-  queryKey: ['blogger-profiles', contextType, contextId],
+  queryKey: [
+    'blogger-profiles',
+    contextType,
+    contextId,
+    serverKind,
+    serverPriceMax,
+    serverCpmMax,
+    serverFreshDays,
+    serverSort,
+  ],
   queryFn: () => {
     const params = new URLSearchParams({ limit: '200' });
     if (contextType.value === 'campaign' && contextId.value.trim()) params.set('campaignId', contextId.value.trim());
     if (contextType.value === 'brief' && contextId.value.trim()) params.set('briefId', contextId.value.trim());
+    if (serverKind.value) params.set('kind', serverKind.value);
+    const priceMax = Number(serverPriceMax.value.replace(/\s/g, ''));
+    if (Number.isFinite(priceMax) && priceMax > 0) params.set('priceRubMax', String(priceMax));
+    const cpmMax = Number(serverCpmMax.value.replace(/\s/g, ''));
+    if (Number.isFinite(cpmMax) && cpmMax > 0) params.set('cpmRubMax', String(cpmMax));
+    const freshDays = Number(serverFreshDays.value);
+    if (Number.isInteger(freshDays) && freshDays > 0) params.set('offerFreshDays', String(freshDays));
+    if (serverSort.value !== 'updated') params.set('sort', serverSort.value);
     return api.get<BloggerProfileList>(`/blogger-profiles?${params.toString()}`);
   },
   retry: false,
@@ -48,6 +77,16 @@ const { data, isLoading, isFetching, error } = useQuery({
 
 const featureOff = computed(() => isFeatureOff(error.value));
 const items = computed<BloggerProfile[]>(() => data.value?.items ?? []);
+
+const kindOptions = [
+  { value: 'post', label: 'пост' },
+  { value: 'story', label: 'сторис' },
+  { value: 'reels', label: 'рилс' },
+  { value: 'video', label: 'видео' },
+  { value: 'integration', label: 'интеграция' },
+  { value: 'offsite_review', label: 'выездной обзор' },
+  { value: 'package', label: 'пакет' },
+];
 
 const platformOptions = [
   { value: 'telegram', label: 'Telegram' },
@@ -158,6 +197,8 @@ const filteredItems = computed(() => {
   } else if (sortMode.value === 'top_posts') {
     xs.sort((a, b) => topPostScore(b) - topPostScore(a));
   }
+  // price_asc / cpm_asc: the SERVER ordered by the best qualifying offer —
+  // keep its order.
   return xs;
 });
 
@@ -340,12 +381,45 @@ function rowActions(p: BloggerProfile): Array<{
         style="height: 30px; width: 230px;"
         :placeholder="contextType === 'campaign' ? 'campaignId' : 'briefId'"
       />
+      <FilterChipSelect
+        v-model="serverKind"
+        label="Тип"
+        :options="kindOptions"
+        placeholder="любой"
+        tone="warn"
+      />
+      <input
+        v-model="serverPriceMax"
+        class="input"
+        style="height: 30px; width: 110px;"
+        placeholder="Цена до, ₽"
+        inputmode="numeric"
+        title="Максимальная цена размещения в рублях (SQL-фильтр по активным офферам)"
+      />
+      <input
+        v-model="serverCpmMax"
+        class="input"
+        style="height: 30px; width: 100px;"
+        placeholder="CPM до, ₽"
+        inputmode="numeric"
+        title="Максимальный CPM (₽ за 1000 просмотров)"
+      />
+      <input
+        v-model="serverFreshDays"
+        class="input"
+        style="height: 30px; width: 110px;"
+        placeholder="Свежее, дн."
+        inputmode="numeric"
+        title="Только офферы, полученные за последние N дней"
+      />
       <label style="display: flex; align-items: center; gap: 6px;">
         <span class="muted-2" style="font-size: 11px;">Сорт.</span>
-        <select v-model="sortMode" class="input" style="height: 30px; width: 124px;">
+        <select v-model="sortMode" class="input" style="height: 30px; width: 136px;">
           <option value="updated">обновление</option>
           <option value="relevance">релевантность</option>
           <option value="top_posts">топ-посты</option>
+          <option value="price_asc">цена ↑</option>
+          <option value="cpm_asc">CPM ↑</option>
         </select>
       </label>
       <label style="display: flex; align-items: center; gap: 6px; font-size: 12px;">

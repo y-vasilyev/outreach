@@ -31,6 +31,7 @@ import type { CreateAdBriefInput } from '@nosquare/shared';
 import { getAgentRunner } from './agents.js';
 import { getFeatureFlags } from '../feature-flags.js';
 import { logger } from '../logger.js';
+import { matchingPrecutWhere } from './catalog-offer-filters.js';
 
 /**
  * Blogger matching service (agency-sourcing-matching M7, tasks 7.1–7.5).
@@ -189,17 +190,37 @@ export const matchingService = {
     if (!briefRow) throw Errors.notFound('ad_brief', briefId);
     const brief = toBrief(briefRow);
 
-    // Catalog. The prefilter is the cheap part — for a ~200-row catalog we load
-    // and refine in memory (Prisma can't cleanly express topic/geo/budget
-    // overlap across JSON columns + arrays). A coarse topic prefilter on the
-    // indexed `topics` array narrows the load before the precise pure pass.
-    // S7: the in-memory prefilter is fine at this scale. Pushing a coarse
-    // topic/format filter into SQL (e.g. `topics` array overlap) to avoid
-    // loading the whole catalog is a DEFERRED optimization — revisit when the
-    // catalog outgrows a few hundred rows.
+    // Catalog. Stage-1 SQL pre-cut (catalog-sql-search D4): when the
+    // structured path is on AND the brief sets a budget, narrow the load with
+    // a SUPERSET-guaranteed offer-level cut — profiles with no ACTIVE offer
+    // rows always pass (legacy rateCards fallback), priceless/unnormalized
+    // rows count as price-unknown. Conditions not safely expressible in SQL
+    // (topic/geo/format from fuzzy RU briefs) stay in the in-memory
+    // `isShortlisted`, which runs UNCHANGED over the pre-cut set — the SQL
+    // layer is purely an optimization with a correctness proof
+    // (`precutIncludesProfile` parity in shared tests). Flag off ⇒ full scan,
+    // byte-identical to the pre-change behavior.
+    const useStructuredOffersForPrecut = getFeatureFlags().get('structured_placement_offers');
+    const precutWhere =
+      useStructuredOffersForPrecut && brief.budget !== null && brief.budget !== undefined
+        ? matchingPrecutWhere(brief.budget)
+        : undefined;
     const profilesRows = await prisma.bloggerProfile.findMany({
+      ...(precutWhere ? { where: precutWhere } : {}),
       orderBy: { updatedAt: 'desc' },
     });
+    if (precutWhere) {
+      const catalogSize = await prisma.bloggerProfile.count();
+      logger.info(
+        {
+          event: 'prefilter_cut',
+          briefId,
+          catalogSize,
+          precutSize: profilesRows.length,
+        },
+        'matching stage-1 SQL pre-cut applied',
+      );
+    }
     const profiles = profilesRows.map(toMatchable);
     const profileById = new Map(profilesRows.map((p) => [p.id, p]));
     const postRows = await prisma.bloggerPostInsight.findMany({
