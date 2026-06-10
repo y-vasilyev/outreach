@@ -16,7 +16,7 @@
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,json,md}\"",
     "test": "turbo run test",
-    "test:e2e": "turbo run test:e2e",
+    "test:e2e": "bash e2e/run.sh",
     "db:migrate": "pnpm --filter @nosquare/db prisma:migrate:dev",
     "db:migrate:deploy": "pnpm --filter @nosquare/db prisma:migrate:deploy",
     "db:seed": "pnpm --filter @nosquare/db seed",
@@ -26,6 +26,7 @@
     "db:renormalize:offers": "pnpm --filter @nosquare/workers renormalize:offers"
   },
   "devDependencies": {
+    "@playwright/test": "1.60.0",
     "@types/node": "^20.12.7",
     "prettier": "^3.2.5",
     "turbo": "^2.0.6",

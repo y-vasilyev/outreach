@@ -69,6 +69,8 @@ const groups = computed<{ group: string; items: NavItem[] }[]>(() => [
             { to: '/settings/features', label: 'Фичи', icon: 'sliders' as const, badge: null },
             // Курсы валют для ₽-нормализации прайсов (price-normalization-v2).
             { to: '/settings/exchange-rates', label: 'Курсы валют', icon: 'sliders' as const, badge: null },
+            // Ревью предложенных атрибутов размещений (extraction-provenance: + история).
+            { to: '/settings/placement-attributes', label: 'Атрибуты', icon: 'sliders' as const, badge: null },
           ]
         : []),
     ],

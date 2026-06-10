@@ -160,6 +160,13 @@ const routes: RouteRecordRaw[] = [
         meta: { crumbs: ['Настройки', 'Фичи'], admin: true },
       },
       {
+        path: 'settings/placement-attributes',
+        name: 'settings-placement-attributes',
+        component: () => import('../features/settings/PlacementAttributesPage.vue'),
+        // Admin-only: review queue for LLM-proposed placement attributes.
+        meta: { crumbs: ['Настройки', 'Атрибуты'], admin: true },
+      },
+      {
         path: 'settings/exchange-rates',
         name: 'settings-exchange-rates',
         component: () => import('../features/settings/ExchangeRatesPage.vue'),

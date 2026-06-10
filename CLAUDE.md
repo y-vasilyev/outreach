@@ -16,7 +16,7 @@ pnpm dev:api / dev:web / dev:workers
 pnpm build / typecheck / lint / format
 pnpm test                       # vitest по всем пакетам
 pnpm test --filter agents       # один пакет
-pnpm test:e2e                   # playwright, требует docker compose up
+pnpm test:e2e                   # playwright: сам поднимает докерный Postgres + api + web (e2e/run.sh)
 
 pnpm db:migrate                 # prisma migrate dev
 pnpm db:migrate:deploy          # для CI/prod
