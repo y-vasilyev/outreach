@@ -159,6 +159,13 @@ const routes: RouteRecordRaw[] = [
         // Admin-only: runtime feature-flag control plane.
         meta: { crumbs: ['Настройки', 'Фичи'], admin: true },
       },
+      {
+        path: 'settings/exchange-rates',
+        name: 'settings-exchange-rates',
+        component: () => import('../features/settings/ExchangeRatesPage.vue'),
+        // Admin-only: exchange rates for offer normalization (price-normalization-v2).
+        meta: { crumbs: ['Настройки', 'Курсы валют'], admin: true },
+      },
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: '/' },

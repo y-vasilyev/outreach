@@ -22,7 +22,8 @@
     "db:seed": "pnpm --filter @nosquare/db seed",
     "db:studio": "pnpm --filter @nosquare/db prisma:studio",
     "db:reset": "pnpm --filter @nosquare/db prisma:reset",
-    "db:backfill:offers": "pnpm --filter @nosquare/db backfill:offers"
+    "db:backfill:offers": "pnpm --filter @nosquare/db backfill:offers",
+    "db:renormalize:offers": "pnpm --filter @nosquare/workers renormalize:offers"
   },
   "devDependencies": {
     "@types/node": "^20.12.7",

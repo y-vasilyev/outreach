@@ -39,6 +39,7 @@ export const MatchResultZ = z.object({
     positiveSignals: true,
     gaps: true,
     scoreBreakdown: true,
+    placement: true,
   }).default({ positiveSignals: [], gaps: [], scoreBreakdown: {} }),
   evidencePostIds: z.array(z.string()).default([]),
   createdAt: z.string(),

@@ -12,9 +12,29 @@ export const QueueNames = {
   discoveryBatch: 'discovery-batch',
   guidedDiscovery: 'guided-discovery',
   guidedDiscoveryReview: 'guided-discovery-review',
+  offerRenormalize: 'offer-renormalize',
 } as const;
 
 export type QueueName = (typeof QueueNames)[keyof typeof QueueNames];
+
+/**
+ * Recompute DERIVED normalization columns of active placement-offer rows
+ * (price-normalization-v2). Two modes: by-currency (an exchange rate was
+ * upserted) or by-profile (post-insight refresh changed the CPM views basis).
+ * Raw columns and superseded/low_confidence rows are never touched.
+ */
+export const OfferRenormalizeJobZ = z
+  .object({
+    /** Recompute all active rows quoted in this currency (rate change). */
+    currency: z.string().optional(),
+    /** Recompute this profile's active rows (views basis change). */
+    profileId: z.string().optional(),
+  })
+  .refine((j) => Boolean(j.currency) || Boolean(j.profileId), {
+    message: 'currency or profileId required',
+  });
+
+export type OfferRenormalizeJob = z.infer<typeof OfferRenormalizeJobZ>;
 
 export const ChannelScrapeJobZ = z.object({
   channelId: z.string(),

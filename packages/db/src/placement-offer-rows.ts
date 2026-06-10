@@ -3,6 +3,7 @@ import {
   composeOffersFromRows,
   decideOfferRowWrite,
   offerToRowFields,
+  type NormalizedOfferFields,
   type PlacementOffer,
 } from '@nosquare/shared';
 
@@ -26,6 +27,12 @@ export interface PersistOfferRowInput {
   offer: PlacementOffer;
   /** Plain ref to the originating `placement.offer` ProfileDataPoint row. */
   sourceDataPointId: string;
+  /**
+   * Write-time normalization (price-normalization-v2): RUB-derived columns +
+   * CPM from `normalizeOffer()`. Omitted = all-null (unnormalized — visible,
+   * excluded from RUB comparisons until renormalize runs).
+   */
+  normalized?: NormalizedOfferFields;
 }
 
 /**
@@ -47,12 +54,20 @@ export async function persistPlacementOfferRow(
   const fields = offerToRowFields(input.offer);
   const activeRow = await tx.placementOfferRow.findFirst({
     where: { profileId: input.profileId, identityKey: fields.identityKey, status: 'active' },
-    select: { id: true, priceMin: true, currency: true, confidence: true, capturedAt: true },
+    select: {
+      id: true,
+      priceMin: true,
+      priceMax: true,
+      currency: true,
+      confidence: true,
+      capturedAt: true,
+    },
   });
 
   const decision = decideOfferRowWrite(
     {
       priceMin: fields.priceMin,
+      priceMax: fields.priceMax,
       currency: fields.currency,
       confidence: fields.confidence,
       capturedAt: fields.capturedAt,
@@ -91,6 +106,17 @@ export async function persistPlacementOfferRow(
       sourceMessageId: fields.sourceMessageId,
       extractedBy: fields.extractedBy,
       capturedAt: fields.capturedAt,
+      ...(input.normalized
+        ? {
+            priceRubMin: input.normalized.priceRubMin,
+            priceRubMax: input.normalized.priceRubMax,
+            fxRateUsed: input.normalized.fxRateUsed,
+            fxAsOf: input.normalized.fxAsOf,
+            cpmRub: input.normalized.cpmRub,
+            viewsBasis: input.normalized.viewsBasis,
+            viewsSource: input.normalized.viewsSource,
+          }
+        : {}),
     },
     select: { id: true },
   });

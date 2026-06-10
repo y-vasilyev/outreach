@@ -13,6 +13,7 @@ import { startProfileExtractWorker } from './queues/profile-extract.js';
 import { startDiscoveryBatchWorker } from './queues/discovery-batch.js';
 import { startGuidedDiscoveryWorker } from './queues/guided-discovery.js';
 import { startGuidedDiscoveryReviewWorker } from './queues/guided-discovery-review.js';
+import { startOfferRenormalizeWorker } from './queues/offer-renormalize.js';
 import { initFeatureFlags } from './feature-flags.js';
 import { startCooldownHealer } from './services/cooldown-healer.js';
 import { startWarmupPromoter } from './services/warmup-promoter.js';
@@ -36,6 +37,7 @@ async function main() {
     startDiscoveryBatchWorker(),
     startGuidedDiscoveryWorker(),
     startGuidedDiscoveryReviewWorker(),
+    startOfferRenormalizeWorker(),
   ];
   const dispatcher = startCampaignDispatcher();
   const followups = startFollowupScheduler();

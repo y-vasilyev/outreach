@@ -57,6 +57,15 @@ export interface PlacementOfferRowLike {
   extractedBy: string;
   capturedAt: Date | string;
   createdAt: Date | string;
+  // Derived normalization columns (price-normalization-v2); optional so
+  // pre-9g callers/tests compose unchanged.
+  priceRubMin?: unknown;
+  priceRubMax?: unknown;
+  cpmRub?: unknown;
+  fxRateUsed?: unknown;
+  fxAsOf?: Date | string | null;
+  viewsBasis?: number | null;
+  viewsSource?: string | null;
 }
 
 /** Coerce a Prisma Decimal / string / number to a finite number or null. */
@@ -88,11 +97,14 @@ function attrString(offer: PlacementOffer, key: string): string | null {
  */
 export function offerToRowFields(offer: PlacementOffer): OfferRowFields {
   const price = typeof offer.price === 'number' && Number.isFinite(offer.price) ? offer.price : null;
+  // Range bounds win when present (price-normalization-v2): «от X» → max=null
+  // (open-ended), «до X» → min=null; otherwise exact price → min=max.
+  const hasRange = offer.price_min != null || offer.price_max != null;
   return {
     platform: offer.platform ?? null,
     kind: offer.kind,
-    priceMin: price,
-    priceMax: price,
+    priceMin: hasRange ? offer.price_min ?? null : price,
+    priceMax: hasRange ? offer.price_max ?? null : price,
     currency: offer.currency?.trim() || 'RUB',
     duration: attrString(offer, 'duration'),
     tariffName: attrString(offer, 'tariff_name'),
@@ -119,10 +131,36 @@ export function rowToOffer(row: PlacementOfferRowLike): PlacementOffer | null {
   if (!attrs.success) return null;
   const capturedAt =
     row.capturedAt instanceof Date ? row.capturedAt.toISOString() : String(row.capturedAt);
+  const pMin = decimalToNumber(row.priceMin);
+  const pMax = decimalToNumber(row.priceMax);
+  // Attach the derived normalization view only when it ADDS information: a
+  // real fx conversion (rate ≠ 1) or a CPM. Plain RUB offers without CPM stay
+  // byte-identical to their stored JSON (fixture-equality guarantee).
+  const cpmRub = decimalToNumber(row.cpmRub ?? null);
+  const fxRateUsed = decimalToNumber(row.fxRateUsed ?? null);
+  const informative = cpmRub !== null || (fxRateUsed !== null && fxRateUsed !== 1);
+  const normalized = informative
+    ? {
+        priceRubMin: decimalToNumber(row.priceRubMin ?? null),
+        priceRubMax: decimalToNumber(row.priceRubMax ?? null),
+        cpmRub,
+        fxRateUsed,
+        fxAsOf: row.fxAsOf
+          ? row.fxAsOf instanceof Date
+            ? row.fxAsOf.toISOString()
+            : String(row.fxAsOf)
+          : null,
+        viewsBasis: row.viewsBasis ?? null,
+        viewsSource: row.viewsSource ?? null,
+      }
+    : undefined;
   const candidate = {
     kind: row.kind,
     platform: row.platform,
-    price: decimalToNumber(row.priceMin),
+    price: pMin,
+    // Reconstruct explicit bounds only for genuine ranges (min ≠ max), so
+    // non-range offers round-trip byte-identically to their stored JSON.
+    ...(pMin !== pMax ? { price_min: pMin, price_max: pMax } : {}),
     currency: row.currency,
     attributes: attrs.data,
     confidence: decimalToNumber(row.confidence) ?? 0,
@@ -131,6 +169,7 @@ export function rowToOffer(row: PlacementOfferRowLike): PlacementOffer | null {
     sourceMessageId: row.sourceMessageId,
     extractedBy: row.extractedBy,
     capturedAt,
+    ...(normalized ? { normalized } : {}),
   };
   const parsed = PlacementOfferZ.safeParse(candidate);
   return parsed.success ? parsed.data : null;
@@ -273,10 +312,17 @@ export type OfferRowWriteDecision =
  *     never dethrone the current price.
  */
 export function decideOfferRowWrite(
-  incoming: { priceMin: number | null; currency: string; confidence: number; capturedAt: Date },
+  incoming: {
+    priceMin: number | null;
+    priceMax?: number | null;
+    currency: string;
+    confidence: number;
+    capturedAt: Date;
+  },
   existingActive: {
     id: string;
     priceMin: unknown;
+    priceMax?: unknown;
     currency: string;
     confidence: unknown;
     capturedAt: Date | string;
@@ -288,13 +334,20 @@ export function decideOfferRowWrite(
   if (!existingActive) {
     return { insertStatus: 'active', supersedeExistingId: null, supersededById: null };
   }
-  const existingPrice = decimalToNumber(existingActive.priceMin);
   const existingMs =
     existingActive.capturedAt instanceof Date
       ? existingActive.capturedAt.getTime()
       : Date.parse(String(existingActive.capturedAt));
+  // «Same price» = both bounds equal («от 118 000» ≠ exact 118 000). An
+  // omitted priceMax (legacy caller) means min=max, NOT an open range.
+  const incomingMax = incoming.priceMax === undefined ? incoming.priceMin : incoming.priceMax;
+  const existingMax =
+    existingActive.priceMax === undefined
+      ? decimalToNumber(existingActive.priceMin)
+      : decimalToNumber(existingActive.priceMax);
   const samePrice =
-    existingPrice === incoming.priceMin &&
+    decimalToNumber(existingActive.priceMin) === incoming.priceMin &&
+    existingMax === incomingMax &&
     existingActive.currency.toLowerCase() === incoming.currency.toLowerCase();
   if (!samePrice) {
     if (incoming.capturedAt.getTime() >= existingMs) {

@@ -881,11 +881,43 @@ model PlacementOfferRow {
   capturedAt  DateTime       @default(now()) @map("captured_at")
   createdAt   DateTime       @default(now()) @map("created_at")
 
+  // ── Derived normalization columns (price-normalization-v2). Populated
+  // exclusively by normalizeOffer() at write time and the offer-renormalize
+  // job; NEVER hand-edited, raw columns NEVER touched by recompute. Null =
+  // unnormalized (no exchange rate for the currency yet) — visible but
+  // excluded from RUB comparisons.
+  priceRubMin Decimal?      @map("price_rub_min")
+  priceRubMax Decimal?      @map("price_rub_max")
+  fxRateUsed  Decimal?      @map("fx_rate_used")
+  fxAsOf      DateTime?     @map("fx_as_of")
+  // CPM: priceRubMin / views × 1000; viewsBasis/viewsSource explain the
+  // denominator (post_insights median | profile_avg). Null for package/other.
+  cpmRub      Decimal?      @map("cpm_rub")
+  viewsBasis  Int?          @map("views_basis")
+  viewsSource String?       @map("views_source")
+
   @@index([profileId, status])
   @@index([platform, kind, priceMin])
   @@index([capturedAt])
   @@index([profileId, sourceMessageId])
   @@map("placement_offer")
+}
+
+// Operator-maintained CURRENT exchange rate per currency (price-normalization-
+// v2). No seed rows — non-RUB offers stay unnormalized until an admin sets the
+// rate in Settings (never normalized with an invented number). An edit
+// overwrites the row; historical traceability lives on each offer row via
+// fxRateUsed/fxAsOf stamps, which recompute never rewrites on superseded rows.
+model ExchangeRate {
+  currency    String   @id
+  rateToRub   Decimal  @map("rate_to_rub")
+  asOf        DateTime @map("as_of")
+  source      String   @default("manual")
+  updatedById String?  @map("updated_by_id")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("exchange_rate")
 }
 
 // Public post evidence for catalog relevance/top-post previews. Source data is

@@ -142,6 +142,7 @@ function fitSignalsForPersist(fit: CatalogFit) {
     positiveSignals: fit.positiveSignals,
     gaps: fit.gaps,
     scoreBreakdown: fit.scoreBreakdown,
+    ...(fit.placement ? { placement: fit.placement } : {}),
   };
 }
 

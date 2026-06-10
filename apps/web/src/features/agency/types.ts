@@ -32,6 +32,11 @@ export interface PlacementOffer {
   kind: string;
   platform: string | null;
   price: number | null;
+  /** Range bounds (price-normalization-v2): «от X» → max null; «до X» → min null. */
+  price_min?: number | null;
+  price_max?: number | null;
+  /** Literal price text as written («от 118 000»). */
+  rawPrice?: string;
   currency: string;
   attributes: PlacementAttribute[];
   confidence: number;
@@ -39,6 +44,16 @@ export interface PlacementOffer {
   sourceMessageId: string | null;
   extractedBy: string;
   capturedAt: string | null;
+  /** Derived ₽-normalization (present when it adds info: fx conversion / CPM). */
+  normalized?: {
+    priceRubMin: number | null;
+    priceRubMax: number | null;
+    cpmRub: number | null;
+    fxRateUsed: number | null;
+    fxAsOf: string | null;
+    viewsBasis: number | null;
+    viewsSource: string | null;
+  };
 }
 
 // Per-platform audience size (placement-representation-v2). Mirror of

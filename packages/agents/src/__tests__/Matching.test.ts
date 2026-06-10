@@ -218,6 +218,59 @@ function attr(key: string, value: PlacementOffer['attributes'][number]['value'])
   return { key, value, confidence: 1, rawSnippet: '' };
 }
 
+describe('budget in normalized RUB (price-normalization-v2)', () => {
+  it('a USD offer is evaluated at its ₽ value, not the raw number', () => {
+    const brief = mkBrief({ topic: 'крипта', formats: ['telegram пост'], geo: [], budget: 30000 });
+    const usdProfile = mkProfile({
+      id: 'usd',
+      topics: ['крипта'],
+      formats: ['telegram_post'],
+      placementOffers: [
+        mkOffer({
+          price: 400,
+          currency: 'USD',
+          normalized: {
+            priceRubMin: 36960,
+            priceRubMax: 36960,
+            cpmRub: 3696,
+            fxRateUsed: 92.4,
+            fxAsOf: '2026-06-01T00:00:00.000Z',
+            viewsBasis: 10000,
+            viewsSource: 'post_insights',
+          },
+        }),
+      ],
+    });
+    // Raw comparison (400 < 30000) would wrongly shortlist; ₽ value exceeds.
+    const res = isShortlisted(brief, usdProfile, { useStructuredOffers: true });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toMatch(/36960/);
+    // CPM + fx provenance surface as informational signals.
+    const scored = scoreProfile(brief, usdProfile, { useStructuredOffers: true });
+    expect(scored.placement).toEqual({
+      cpmRub: 3696,
+      currency: 'USD',
+      fxAsOf: '2026-06-01T00:00:00.000Z',
+    });
+    expect(scored.rationale).toMatch(/CPM/);
+  });
+
+  it('unnormalized offers fall back to the raw price (pre-migration behavior)', () => {
+    const brief = mkBrief({ topic: 'крипта', formats: ['telegram пост'], geo: [], budget: 30000 });
+    const plain = mkProfile({
+      id: 'plain',
+      topics: ['крипта'],
+      formats: ['telegram_post'],
+      placementOffers: [mkOffer({ price: 21000 })],
+    });
+    expect(isShortlisted(brief, plain, { useStructuredOffers: true }).ok).toBe(true);
+    expect(scoreProfile(brief, plain, { useStructuredOffers: true }).placement).toMatchObject({
+      cpmRub: null,
+      currency: 'RUB',
+    });
+  });
+});
+
 describe('structured placement matching', () => {
   // Brief wants a long-lived Telegram post.
   const brief = mkBrief({ topic: 'крипта', formats: ['telegram пост месяц'], geo: [] });

@@ -658,6 +658,14 @@ advertising/business contact. Сообщение должно прямо обо�
   `RateCardExtractor` имеет детерминированный field-guard:
   поля вне `rate.<format>` дропаются (не префиксуются слепо `rate.`);
   нераспознанные числовые форматы бакетируются в `rate.other`.
+  Офферный контракт (price-normalization-v2): цена-диапазон эмитится как
+  `price_min`/`price_max` («от X» ⇒ max null, «до X» ⇒ min null,
+  «5-7к» ⇒ 5000/7000), «от»-цена НИКОГДА не коерсится в точную; `price` =
+  `price_min`; литеральный токен цены сохраняется в `rawPrice` (схема
+  стэшит его до коерции и для строковых цен из LLM-вывода).
+  Примечание: фокусный доспрос `duration` для прайсованных постов уже
+  встроен (реестр `requiredForKinds: ['post']` + planner placement inputs);
+  в проде его активирует флаг `structured_placement_offers`.
 - **BloggerMatcher — `blogger_matcher`.** Опциональный LLM-реранк топ-N
   кандидатов под бриф; по умолчанию off (детерминированный скоринг без LLM).
 - **SponsoredIntegrationDetector — `sponsored_integration_detector`.**

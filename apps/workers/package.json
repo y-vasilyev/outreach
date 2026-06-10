@@ -10,7 +10,8 @@
     "start": "tsx --env-file=../../.env src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "echo 'lint: noop'",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "renormalize:offers": "tsx --env-file=../../.env scripts/renormalize-offers.ts"
   },
   "dependencies": {
     "@nosquare/agents": "workspace:*",

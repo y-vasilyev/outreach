@@ -22,3 +22,4 @@ export * from './audit.js';
 export * from './queue.js';
 export * from './ajtbd.js';
 export * from './opener-stats.js';
+export * from './exchange-rate.js';

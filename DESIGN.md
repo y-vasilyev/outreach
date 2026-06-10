@@ -585,6 +585,24 @@ db:backfill:offers` (идемпотентный, хронологический 
 `raw_price` хранит литеральный токен цены («от 118 000») — лосси-коерция
 обратима.
 
+### Нормализация цен (price-normalization-v2)
+
+Сравнимость прайсов обеспечивают производные колонки на `placement_offer`
+(`price_rub_min/max`, `fx_rate_used`, `fx_as_of`, `cpm_rub`, `views_basis`,
+`views_source`, миграция `9g`), которые заполняет ТОЛЬКО чистая
+`normalizeOffer()` (`packages/shared/src/offer-normalization.ts`) — на записи
+в воркере и в очереди `offer-renormalize` (триггеры: upsert/delete курса,
+завершение post-insight refresh). Сырые колонки неизменны. Курсы — таблица
+`exchange_rate` (admin, Settings → Курсы валют; без сидов: нет курса ⇒ оффер
+виден, но вне ₽-сравнений). CPM = `price_rub_min / медиана просмотров
+постов платформы × 1000` (фолбэк `avgViews`, помечается `profile_avg`).
+Диапазоны: `price_min`/`price_max` в схеме оффера («от X» ⇒ max NULL,
+«до X» ⇒ min NULL, «5-7к» ⇒ 5000/7000; `parsePriceRange()` в `price.ts`);
+легаси `price` = `price_min`. Матчинг сравнивает бюджет по `priceRubMin`
+с фолбэком на сырую цену (пред-миграционные строки); CPM/fx уходят в
+`fitSignals.placement` информационно, веса скоринга не тронуты. Один
+прогон по существующим строкам: `pnpm db:renormalize:offers`.
+
 ### Object storage (`packages/storage`)
 
 `ObjectStore` — обёртка над S3-совместимым SDK (MinIO в dev, `S3_*` env),

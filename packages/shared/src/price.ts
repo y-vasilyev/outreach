@@ -40,6 +40,51 @@ function multiplierFor(unit: string | undefined): number {
  * it is not a price. Strips approximation prefixes, spaces, and currency-free
  * unit multipliers.
  */
+/**
+ * Parse a price token that may be a RANGE (price-normalization-v2). Returns
+ * bounds — `max = null` is an open-ended «от»-range, `min = null` an upper
+ * bound «до» — or null when the token is not a price at all:
+ *   - "5-7к" / "5—7 тыс"  → { min: 5000, max: 7000 } (multiplier distributes
+ *     across BOTH bounds — 5000–7000, not 5–7000)
+ *   - "от 118 000"        → { min: 118000, max: null }
+ *   - "до 30к"            → { min: null, max: 30000 }
+ *   - "47к" / "47 000"    → { min: 47000, max: 47000 }
+ */
+export function parsePriceRange(raw: string): { min: number | null; max: number | null } | null {
+  if (typeof raw !== 'string') return null;
+  const s = raw.trim().toLowerCase();
+  // Dash range "A-B[unit]" (hyphen/en/em dash between two numeric tokens).
+  const range = /^(?:от\s*)?([\d.,\s]+?)\s*[-–—]\s*([\d.,\s]*[\d][а-яёa-z.\s]*)$/u.exec(s);
+  if (range) {
+    const right = range[2]!.trim();
+    const max = normalizePriceToken(right);
+    if (max !== null) {
+      const left = range[1]!.trim();
+      // Distribute the right side's multiplier unit over a bare left bound.
+      const unitMatch = /(к|k|тыс\.?|тысяч[а-яё]*|млн\.?|миллион[а-яё]*|млрд\.?|миллиард[а-яё]*)\s*$/u.exec(
+        right,
+      );
+      const leftToken = unitMatch && /^[\d.,\s]+$/.test(left) ? `${left}${unitMatch[1]}` : left;
+      const min = normalizePriceToken(leftToken);
+      if (min !== null && min <= max) return { min, max };
+    }
+  }
+  // Upper bound «до X».
+  const upTo = /^до\s+(.+)$/u.exec(s);
+  if (upTo) {
+    const max = normalizePriceToken(upTo[1]!);
+    return max === null ? null : { min: null, max };
+  }
+  // Open-ended «от X» (normalizePriceToken strips the prefix — detect it first).
+  const from = /^(?:от)\s+(.+)$/u.exec(s);
+  if (from) {
+    const min = normalizePriceToken(from[1]!);
+    return min === null ? null : { min, max: null };
+  }
+  const exact = normalizePriceToken(s);
+  return exact === null ? null : { min: exact, max: exact };
+}
+
 export function normalizePriceToken(raw: string): number | null {
   if (typeof raw !== 'string') return null;
   const s = raw

@@ -94,8 +94,31 @@ function offerKindLabel(o: PlacementOffer): string {
 }
 
 function offerPriceLabel(o: PlacementOffer): string {
+  // Range bounds (price-normalization-v2): «от X» / «до X» / «X–Y».
+  if (o.price_min != null || o.price_max != null) {
+    if (o.price_min != null && o.price_max != null)
+      return `${formatCompact(o.price_min)}–${formatCompact(o.price_max)} ${o.currency}`;
+    if (o.price_min != null) return `от ${formatCompact(o.price_min)} ${o.currency}`;
+    return `до ${formatCompact(o.price_max!)} ${o.currency}`;
+  }
   if (o.price == null) return 'по запросу';
   return `${formatCompact(o.price)} ${o.currency}`;
+}
+
+/** ₽-normalization hint: converted price by rate date and/or CPM («≈» = по avgViews). */
+function offerNormalizedHint(o: PlacementOffer): string {
+  const n = o.normalized;
+  if (!n) return '';
+  const bits: string[] = [];
+  if (n.priceRubMin != null && (n.fxRateUsed ?? 1) !== 1) {
+    const date = n.fxAsOf ? ` по курсу от ${n.fxAsOf.slice(0, 10)}` : '';
+    bits.push(`≈ ${formatCompact(n.priceRubMin)} ₽${date}`);
+  }
+  if (n.cpmRub != null) {
+    const approx = n.viewsSource === 'profile_avg' ? '≈ ' : '';
+    bits.push(`CPM ${approx}${formatCompact(n.cpmRub)} ₽`);
+  }
+  return bits.join(' · ');
 }
 
 function attrLabel(key: string): string {
@@ -409,7 +432,12 @@ function submitHint(): void {
               <Tag>{{ offerKindLabel(o) }}</Tag>
               <span v-if="o.platform" class="muted-2" style="font-size: 12px;">{{ o.platform }}</span>
             </div>
-            <span class="cell-strong mono">{{ offerPriceLabel(o) }}</span>
+            <span class="cell-strong mono">
+              {{ offerPriceLabel(o) }}
+              <span v-if="offerNormalizedHint(o)" class="muted-2" style="font-size: 11px; font-weight: 400;">
+                {{ offerNormalizedHint(o) }}
+              </span>
+            </span>
           </div>
           <div v-if="offerTerms(o).length" style="margin-top: 8px; display: flex; flex-direction: column; gap: 3px;">
             <div

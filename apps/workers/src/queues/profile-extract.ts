@@ -5,7 +5,10 @@ import {
   EXTRACTION_HINT_LIMIT,
   getSuggestionTargetField,
   hintsToOperatorStrings,
+  normalizeOffer,
+  offerToRowFields,
   PlacementOfferZ,
+  resolveViewsBasis,
   preGateExtraction,
   ProfileExtractJobZ,
   QueueNames,
@@ -294,6 +297,38 @@ export async function handleProfileExtract(data: {
     return { ok: true, channelId, dataPoints: 0 };
   }
 
+  // Inputs for write-time offer normalization (price-normalization-v2): the
+  // current exchange rates + the channel profile's post insights / avgViews
+  // for the CPM denominator. One fetch per job, outside the write tx (read-
+  // only reference data; a stale-by-milliseconds rate is harmless and the
+  // renormalize job reconciles on rate change).
+  const offerCurrencies = [
+    ...new Set(
+      placementOfferDrafts
+        .map((d) => (d.currency ?? 'RUB').trim().toUpperCase())
+        .filter((c) => c !== 'RUB'),
+    ),
+  ];
+  const [rateRows, profileForViews] = await Promise.all([
+    offerCurrencies.length
+      ? prisma.exchangeRate.findMany({ where: { currency: { in: offerCurrencies } } })
+      : Promise.resolve([]),
+    placementOfferDrafts.length
+      ? prisma.bloggerProfile.findUnique({
+          where: { channelId },
+          select: {
+            avgViews: true,
+            postInsights: {
+              select: { platform: true, metrics: true, publishedAt: true, metricCapturedAt: true },
+              orderBy: [{ publishedAt: 'desc' }],
+              take: 100,
+            },
+          },
+        })
+      : Promise.resolve(null),
+  ]);
+  const ratesByCurrency = new Map(rateRows.map((r) => [r.currency.toUpperCase(), r]));
+
   // Ensure the catalog profile exists (keyed by channelId), then persist all
   // data points and re-roll the standardized fields — in one transaction so a
   // reader never sees data points without the rolled-up view they imply.
@@ -425,11 +460,22 @@ export async function handleProfileExtract(data: {
         }
         // Dual-write the first-class offer row (placement-offer-table) in the
         // SAME transaction: a failed row write fails the whole job (BullMQ
-        // retries) — never partial state.
+        // retries) — never partial state. Normalization (price-normalization-
+        // v2) is computed write-time from the current rate + views basis.
+        const rowFields = offerToRowFields(value);
         await persistPlacementOfferRow(tx, {
           profileId: profile.id,
           offer: value,
           sourceDataPointId: dataPointId,
+          normalized: normalizeOffer(
+            rowFields,
+            ratesByCurrency.get(rowFields.currency.toUpperCase()) ?? null,
+            resolveViewsBasis(
+              profileForViews?.postInsights ?? [],
+              rowFields.platform,
+              profileForViews?.avgViews ?? null,
+            ),
+          ),
         });
       }
 

@@ -15,6 +15,7 @@ interface QueueMap {
   guidedDiscovery: Queue;
   guidedDiscoveryReview: Queue;
   profileExtract: Queue;
+  offerRenormalize: Queue;
 }
 
 let _queues: QueueMap | undefined;
@@ -32,6 +33,7 @@ export function getQueues(): QueueMap {
       guidedDiscovery: new Queue(QueueNames.guidedDiscovery, conn()),
       guidedDiscoveryReview: new Queue(QueueNames.guidedDiscoveryReview, conn()),
       profileExtract: new Queue(QueueNames.profileExtract, conn()),
+      offerRenormalize: new Queue(QueueNames.offerRenormalize, conn()),
     };
   }
   return _queues;

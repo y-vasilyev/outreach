@@ -124,7 +124,11 @@ function briefTerms(brief: Pick<AdBrief, 'topic' | 'audienceTarget' | 'formats' 
 export function buildFitBreakdown(
   brief: Pick<AdBrief, 'topic' | 'audienceTarget' | 'formats' | 'geo' | 'notes'>,
   profile: Pick<BloggerProfile, 'topics' | 'formats' | 'rateCards' | 'reach' | 'avgViews'>,
-  scored: { score: number; rationale: string },
+  scored: {
+    score: number;
+    rationale: string;
+    placement?: { cpmRub: number | null; currency: string; fxAsOf: string | null };
+  },
   posts: Array<Pick<BloggerPostInsight, 'id' | 'textSnippet' | 'metrics' | 'freshness'>>,
   source: CatalogFit['source'] = 'deterministic',
 ): CatalogFit {
@@ -170,5 +174,8 @@ export function buildFitBreakdown(
     gaps,
     evidencePostIds,
     scoreBreakdown,
+    // CPM/fx context of the cited offer (price-normalization-v2) — passes
+    // through to fitSignals; informational only.
+    ...(scored.placement ? { placement: scored.placement } : {}),
   };
 }

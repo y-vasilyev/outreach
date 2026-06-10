@@ -65,7 +65,11 @@ const groups = computed<{ group: string; items: NavItem[] }[]>(() => [
       // Runtime feature-flag control plane — admin only (the API enforces it
       // too; this just hides the nav entry for non-admins).
       ...(user.value?.role === 'admin'
-        ? [{ to: '/settings/features', label: 'Фичи', icon: 'sliders' as const, badge: null }]
+        ? [
+            { to: '/settings/features', label: 'Фичи', icon: 'sliders' as const, badge: null },
+            // Курсы валют для ₽-нормализации прайсов (price-normalization-v2).
+            { to: '/settings/exchange-rates', label: 'Курсы валют', icon: 'sliders' as const, badge: null },
+          ]
         : []),
     ],
   },

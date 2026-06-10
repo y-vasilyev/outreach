@@ -15,11 +15,12 @@ const mocks = vi.hoisted(() => {
   const prisma = {
     conversation: { findUnique: vi.fn() },
     message: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
-    bloggerProfile: { upsert: vi.fn(), update: vi.fn() },
+    bloggerProfile: { upsert: vi.fn(), update: vi.fn(), findUnique: vi.fn() },
     profileDataPoint: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn() },
     placementAttribute: { create: vi.fn(), findFirst: vi.fn(), deleteMany: vi.fn() },
     extractionHint: { findMany: vi.fn() },
     mediaAsset: { updateMany: vi.fn(), deleteMany: vi.fn(), create: vi.fn() },
+    exchangeRate: { findMany: vi.fn() },
     placementOfferRow: {
       findFirst: vi.fn(),
       findMany: vi.fn(),
@@ -112,6 +113,8 @@ beforeEach(() => {
   mocks.prisma.mediaAsset.updateMany.mockResolvedValue({ count: 0 });
   mocks.prisma.mediaAsset.deleteMany.mockResolvedValue({ count: 0 });
   mocks.prisma.mediaAsset.create.mockResolvedValue({});
+  mocks.prisma.bloggerProfile.findUnique.mockResolvedValue({ avgViews: null, postInsights: [] });
+  mocks.prisma.exchangeRate.findMany.mockResolvedValue([]);
   mocks.prisma.placementOfferRow.findFirst.mockResolvedValue(null);
   mocks.prisma.placementOfferRow.findMany.mockResolvedValue([]);
   mocks.prisma.placementOfferRow.create.mockResolvedValue({ id: 'or1' });

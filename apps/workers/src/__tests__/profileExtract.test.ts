@@ -10,12 +10,13 @@ const mocks = vi.hoisted(() => {
   const prisma = {
     conversation: { findUnique: vi.fn() },
     message: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
-    bloggerProfile: { upsert: vi.fn(), update: vi.fn() },
+    bloggerProfile: { upsert: vi.fn(), update: vi.fn(), findUnique: vi.fn() },
     profileDataPoint: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn() },
     placementAttribute: { findFirst: vi.fn(), create: vi.fn(), deleteMany: vi.fn() },
     // First-class offer rows (placement-offer-table): the worker dual-writes
     // them through the REAL @nosquare/db helpers (importOriginal below), so
     // the mock only fakes the prisma model.
+    exchangeRate: { findMany: vi.fn() },
     placementOfferRow: {
       findFirst: vi.fn(),
       findMany: vi.fn(),
@@ -75,6 +76,8 @@ beforeEach(() => {
   mocks.prisma.bloggerProfile.upsert.mockResolvedValue({ id: 'prof1', channelId: 'ch1' });
   mocks.prisma.bloggerProfile.update.mockResolvedValue({});
   mocks.prisma.profileDataPoint.create.mockResolvedValue({ id: 'dp1' });
+  mocks.prisma.bloggerProfile.findUnique.mockResolvedValue({ avgViews: null, postInsights: [] });
+  mocks.prisma.exchangeRate.findMany.mockResolvedValue([]);
   mocks.prisma.placementOfferRow.findFirst.mockResolvedValue(null);
   mocks.prisma.placementOfferRow.findMany.mockResolvedValue([]);
   mocks.prisma.placementOfferRow.create.mockResolvedValue({ id: 'or1' });

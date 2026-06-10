@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { normalizePriceToken } from '../price.js';
+import { normalizePriceToken, parsePriceRange } from '../price.js';
 
 /**
  * Coerce a price input to a finite non-negative number or null. Accepts numbers
@@ -89,19 +89,66 @@ export const KNOWN_PLACEMENT_KINDS = [
 export type KnownPlacementKind = (typeof KNOWN_PLACEMENT_KINDS)[number];
 
 /**
- * Stash the literal price text into `rawPrice` BEFORE `PriceCoerceZ` collapses
- * it to a number (placement-offer-table: lossy coercion must stay reversible —
- * «от 118 000» → priceMin 118000, but the row keeps the verbatim token).
- * Only fires when the input price is a string and no rawPrice was provided.
+ * Object-level pre-pass before field coercion (placement-offer-table +
+ * price-normalization-v2):
+ *   1. stash the literal price text into `rawPrice` BEFORE `PriceCoerceZ`
+ *      collapses it («от 118 000» → 118000, but the verbatim token survives);
+ *   2. expand a RANGE price string into `price_min`/`price_max` («5-7к» →
+ *      5000/7000; «от 118 000» → 118000/null; «до 30к» → null/30000) unless
+ *      the emitter already set explicit bounds;
+ *   3. keep the legacy `price` field = `price_min` so every existing consumer
+ *      (dedupe keys, format derivation, matching) is unchanged.
  */
 function stashRawPrice(v: unknown): unknown {
-  if (v && typeof v === 'object' && !Array.isArray(v)) {
-    const o = v as Record<string, unknown>;
-    if (typeof o['price'] === 'string' && !o['rawPrice']) {
-      return { ...o, rawPrice: o['price'] };
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return v;
+  const o = { ...(v as Record<string, unknown>) };
+  const firstPriceString = [o['price'], o['price_min'], o['price_max']].find(
+    (x): x is string => typeof x === 'string' && x.trim().length > 0,
+  );
+  if (firstPriceString && !o['rawPrice']) o['rawPrice'] = firstPriceString;
+  // Range expansion from a string `price` — only when bounds weren't given.
+  if (typeof o['price'] === 'string' && o['price_min'] === undefined && o['price_max'] === undefined) {
+    const r = parsePriceRange(o['price']);
+    if (r && !(r.min !== null && r.min === r.max)) {
+      o['price_min'] = r.min;
+      o['price_max'] = r.max;
     }
   }
-  return v;
+  // Legacy compatibility: `price` mirrors `price_min`.
+  if ((o['price'] === undefined || o['price'] === null || typeof o['price'] === 'string') && o['price_min'] != null) {
+    o['price'] = o['price_min'];
+  }
+  return o;
+}
+
+/** Post-parse consistency: explicit `price` and `price_min` must agree. */
+function refineOfferPrices(
+  offer: { price: number | null; price_min?: number | null; price_max?: number | null },
+  ctx: z.RefinementCtx,
+): void {
+  if (
+    offer.price !== null &&
+    offer.price_min !== null &&
+    offer.price_min !== undefined &&
+    offer.price !== offer.price_min
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'price must equal price_min when both are present',
+      path: ['price'],
+    });
+  }
+  if (
+    offer.price_min != null &&
+    offer.price_max != null &&
+    offer.price_min > offer.price_max
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'price_min must be <= price_max',
+      path: ['price_min'],
+    });
+  }
 }
 
 /**
@@ -115,6 +162,13 @@ const PlacementOfferDraftShapeZ = z.object({
   /** Platform (telegram/youtube/instagram/vk/tiktok) — promoted hot field. */
   platform: z.string().nullish().transform((v) => v ?? null),
   price: PriceCoerceZ,
+  /**
+   * Optional price RANGE bounds (price-normalization-v2): «5-7к» → 5000/7000;
+   * «от X» → min=X, max=null (open-ended); «до X» → min=null, max=X. `price`
+   * stays = `price_min` for legacy consumers; both absent = exact/term-only.
+   */
+  price_min: PriceCoerceZ.optional(),
+  price_max: PriceCoerceZ.optional(),
   currency: z.string().default('RUB'),
   attributes: z.array(PlacementAttributeZ).default([]),
   confidence: z.number().min(0).max(1).default(0.5),
@@ -122,7 +176,9 @@ const PlacementOfferDraftShapeZ = z.object({
   /** Literal price text as written, when the source had one («от 118 000»). */
   rawPrice: z.string().default(''),
 });
-export const PlacementOfferDraftZ = z.preprocess(stashRawPrice, PlacementOfferDraftShapeZ);
+export const PlacementOfferDraftZ = z
+  .preprocess(stashRawPrice, PlacementOfferDraftShapeZ)
+  .superRefine(refineOfferPrices);
 export type PlacementOfferDraft = z.infer<typeof PlacementOfferDraftZ>;
 
 /**
@@ -130,14 +186,34 @@ export type PlacementOfferDraft = z.infer<typeof PlacementOfferDraftZ>;
  * the shape stored in the `placement.offer` data-point value and surfaced on
  * `BloggerProfile.placementOffers` and in the profile read API.
  */
-export const PlacementOfferZ = z.preprocess(
-  stashRawPrice,
-  PlacementOfferDraftShapeZ.extend({
-    sourceMessageId: z.string().nullable().default(null),
-    extractedBy: z.string().default('llm'),
-    capturedAt: z.string().nullable().default(null),
-  }),
-);
+/**
+ * Derived normalization view attached to a rolled-up offer when it adds
+ * information (price-normalization-v2): a real fx conversion and/or a CPM.
+ * Computed from the offer ROW's derived columns by `rowToOffer` — never
+ * emitted by extraction, never stored in the data-point JSON.
+ */
+export const NormalizedOfferViewZ = z.object({
+  priceRubMin: z.number().nullable().default(null),
+  priceRubMax: z.number().nullable().default(null),
+  cpmRub: z.number().nullable().default(null),
+  fxRateUsed: z.number().nullable().default(null),
+  fxAsOf: z.string().nullable().default(null),
+  viewsBasis: z.number().nullable().default(null),
+  viewsSource: z.string().nullable().default(null),
+});
+export type NormalizedOfferView = z.infer<typeof NormalizedOfferViewZ>;
+
+export const PlacementOfferZ = z
+  .preprocess(
+    stashRawPrice,
+    PlacementOfferDraftShapeZ.extend({
+      sourceMessageId: z.string().nullable().default(null),
+      extractedBy: z.string().default('llm'),
+      capturedAt: z.string().nullable().default(null),
+      normalized: NormalizedOfferViewZ.optional(),
+    }),
+  )
+  .superRefine(refineOfferPrices);
 export type PlacementOffer = z.infer<typeof PlacementOfferZ>;
 
 /**

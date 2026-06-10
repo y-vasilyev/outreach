@@ -1,6 +1,9 @@
-import { BloggerPostMetricsZ, hasNumericPostMetric } from '@nosquare/shared';
+import { Queue } from 'bullmq';
+import { BloggerPostMetricsZ, hasNumericPostMetric, QueueNames } from '@nosquare/shared';
 import { getPrisma } from '@nosquare/db';
 import type { ChannelSnapshot, ChannelSnapshotPost } from '@nosquare/platforms';
+import { getRedis } from '../redis.js';
+import { logger } from '../logger.js';
 
 function cleanSnippet(text: string): string {
   return text.replace(/\s+/g, ' ').trim().slice(0, 500);
@@ -138,6 +141,19 @@ export async function upsertPostInsightsFromSnapshot(opts: {
       postInsightRefreshedAt: now,
     },
   });
+
+  // Fresh post metrics change the CPM views basis (price-normalization-v2):
+  // recompute the profile's active offer rows. Fire-and-forget — a failed
+  // enqueue never fails the refresh itself.
+  try {
+    const renormalizeQueue = new Queue(QueueNames.offerRenormalize, { connection: getRedis() });
+    await renormalizeQueue.add('renormalize', { profileId: profile.id });
+  } catch (err) {
+    logger.warn(
+      { profileId: profile.id, err: (err as Error).message },
+      'offer-renormalize enqueue failed after post-insight refresh',
+    );
+  }
 
   return { profileId: profile.id, upserted, skipped: null };
 }

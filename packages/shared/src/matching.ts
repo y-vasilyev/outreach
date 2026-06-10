@@ -57,6 +57,11 @@ export interface ScoredProfile {
   profileId: string;
   score: number;
   rationale: string;
+  /**
+   * Money context of the cited best offer (price-normalization-v2), surfaced
+   * into `fitSignals.placement`. Informational — never feeds the score.
+   */
+  placement?: { cpmRub: number | null; currency: string; fxAsOf: string | null };
 }
 
 /** Weights for the deterministic sub-scores; sum is normalised at use. */
@@ -346,11 +351,24 @@ interface OfferTerms {
   durationLabel?: string;
   isPermanent: boolean;
   deliverables: string[];
+  /**
+   * Comparison price in RUB (price-normalization-v2): the normalized
+   * `priceRubMin` when present, else the raw price (pre-migration rows,
+   * unknown currency — preserving pre-change behavior; for an all-RUB catalog
+   * the two are identical).
+   */
   price: number | null;
   /** All stated taxes (an offer can carry stacked taxes, e.g. ИП 8% + реклама 3%). */
   tax: string[];
   /** base | seasonal | promo (placement-representation-v2); undefined = base. */
   pricePeriod?: string;
+  /** CPM in RUB when computable (informational — never feeds the score). */
+  cpmRub: number | null;
+  currency: string;
+  /** Rate date when the price came through a real fx conversion. */
+  fxAsOf: string | null;
+  /** True when `price` is an fx-converted value (rate ≠ 1). */
+  converted: boolean;
 }
 
 function readOfferTerms(offer: PlacementOffer): OfferTerms {
@@ -375,6 +393,9 @@ function readOfferTerms(offer: PlacementOffer): OfferTerms {
   const tax = getOfferAttributes(offer, 'tax')
     .filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
   const pp = getOfferAttribute(offer, 'price_period');
+  const rawPrice =
+    typeof offer.price === 'number' && Number.isFinite(offer.price) ? offer.price : null;
+  const rubPrice = offer.normalized?.priceRubMin ?? null;
   return {
     platform,
     kind,
@@ -382,7 +403,11 @@ function readOfferTerms(offer: PlacementOffer): OfferTerms {
     durationLabel: durKey,
     isPermanent,
     deliverables,
-    price: typeof offer.price === 'number' && Number.isFinite(offer.price) ? offer.price : null,
+    price: rubPrice ?? rawPrice,
+    cpmRub: offer.normalized?.cpmRub ?? null,
+    currency: offer.currency ?? 'RUB',
+    fxAsOf: offer.normalized?.fxAsOf ?? null,
+    converted: rubPrice !== null && (offer.normalized?.fxRateUsed ?? 1) !== 1,
     tax,
     ...(typeof pp === 'string' ? { pricePeriod: pp } : {}),
   };
@@ -517,6 +542,11 @@ function describeOfferTerms(terms: OfferTerms): string {
   if (terms.pricePeriod === 'seasonal') bits.push('сезонная цена');
   else if (terms.pricePeriod === 'promo') bits.push('акция');
   for (const t of terms.tax) bits.push(t);
+  if (terms.converted) {
+    const date = terms.fxAsOf ? terms.fxAsOf.slice(0, 10) : null;
+    bits.push(date ? `цена в ₽ из ${terms.currency} по курсу от ${date}` : `цена в ₽ из ${terms.currency}`);
+  }
+  if (terms.cpmRub !== null) bits.push(`CPM ≈ ${terms.cpmRub} ₽`);
   return bits.join(', ');
 }
 
@@ -621,10 +651,18 @@ export function scoreProfile(
   // the rationale; otherwise the legacy rate-card path runs unchanged.
   let formatSub: number;
   let budgetSub: number;
+  let placement: ScoredProfile['placement'];
 
   if (useOffers(profile, opts)) {
     const structured = structuredPlacementScore(brief, profile.placementOffers ?? []);
     formatSub = brief.formats.length === 0 ? 1 : structured.formatScore;
+    if (structured.best) {
+      placement = {
+        cpmRub: structured.best.cpmRub,
+        currency: structured.best.currency,
+        fxAsOf: structured.best.fxAsOf,
+      };
+    }
 
     // Budget against the relevant offers' prices, mirroring legacy budgetScore.
     if (brief.budget === null || brief.budget === undefined) {
@@ -689,7 +727,7 @@ export function scoreProfile(
 
   parts.push(`итог ${(score * 100).toFixed(0)}%`);
 
-  return { profileId: profile.id, score, rationale: parts.join('; ') };
+  return { profileId: profile.id, score, rationale: parts.join('; '), ...(placement ? { placement } : {}) };
 }
 
 /**

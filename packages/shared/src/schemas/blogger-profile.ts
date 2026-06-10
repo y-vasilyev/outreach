@@ -105,6 +105,17 @@ export const CatalogFitZ = z.object({
   gaps: z.array(z.string()).default([]),
   evidencePostIds: z.array(z.string()).default([]),
   scoreBreakdown: z.record(z.number()).default({}),
+  /**
+   * Placement-money context of the cited best offer (price-normalization-v2):
+   * CPM and fx provenance. Informational — never feeds the score.
+   */
+  placement: z
+    .object({
+      cpmRub: z.number().nullable().default(null),
+      currency: z.string().default('RUB'),
+      fxAsOf: z.string().nullable().default(null),
+    })
+    .optional(),
 });
 
 /** Audience breakdown — each map is label → share (0..1) or absolute count. */

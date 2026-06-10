@@ -28,6 +28,7 @@ import { usersRoutes } from './routes/users.js';
 import { auditRoutes } from './routes/audit.js';
 import { metricsRoutes } from './routes/metrics.js';
 import { featureFlagsRoutes } from './routes/feature-flags.js';
+import { exchangeRatesRoutes } from './routes/exchange-rates.js';
 import { attachIo } from './realtime/io.js';
 
 async function main() {
@@ -84,6 +85,9 @@ async function main() {
   // Admin control plane for runtime flags — registered UNCONDITIONALLY (never
   // behind requireFeature), so admins can always reach the toggle UI.
   await app.register(featureFlagsRoutes);
+  // Settings → Exchange rates (price-normalization-v2): admin-only reference
+  // data for offer normalization; unconditional for the same reason.
+  await app.register(exchangeRatesRoutes);
 
   // Load the feature-flag cache + subscribe to cross-process invalidation
   // before serving, so route gating + reads are correct from the first request.
