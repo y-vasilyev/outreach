@@ -167,6 +167,14 @@ describe('decideOfferRowWrite', () => {
     expect(d.supersedeExistingId).toBe('old');
   });
 
+  it('OLDER quote at a different price lands superseded — never dethrones the current price', () => {
+    const d = decideOfferRowWrite(
+      incoming({ priceMin: 30000, capturedAt: new Date('2026-05-01T00:00:00Z') }),
+      existing({ capturedAt: '2026-06-01T00:00:00.000Z' }),
+    );
+    expect(d).toEqual({ insertStatus: 'superseded', supersedeExistingId: null, supersededById: 'old' });
+  });
+
   it('same price, comparable confidence → fresher wins', () => {
     const d = decideOfferRowWrite(incoming({ priceMin: 40000 }), existing({ confidence: 0.95 }));
     expect(d.insertStatus).toBe('active');

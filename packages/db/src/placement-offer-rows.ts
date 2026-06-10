@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import {
+  composeOffersFromRows,
   decideOfferRowWrite,
   offerToRowFields,
   type PlacementOffer,
@@ -102,6 +103,37 @@ export async function persistPlacementOfferRow(
     });
   }
   return 'created';
+}
+
+/** How the rolled-up `placementOffers` view was sourced (ops visibility). */
+export type OfferRollupSource = 'offer_rows' | 'legacy_fallback' | 'legacy_partial';
+
+/**
+ * Rows-aware placement-offer composition for EVERY profile re-roll (worker
+ * extraction, operator markup edits — one brain, codex review). Returns
+ * composed offers from `active` rows ONLY when the rows fully cover the
+ * profile's `placement.offer` data points; otherwise returns undefined so the
+ * caller falls back to the legacy compose-from-data-points path:
+ *
+ *   - no rows at all → `legacy_fallback` (pre-backfill window);
+ *   - PARTIAL coverage (deploy-before-backfill, interrupted backfill, an
+ *     operator-entered `placement.offer` point with no row) → `legacy_partial`
+ *     — switching to rows here would silently DROP the uncovered offers from
+ *     the catalog, so the legacy path stays authoritative until coverage is
+ *     complete.
+ */
+export async function composeOffersForRollup(
+  tx: Tx,
+  profileId: string,
+  offerDataPointIds: string[],
+  onSkipRow?: (rowId: string) => void,
+): Promise<{ offers: PlacementOffer[] | undefined; source: OfferRollupSource }> {
+  const rows = await tx.placementOfferRow.findMany({ where: { profileId } });
+  if (rows.length === 0) return { offers: undefined, source: 'legacy_fallback' };
+  const covered = new Set(rows.map((r) => r.sourceDataPointId).filter(Boolean));
+  const fullCoverage = offerDataPointIds.every((id) => covered.has(id));
+  if (!fullCoverage) return { offers: undefined, source: 'legacy_partial' };
+  return { offers: composeOffersFromRows(rows, onSkipRow), source: 'offer_rows' };
 }
 
 /**

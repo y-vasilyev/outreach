@@ -1,4 +1,4 @@
-import { getPrisma, Prisma } from '@nosquare/db';
+import { composeOffersForRollup, getPrisma, Prisma } from '@nosquare/db';
 import {
   AppError,
   coerceOperatorValue,
@@ -27,7 +27,18 @@ async function rerollProfile(profileId: string): Promise<void> {
     confidence: Number(p.confidence),
     capturedAt: p.capturedAt,
   }));
-  const rolled = rollUpProfileFields(rollupInput);
+  // Rows-aware composition (placement-offer-table): without this, an operator
+  // edit re-roll would resurrect superseded prices from the raw data points —
+  // supersede state lives only on the offer rows (codex review).
+  const composed = await composeOffersForRollup(
+    prisma,
+    profileId,
+    points.filter((p) => p.field === 'placement.offer').map((p) => p.id),
+  );
+  const rolled = rollUpProfileFields(
+    rollupInput,
+    composed.offers ? { placementOffers: composed.offers } : undefined,
+  );
   await prisma.bloggerProfile.update({
     where: { id: profileId },
     data: {

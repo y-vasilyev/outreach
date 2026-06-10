@@ -39,7 +39,13 @@ async function main(): Promise<void> {
     const points = await prisma.profileDataPoint.findMany({
       where: { profileId, field: 'placement.offer' },
       orderBy: [{ capturedAt: 'asc' }, { createdAt: 'asc' }],
-      select: { id: true, value: true },
+      select: {
+        id: true,
+        value: true,
+        capturedAt: true,
+        sourceMessageId: true,
+        extractedBy: true,
+      },
     });
     // One transaction per profile keeps each profile's chain atomic without
     // holding a single giant transaction across the whole catalog.
@@ -53,9 +59,22 @@ async function main(): Promise<void> {
           );
           continue;
         }
+        // Provenance fallback: offers whose stored JSON lacks embedded
+        // provenance (operator-entered values, older drafts) must inherit the
+        // DATA POINT's capturedAt/sourceMessageId/extractedBy — otherwise the
+        // history would show the backfill run's date and 'llm' ownership
+        // (codex review). Zod defaults can't tell "absent" from "explicit",
+        // so check the raw JSON for extractedBy.
+        const offer = parsed.data;
+        if (!offer.capturedAt) offer.capturedAt = point.capturedAt.toISOString();
+        if (!offer.sourceMessageId) offer.sourceMessageId = point.sourceMessageId;
+        const rawValue = point.value as Record<string, unknown> | null;
+        if (rawValue && typeof rawValue === 'object' && rawValue['extractedBy'] === undefined) {
+          offer.extractedBy = point.extractedBy;
+        }
         const res = await persistPlacementOfferRow(tx, {
           profileId,
-          offer: parsed.data,
+          offer,
           sourceDataPointId: point.id,
         });
         if (res === 'created') created += 1;

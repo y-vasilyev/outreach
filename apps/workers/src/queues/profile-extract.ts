@@ -2,7 +2,6 @@ import { Worker } from 'bullmq';
 import { getRedis } from '../redis.js';
 import {
   buildHudTargetRow,
-  composeOffersFromRows,
   EXTRACTION_HINT_LIMIT,
   getSuggestionTargetField,
   hintsToOperatorStrings,
@@ -21,6 +20,7 @@ import {
   type RollupDataPoint,
 } from '@nosquare/shared';
 import {
+  composeOffersForRollup,
   getPrisma,
   persistPlacementOfferRow,
   Prisma,
@@ -124,26 +124,26 @@ export async function handleProfileExtract(data: {
   // latest message's id. Only when no `sourceMessageId` is given (manual/legacy
   // enqueue) do we fall back to the most recent inbound as both input + source.
   let sourceMessage:
-    | { id: string; text: string }
+    | { id: string; text: string; createdAt?: Date | null }
     | null = null;
   if (data.sourceMessageId) {
     const m = await prisma.message.findUnique({
       where: { id: data.sourceMessageId },
-      select: { id: true, text: true, conversationId: true, direction: true },
+      select: { id: true, text: true, conversationId: true, direction: true, createdAt: true },
     });
     // Guard: the id must be an inbound message of THIS conversation.
     if (m && m.conversationId === conv.id && m.direction === 'in_') {
-      sourceMessage = { id: m.id, text: m.text };
+      sourceMessage = { id: m.id, text: m.text, createdAt: m.createdAt };
     }
   }
   if (!sourceMessage) {
     const latest = await prisma.message.findFirst({
       where: { conversationId: conv.id, direction: 'in_' },
       orderBy: { createdAt: 'desc' },
-      select: { id: true, text: true },
+      select: { id: true, text: true, createdAt: true },
     });
     if (!latest) return { ok: true, skipped: 'no_inbound' };
-    sourceMessage = { id: latest.id, text: latest.text };
+    sourceMessage = { id: latest.id, text: latest.text, createdAt: latest.createdAt };
   }
 
   const sourceMessageId = sourceMessage.id;
@@ -375,7 +375,13 @@ export async function handleProfileExtract(data: {
     // the offer's rawSnippet (so two distinct offers from the same message —
     // e.g. day vs month post — both persist, but a re-run does not duplicate).
     {
-      const capturedAt = now.toISOString();
+      // Offer provenance `capturedAt` = the SOURCE MESSAGE timestamp, not the
+      // extraction time («когда блогер это сказал»): a delayed retry or an
+      // operator re-run of an OLD message must not look fresher than a newer
+      // quote — supersede-by-identity recency compares this value (codex
+      // review). The data-point row keeps `capturedAt = now` (when we learned
+      // it) for HUD freshness.
+      const capturedAt = (sourceMessage.createdAt ?? now).toISOString();
       for (const draft of placementOfferDrafts) {
         const offer = stampOfferProvenance(draft, {
           sourceMessageId,
@@ -471,30 +477,27 @@ export async function handleProfileExtract(data: {
       confidence: Number(p.confidence),
       capturedAt: p.capturedAt,
     }));
-    // placementOffers compose from the first-class offer ROWS when present
-    // (placement-offer-table D6) — only `active` rows, so superseded prices
-    // drop out of the catalog view. Profiles with no rows yet (pre-backfill
-    // window) fall back to the legacy compose-from-data-points path; the
-    // `rollup_source` log field makes silent fallback visible to ops.
-    const offerRows = await tx.placementOfferRow.findMany({
-      where: { profileId: profile.id },
-    });
-    const rollupSource = offerRows.length > 0 ? 'offer_rows' : 'legacy_fallback';
+    // placementOffers compose from the first-class offer ROWS when they fully
+    // cover the profile's placement.offer data points (placement-offer-table
+    // D6) — only `active` rows, so superseded prices drop out of the catalog
+    // view. No rows yet / partial coverage → legacy compose-from-data-points
+    // (never silently dropping uncovered offers); `rollup_source` makes the
+    // fallback visible to ops.
+    const offerPointIds = allPoints
+      .filter((p) => p.field === 'placement.offer')
+      .map((p) => p.id);
+    const composed = await composeOffersForRollup(tx, profile.id, offerPointIds, (rowId) =>
+      logger.warn(
+        { profileId: profile.id, offerRowId: rowId },
+        'placement_offer row unreadable; skipped from roll-up',
+      ),
+    );
     const rolled = rollUpProfileFields(
       rollupInput,
-      offerRows.length > 0
-        ? {
-            placementOffers: composeOffersFromRows(offerRows, (rowId) =>
-              logger.warn(
-                { profileId: profile.id, offerRowId: rowId },
-                'placement_offer row unreadable; skipped from roll-up',
-              ),
-            ),
-          }
-        : undefined,
+      composed.offers ? { placementOffers: composed.offers } : undefined,
     );
     logger.debug(
-      { profileId: profile.id, rollup_source: rollupSource, offerRows: offerRows.length },
+      { profileId: profile.id, rollup_source: composed.source },
       'placement offers composed',
     );
 

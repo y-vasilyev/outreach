@@ -835,9 +835,11 @@ model BloggerProfile {
 // written (rawPrice/rawSnippet/attributes); the typed columns exist for SQL
 // filters and mirror the offer-identity participants.
 //
-// NOTE: a partial unique index `(profile_id, identity_key) WHERE
-// status = 'active'` is created in migration 9f via raw SQL (Prisma cannot
-// express partial uniques) — at most one ACTIVE row per offer identity.
+// NOTE: two partial unique indexes are created in migration 9f via raw SQL
+// (Prisma cannot express partial uniques): `(profile_id, identity_key) WHERE
+// status = 'active'` — at most one ACTIVE row per offer identity — and
+// `(profile_id, source_data_point_id) WHERE source_data_point_id IS NOT NULL`
+// — the write/backfill idempotency key, race-proof against overlap.
 model PlacementOfferRow {
   id          String         @id @default(cuid())
   profileId   String         @map("profile_id")
@@ -882,7 +884,6 @@ model PlacementOfferRow {
   @@index([profileId, status])
   @@index([platform, kind, priceMin])
   @@index([capturedAt])
-  @@index([sourceDataPointId])
   @@index([profileId, sourceMessageId])
   @@map("placement_offer")
 }

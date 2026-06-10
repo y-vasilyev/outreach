@@ -2,7 +2,7 @@
 
 ### Requirement: Rolled-up placement offers compose from offer rows
 
-`BloggerProfile.placementOffers` SHALL be composed from `active` `placement_offer` rows, producing output byte-compatible with the legacy compose-from-data-points path (same shape, ordering, confidence floor). When a profile has no offer rows yet (pre-backfill window or dual-write incident override), composition SHALL fall back to the legacy data-point path and log which source was used.
+`BloggerProfile.placementOffers` SHALL be composed from `active` `placement_offer` rows, producing output byte-compatible with the legacy compose-from-data-points path (same shape, ordering, confidence floor). The rows path SHALL be used only when rows fully cover the profile's `placement.offer` data points; with no rows yet (pre-backfill window, dual-write incident override) or PARTIAL coverage (interrupted backfill, operator-created offer points), composition SHALL fall back to the legacy data-point path — never silently dropping uncovered offers — and log which source was used. Every profile re-roll path (extraction worker, operator markup edits) SHALL use this same rows-aware composition so superseded prices cannot resurface via a legacy re-roll.
 
 #### Scenario: Catalog reads are unchanged after the switch
 

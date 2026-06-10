@@ -38,7 +38,14 @@ CREATE TABLE "placement_offer" (
 CREATE INDEX "placement_offer_profile_id_status_idx" ON "placement_offer"("profile_id", "status");
 CREATE INDEX "placement_offer_platform_kind_price_min_idx" ON "placement_offer"("platform", "kind", "price_min");
 CREATE INDEX "placement_offer_captured_at_idx" ON "placement_offer"("captured_at");
-CREATE INDEX "placement_offer_source_data_point_id_idx" ON "placement_offer"("source_data_point_id");
+-- Idempotency key of the write/backfill helpers: one row per originating data
+-- point. UNIQUE (partial — operator-created rows may have no data point) so a
+-- backfill overlapping a live retry cannot insert a duplicate non-active row
+-- past the findFirst check; the losing transaction fails and retries as a
+-- no-op (codex review).
+CREATE UNIQUE INDEX "placement_offer_profile_source_dp_key"
+    ON "placement_offer"("profile_id", "source_data_point_id")
+    WHERE "source_data_point_id" IS NOT NULL;
 CREATE INDEX "placement_offer_profile_id_source_message_id_idx" ON "placement_offer"("profile_id", "source_message_id");
 
 -- Partial unique: at most ONE active row per offer identity per profile.

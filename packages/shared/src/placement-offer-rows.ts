@@ -265,8 +265,12 @@ export type OfferRowWriteDecision =
  *   - same price/currency → the confidence-band freshness rule picks the
  *     surviving `active` row (|Δconfidence| ≤ band → fresher wins, else higher
  *     confidence); the loser is/becomes `superseded`;
- *   - different price → the incoming row becomes `active`, the prior is
- *     superseded — that chain IS the price history.
+ *   - different price, incoming at least as recent → the incoming row becomes
+ *     `active`, the prior is superseded — that chain IS the price history;
+ *   - different price, incoming OLDER (delayed retry / out-of-order job /
+ *     re-run of an old message; `capturedAt` = source-message time) → the
+ *     incoming row lands directly as `superseded` so an outdated quote can
+ *     never dethrone the current price.
  */
 export function decideOfferRowWrite(
   incoming: { priceMin: number | null; currency: string; confidence: number; capturedAt: Date },
@@ -285,17 +289,20 @@ export function decideOfferRowWrite(
     return { insertStatus: 'active', supersedeExistingId: null, supersededById: null };
   }
   const existingPrice = decimalToNumber(existingActive.priceMin);
-  const samePrice =
-    existingPrice === incoming.priceMin &&
-    existingActive.currency.toLowerCase() === incoming.currency.toLowerCase();
-  if (!samePrice) {
-    return { insertStatus: 'active', supersedeExistingId: existingActive.id, supersededById: null };
-  }
-  const existingConf = decimalToNumber(existingActive.confidence) ?? 0;
   const existingMs =
     existingActive.capturedAt instanceof Date
       ? existingActive.capturedAt.getTime()
       : Date.parse(String(existingActive.capturedAt));
+  const samePrice =
+    existingPrice === incoming.priceMin &&
+    existingActive.currency.toLowerCase() === incoming.currency.toLowerCase();
+  if (!samePrice) {
+    if (incoming.capturedAt.getTime() >= existingMs) {
+      return { insertStatus: 'active', supersedeExistingId: existingActive.id, supersededById: null };
+    }
+    return { insertStatus: 'superseded', supersedeExistingId: null, supersededById: existingActive.id };
+  }
+  const existingConf = decimalToNumber(existingActive.confidence) ?? 0;
   const sameBand = Math.abs(existingConf - incoming.confidence) <= CONFIDENCE_BAND;
   const incomingWins = sameBand
     ? incoming.capturedAt.getTime() >= existingMs
