@@ -50,3 +50,7 @@ Non-goals: no `field_set` (write-direct) tool; no snapshots; no rollback UI; no 
 - **Web** (`apps/web`): inbox panel gains accept/reject UX; new admin divergence dashboard.
 - **Rollout**: ship schema + dual-write + shadow rollup flag-off; flip ON in staging; verify zero divergence on a representative 7-day window; flip ON for one campaign in prod; expand once divergence stays at zero for 30 days.
 - **Risk**: medium. The dual-write transaction is the key contract — if EAV write fails the legacy write must roll back. Ops dashboard is non-negotiable.
+
+## Relation to `placement-offer-table`
+
+The `placement_offer` table (change `placement-offer-table`, shipped ahead of this phase) is a **derived domain projection** of placement facts, optimized for catalog search — not a competing source of truth. Rules when this phase lands: (1) authority stays with facts (`ProfileDataPoint` now, `entity_value` after Phase 4); offer rows remain rebuildable from facts via the backfill path; (2) the shadow-rollup divergence check extends to offer rows (recompose from EAV values, diff against existing rows, log to `rollup_divergence`); (3) in Phase 4 the offer-row dual-write switches its source from the legacy data-point write to the EAV write — the table, its lifecycle (active/superseded chains), and its consumers are unchanged.
