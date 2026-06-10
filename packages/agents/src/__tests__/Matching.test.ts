@@ -255,6 +255,23 @@ describe('budget in normalized RUB (price-normalization-v2)', () => {
     expect(scored.rationale).toMatch(/CPM/);
   });
 
+  it('non-RUB offer WITHOUT a rate stays visible but outside ₽-comparisons', () => {
+    const brief = mkBrief({ topic: 'крипта', formats: ['telegram пост'], geo: [], budget: 30000 });
+    const usdNoRate = mkProfile({
+      id: 'usd_norate',
+      topics: ['крипта'],
+      formats: ['telegram_post'],
+      placementOffers: [mkOffer({ price: 400, currency: 'USD' })], // no normalized block
+    });
+    // $400 must NOT pass as «400 ₽ < 30 000 ₽»: the offer counts as
+    // price-unknown — shortlisted (visible), not budget-compared.
+    const res = isShortlisted(brief, usdNoRate, { useStructuredOffers: true });
+    expect(res.ok).toBe(true);
+    expect(scoreProfile(brief, usdNoRate, { useStructuredOffers: true }).rationale).toMatch(
+      /прайс неизвестен/,
+    );
+  });
+
   it('unnormalized offers fall back to the raw price (pre-migration behavior)', () => {
     const brief = mkBrief({ topic: 'крипта', formats: ['telegram пост'], geo: [], budget: 30000 });
     const plain = mkProfile({

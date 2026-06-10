@@ -1,4 +1,4 @@
-import { composeOffersForRollup, getPrisma, Prisma } from '@nosquare/db';
+import { getPrisma, Prisma, rerollBloggerProfile } from '@nosquare/db';
 import {
   AppError,
   coerceOperatorValue,
@@ -16,44 +16,14 @@ import { getQueues } from '../queues.js';
  * origin, re-rolled), and CRUD operator extraction hints.
  */
 
-/** Re-derive + persist a profile's rolled-up fields from its data points. */
+/**
+ * Re-derive + persist a profile's rolled-up fields from its data points.
+ * Delegates to the shared rows-aware reroll (placement-offer-table): supersede
+ * state lives only on the offer rows, so a legacy data-point re-roll would
+ * resurrect superseded prices (codex review).
+ */
 async function rerollProfile(profileId: string): Promise<void> {
-  const prisma = getPrisma();
-  const points = await prisma.profileDataPoint.findMany({ where: { profileId } });
-  const rollupInput: RollupDataPoint[] = points.map((p) => ({
-    field: p.field,
-    value: p.value,
-    unit: p.unit,
-    confidence: Number(p.confidence),
-    capturedAt: p.capturedAt,
-  }));
-  // Rows-aware composition (placement-offer-table): without this, an operator
-  // edit re-roll would resurrect superseded prices from the raw data points —
-  // supersede state lives only on the offer rows (codex review).
-  const composed = await composeOffersForRollup(
-    prisma,
-    profileId,
-    points.filter((p) => p.field === 'placement.offer').map((p) => p.id),
-  );
-  const rolled = rollUpProfileFields(
-    rollupInput,
-    composed.offers ? { placementOffers: composed.offers } : undefined,
-  );
-  await prisma.bloggerProfile.update({
-    where: { id: profileId },
-    data: {
-      topics: rolled.topics,
-      languages: rolled.languages,
-      formats: rolled.formats,
-      audience: rolled.audience as never,
-      rateCards: rolled.rateCards as never,
-      placementOffers: rolled.placementOffers as never,
-      platformAudience: rolled.platformAudience as never,
-      reach: rolled.reach,
-      avgViews: rolled.avgViews,
-      capturedAt: rolled.capturedAt ? new Date(rolled.capturedAt) : null,
-    },
-  });
+  await rerollBloggerProfile(getPrisma(), profileId);
 }
 
 export const operatorMarkupService = {

@@ -396,6 +396,11 @@ function readOfferTerms(offer: PlacementOffer): OfferTerms {
   const rawPrice =
     typeof offer.price === 'number' && Number.isFinite(offer.price) ? offer.price : null;
   const rubPrice = offer.normalized?.priceRubMin ?? null;
+  // Raw-price fallback applies to RUB only: a non-RUB offer with no current
+  // exchange rate stays VISIBLE but outside ₽-comparisons («прайс неизвестен»)
+  // — comparing $400 against a 30 000 ₽ budget as a raw number would wrongly
+  // shortlist it (codex review).
+  const isRub = (offer.currency ?? 'RUB').trim().toUpperCase() === 'RUB';
   return {
     platform,
     kind,
@@ -403,7 +408,7 @@ function readOfferTerms(offer: PlacementOffer): OfferTerms {
     durationLabel: durKey,
     isPermanent,
     deliverables,
-    price: rubPrice ?? rawPrice,
+    price: rubPrice ?? (isRub ? rawPrice : null),
     cpmRub: offer.normalized?.cpmRub ?? null,
     currency: offer.currency ?? 'RUB',
     fxAsOf: offer.normalized?.fxAsOf ?? null,

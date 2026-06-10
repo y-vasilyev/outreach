@@ -1,4 +1,4 @@
-import { Worker } from 'bullmq';
+import { Queue, Worker } from 'bullmq';
 import { getRedis } from '../redis.js';
 import {
   buildHudTargetRow,
@@ -629,6 +629,25 @@ export async function handleProfileExtract(data: {
     },
     'blogger profile data points persisted + rolled up',
   );
+
+  // CPM consistency (codex review): write-time normalization saw the views
+  // basis from BEFORE this extraction's roll-up. When this very message
+  // carried offers and/or fresh views, recompute the profile's CPM against
+  // the just-rolled values. Fire-and-forget — never fails extraction.
+  const wroteViews = drafts.some(
+    (d) => d.draft.field === 'views.avg' || d.draft.field === 'avg_views' || d.draft.field.startsWith('views.'),
+  );
+  if (placementOfferDrafts.length > 0 || wroteViews) {
+    try {
+      const renormalizeQueue = new Queue(QueueNames.offerRenormalize, { connection: getRedis() });
+      await renormalizeQueue.add('renormalize', { profileId: result.profileId });
+    } catch (err) {
+      logger.warn(
+        { profileId: result.profileId, err: (err as Error).message },
+        'offer-renormalize enqueue failed after extraction',
+      );
+    }
+  }
 
   // Data-collection HUD realtime patch (data-collection-hud-target-fields
   // change, Phase 1). One event per effective target the just-written

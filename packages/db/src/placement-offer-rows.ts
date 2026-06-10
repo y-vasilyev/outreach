@@ -3,8 +3,10 @@ import {
   composeOffersFromRows,
   decideOfferRowWrite,
   offerToRowFields,
+  rollUpProfileFields,
   type NormalizedOfferFields,
   type PlacementOffer,
+  type RollupDataPoint,
 } from '@nosquare/shared';
 
 /**
@@ -160,6 +162,53 @@ export async function composeOffersForRollup(
   const fullCoverage = offerDataPointIds.every((id) => covered.has(id));
   if (!fullCoverage) return { offers: undefined, source: 'legacy_partial' };
   return { offers: composeOffersFromRows(rows, onSkipRow), source: 'offer_rows' };
+}
+
+/**
+ * Re-derive + persist one profile's rolled-up fields from its data points,
+ * composing `placementOffers` rows-aware (one brain for operator-markup
+ * edits and the offer-renormalize worker — codex review: renormalization
+ * MUST refresh the profile JSON the matcher/UI read, not just the rows).
+ */
+export async function rerollBloggerProfile(
+  tx: Tx,
+  profileId: string,
+  onSkipRow?: (rowId: string) => void,
+): Promise<{ source: OfferRollupSource }> {
+  const points = await tx.profileDataPoint.findMany({ where: { profileId } });
+  const rollupInput: RollupDataPoint[] = points.map((p) => ({
+    field: p.field,
+    value: p.value,
+    unit: p.unit,
+    confidence: Number(p.confidence),
+    capturedAt: p.capturedAt,
+  }));
+  const composed = await composeOffersForRollup(
+    tx,
+    profileId,
+    points.filter((p) => p.field === 'placement.offer').map((p) => p.id),
+    onSkipRow,
+  );
+  const rolled = rollUpProfileFields(
+    rollupInput,
+    composed.offers ? { placementOffers: composed.offers } : undefined,
+  );
+  await tx.bloggerProfile.update({
+    where: { id: profileId },
+    data: {
+      topics: rolled.topics,
+      languages: rolled.languages,
+      formats: rolled.formats,
+      audience: rolled.audience as never,
+      rateCards: rolled.rateCards as never,
+      placementOffers: rolled.placementOffers as never,
+      platformAudience: rolled.platformAudience as never,
+      reach: rolled.reach,
+      avgViews: rolled.avgViews,
+      capturedAt: rolled.capturedAt ? new Date(rolled.capturedAt) : null,
+    },
+  });
+  return { source: composed.source };
 }
 
 /**

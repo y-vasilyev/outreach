@@ -6,7 +6,7 @@ import {
   resolveViewsBasis,
   type OfferRenormalizeJob,
 } from '@nosquare/shared';
-import { getPrisma } from '@nosquare/db';
+import { getPrisma, rerollBloggerProfile } from '@nosquare/db';
 import { getRedis } from '../redis.js';
 import { logger } from '../logger.js';
 
@@ -79,11 +79,27 @@ export async function handleOfferRenormalize(data: OfferRenormalizeJob): Promise
     });
     updated += 1;
   }
+
+  // The matcher and the UI read `bloggerProfile.placementOffers` JSON, not the
+  // rows — re-roll every affected profile so the new normalization is what
+  // they actually see (codex review).
+  for (const profileId of profileIds) {
+    await rerollBloggerProfile(prisma, profileId, (rowId) =>
+      logger.warn({ profileId, offerRowId: rowId }, 'placement_offer row unreadable; skipped'),
+    );
+  }
+
   logger.info(
-    { event: 'offer.renormalized', currency: data.currency, profileId: data.profileId, updated },
-    'active placement-offer rows renormalized',
+    {
+      event: 'offer.renormalized',
+      currency: data.currency,
+      profileId: data.profileId,
+      updated,
+      profilesRerolled: profileIds.length,
+    },
+    'active placement-offer rows renormalized + profiles rerolled',
   );
-  return { ok: true, updated };
+  return { ok: true, updated, profilesRerolled: profileIds.length };
 }
 
 export function startOfferRenormalizeWorker() {

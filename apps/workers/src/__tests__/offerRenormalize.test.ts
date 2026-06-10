@@ -8,7 +8,8 @@ const mocks = vi.hoisted(() => {
   const prisma = {
     placementOfferRow: { findMany: vi.fn(), update: vi.fn() },
     exchangeRate: { findMany: vi.fn() },
-    bloggerProfile: { findMany: vi.fn() },
+    bloggerProfile: { findMany: vi.fn(), update: vi.fn() },
+    profileDataPoint: { findMany: vi.fn() },
   };
   return { prisma };
 });
@@ -47,6 +48,8 @@ beforeEach(() => {
       postInsights: [],
     },
   ]);
+  mocks.prisma.bloggerProfile.update.mockResolvedValue({});
+  mocks.prisma.profileDataPoint.findMany.mockResolvedValue([]);
 });
 
 describe('handleOfferRenormalize', () => {
@@ -77,6 +80,10 @@ describe('handleOfferRenormalize', () => {
     expect(upd.data['priceRubMin']).toBe(36960);
     expect(upd.data['cpmRub']).toBe(3696); // avgViews fallback basis
     expect(upd.data['viewsSource']).toBe('profile_avg');
+    // The profile JSON the matcher/UI read is re-rolled, not just the rows.
+    expect(mocks.prisma.bloggerProfile.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'p1' } }),
+    );
   });
 
   it('deleted rate → derived columns drop to null (visible, excluded from ₽-filters)', async () => {

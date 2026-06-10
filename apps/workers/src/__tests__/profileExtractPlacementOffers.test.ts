@@ -40,7 +40,7 @@ vi.mock('@nosquare/db', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@nosquare/db')>();
   return { ...actual, getPrisma: () => mocks.prisma, Prisma: { JsonNull: null } };
 });
-vi.mock('bullmq', () => ({ Worker: class {} }));
+vi.mock('bullmq', () => ({ Worker: class {}, Queue: class { add = vi.fn(async () => ({})); } }));
 vi.mock('../redis.js', () => ({ getRedis: () => ({}) }));
 vi.mock('../services/run-agent-safe.js', () => ({ runAgentSafe: mocks.runAgentSafe }));
 vi.mock('../services/realtime-emit.js', () => ({ publishRealtime: mocks.publishRealtime }));
