@@ -206,6 +206,7 @@ function mkOffer(over: Partial<PlacementOffer> = {}): PlacementOffer {
     attributes: [],
     confidence: 0.9,
     rawSnippet: '',
+    rawPrice: '',
     sourceMessageId: null,
     extractedBy: 'llm',
     capturedAt: null,

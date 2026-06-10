@@ -822,8 +822,69 @@ model BloggerProfile {
   mediaAssets  MediaAsset[]
   matchResults MatchResult[]
   postInsights BloggerPostInsight[]
+  offerRows    PlacementOfferRow[]
 
   @@map("blogger_profile")
+}
+
+// First-class placement-offer rows (placement-offer-table). One row per
+// extracted commercial offer — a derived, indexable projection of the
+// `placement.offer` ProfileDataPoint facts, optimized for catalog search and
+// price history. Lifecycle is append-only: rows are superseded (status +
+// supersededById chain), never deleted. Raw source data is immutable once
+// written (rawPrice/rawSnippet/attributes); the typed columns exist for SQL
+// filters and mirror the offer-identity participants.
+//
+// NOTE: a partial unique index `(profile_id, identity_key) WHERE
+// status = 'active'` is created in migration 9f via raw SQL (Prisma cannot
+// express partial uniques) — at most one ACTIVE row per offer identity.
+model PlacementOfferRow {
+  id          String         @id @default(cuid())
+  profileId   String         @map("profile_id")
+  profile     BloggerProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  platform    String?
+  kind        String
+  // Single-price offers store priceMin = priceMax; term-only offers store both
+  // null. (priceMax=null with non-null priceMin = open-ended «от»-range,
+  // emitted by extraction from price-normalization-v2 onward.)
+  priceMin    Decimal?       @map("price_min")
+  priceMax    Decimal?       @map("price_max")
+  currency    String         @default("RUB")
+  // Identity attributes (duplicated out of `attributes` for SQL filters; the
+  // verbatim attribute list in `attributes` stays the source of truth).
+  duration    String?
+  tariffName  String?        @map("tariff_name")
+  slot        String?
+  // offerIdentityKey() — platform|kind|duration|tariff|slot. One active row
+  // per (profileId, identityKey); price changes supersede along this key.
+  identityKey String         @map("identity_key")
+  // 'active' | 'superseded' | 'low_confidence'
+  status      String         @default("active")
+  supersededById String?     @map("superseded_by_id")
+  confidence  Decimal        @default(0)
+  // Verbatim PlacementAttribute[] as extracted — including keys that are not
+  // (yet) active in the registry. Never trimmed to the typed columns.
+  attributes  Json           @default("[]")
+  // Literal price text as written («от 118 000») so lossy coercion stays
+  // reversible. Empty when extraction had no separate price token.
+  rawPrice    String         @default("") @map("raw_price")
+  rawSnippet  String         @default("") @map("raw_snippet")
+  // Plain references (no FK): the originating ProfileDataPoint row may still
+  // be physically deleted by the legacy supersede path until
+  // extraction-provenance lands; Message follows the sourceMessageId
+  // precedent on ProfileDataPoint.
+  sourceDataPointId String?  @map("source_data_point_id")
+  sourceMessageId   String?  @map("source_message_id")
+  extractedBy String         @default("llm") @map("extracted_by")
+  capturedAt  DateTime       @default(now()) @map("captured_at")
+  createdAt   DateTime       @default(now()) @map("created_at")
+
+  @@index([profileId, status])
+  @@index([platform, kind, priceMin])
+  @@index([capturedAt])
+  @@index([sourceDataPointId])
+  @@index([profileId, sourceMessageId])
+  @@map("placement_offer")
 }
 
 // Public post evidence for catalog relevance/top-post previews. Source data is

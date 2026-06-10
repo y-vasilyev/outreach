@@ -4,6 +4,7 @@ import {
   AppError,
   BloggerPostMetricsZ,
   buildFitBreakdown,
+  buildOfferHistory,
   buildBloggerProfilePresentation,
   computePostMetricFreshness,
   Errors,
@@ -528,6 +529,9 @@ export const bloggerProfilesService = {
         // the detail view can offer a (presigned) download per asset. We expose
         // only safe metadata — never the s3Key or any credential.
         mediaAssets: { orderBy: { createdAt: 'desc' } },
+        // First-class offer rows (placement-offer-table): grouped into
+        // per-identity price history below — active row + superseded chain.
+        offerRows: { orderBy: { capturedAt: 'desc' } },
       },
     });
     if (!profile) throw Errors.notFound('blogger_profile', id);
@@ -548,14 +552,19 @@ export const bloggerProfilesService = {
         capturedAt: dp.capturedAt,
       })),
     );
+    const { offerRows, ...profileRest } = profile;
     const serialized = {
-      ...profile,
+      ...profileRest,
       // Prisma serializes Decimal to a string over JSON; map confidence back to
       // a JS number at the API boundary so the frontend gets a real number.
       dataPoints: profile.dataPoints.map((dp) => ({
         ...dp,
         confidence: Number(dp.confidence),
       })),
+      // Per-identity offer price history (placement-offer-table): active row +
+      // superseded generations, so an operator can audit «как менялась цена»
+      // without raw SQL. Decimals are mapped to numbers in the builder.
+      offerHistory: buildOfferHistory(offerRows ?? []),
       mediaAssets: profile.mediaAssets.map((a) => ({
         id: a.id,
         kind: a.kind,

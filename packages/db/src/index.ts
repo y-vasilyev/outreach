@@ -14,3 +14,4 @@ export function getPrisma(): PrismaClient {
 export type { PrismaClient } from '@prisma/client';
 export * from '@prisma/client';
 export * from './crypto.js';
+export * from './placement-offer-rows.js';

@@ -21,7 +21,8 @@
     "db:migrate:deploy": "pnpm --filter @nosquare/db prisma:migrate:deploy",
     "db:seed": "pnpm --filter @nosquare/db seed",
     "db:studio": "pnpm --filter @nosquare/db prisma:studio",
-    "db:reset": "pnpm --filter @nosquare/db prisma:reset"
+    "db:reset": "pnpm --filter @nosquare/db prisma:reset",
+    "db:backfill:offers": "pnpm --filter @nosquare/db backfill:offers"
   },
   "devDependencies": {
     "@types/node": "^20.12.7",

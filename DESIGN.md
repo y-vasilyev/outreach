@@ -531,6 +531,19 @@ profile_data_point (                 -- провенанс: один факт + 
   id, profile_id FK, field, value JSONB, unit, confidence,
   extracted_by, source_message_id, raw_snippet, captured_at
 )
+placement_offer (                    -- первоклассные строки офферов (9f):
+  id, profile_id FK,                 -- индексируемая проекция placement.offer-
+  platform, kind,                    -- фактов для SQL-поиска и истории цен
+  price_min, price_max, currency,    -- min=max для одиночной цены; null = term-only
+  duration, tariff_name, slot,       -- identity-атрибуты (дубль из attributes)
+  identity_key,                      -- offerIdentityKey(); partial unique:
+                                     --   (profile_id, identity_key) WHERE status='active'
+  status,                            -- active | superseded | low_confidence (НЕ удаляются)
+  superseded_by_id,                  -- цепочка замен = история цен
+  confidence, attributes JSONB,      -- attributes — вербатим, включая неактивные ключи
+  raw_price, raw_snippet,            -- сырьё: литеральный токен цены + фрагмент
+  source_data_point_id, source_message_id, extracted_by, captured_at
+)
 media_asset (                        -- файлы в S3 + снапшоты сырья
   id, conversation_id, profile_id FK, kind, s3_key, mime, bytes, sha256, source_tg_msg_id
 )
@@ -552,6 +565,25 @@ src/schemas/ajtbd.ts`): для `custdev` это passthrough AJTBD-формы; д
 дропнута миграциями `9b_backfill_campaign_goal_from_ajtbd` +
 `9c_drop_campaign_ajtbd` (см. archived openspec change
 `drop-campaign-ajtbd-column`).
+
+### Placement-offer rows (placement-offer-table)
+
+Структурированные офферы — канонический выход экстракции — дополнительно
+материализуются в таблицу `placement_offer` (см. выше): воркер `profile-extract`
+пишет строку в ТОЙ ЖЕ транзакции, что и `placement.offer`-датапоинт
+(`persistPlacementOfferRow` из `@nosquare/db`; идемпотентно по
+`(profile_id, source_data_point_id)`). Supersede-by-identity: новая цена того же
+продукта (`offerIdentityKey()`: platform|kind|duration|tariff|slot — единый
+хелпер для воркера, roll-up'а и бэкфилла) переводит прежнюю active-строку в
+`superseded` с `superseded_by_id` — это и есть история цен; строки никогда не
+удаляются, операторский re-run тоже только помечает. `BloggerProfile.
+placementOffers` собирается из `active`-строк (`composeOffersFromRows`),
+с фолбэком на легаси-композицию из датапоинтов для профилей без строк
+(лог `rollup_source`). `GET /blogger-profiles/:id` отдаёт `offerHistory`
+(active + цепочка по каждой identity). Бэкфилл истории: `pnpm
+db:backfill:offers` (идемпотентный, хронологический replay). Сырьё неизменно:
+`raw_price` хранит литеральный токен цены («от 118 000») — лосси-коерция
+обратима.
 
 ### Object storage (`packages/storage`)
 

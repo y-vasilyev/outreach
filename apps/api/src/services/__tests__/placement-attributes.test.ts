@@ -129,6 +129,7 @@ describe('approved attribute joins the active registry', () => {
       platform: 'telegram',
       price: 15000,
       currency: 'RUB',
+      rawPrice: '',
       confidence: 0.9,
       rawSnippet: 'пост 15000',
       attributes: [

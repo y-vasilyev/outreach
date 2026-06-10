@@ -233,6 +233,8 @@ interface LabeledFormatPrice {
   price: number;
   currency: string;
   rawSnippet: string;
+  /** Literal price token as written («50 тыс», «от 118 000»). */
+  rawPrice: string;
 }
 
 const LABELED_FORMAT_PRICE_RE_SOURCE = String.raw`(?:стоимост[а-яё]*|цена|стоит|прайс)\s+(?:[A-Za-zА-Яа-яЁё-]+\s+){0,3}?((?:фото|видео)?\s?-?\s?(?:пост|сторис|stories|story|рилс|reels|видео|video|интеграц[а-яё]*|кружок|клип|clips?|shorts|шортс))[а-яё]*\s*(?:[:—–-]\s*)?`;
@@ -249,6 +251,7 @@ function extractLabeledFormatPrices(line: string): LabeledFormatPrice[] {
       price,
       currency: parseCurrency(m[3]),
       rawSnippet: cleanRawSnippet(m[0] ?? ''),
+      rawPrice: (m[2] ?? '').trim(),
     });
   }
   return out;
@@ -595,6 +598,7 @@ function extractInlineOffersFromLine(
       attributes,
       confidence: 0.96,
       rawSnippet,
+      rawPrice: (m[4] ?? '').trim(),
     });
   }
 
@@ -631,6 +635,7 @@ function extractInlineOffersFromLine(
           attributes,
           confidence: 0.92,
           rawSnippet,
+          rawPrice: (m[1] ?? '').trim(),
         });
       }
     }
@@ -686,6 +691,7 @@ function extractTableOffersFromLine(
       ? 0.78
       : 0.95,
     rawSnippet: line,
+    rawPrice: (m[2] ?? '').trim(),
   });
 }
 
@@ -733,6 +739,7 @@ function extractLabeledOffersFromLine(
       attributes,
       confidence: 0.9,
       rawSnippet: lp.rawSnippet,
+      rawPrice: lp.rawPrice,
     });
   }
 }
@@ -844,6 +851,7 @@ function extractCommaPairOffersFromLine(
       attributes,
       confidence: 0.82,
       rawSnippet: frag,
+      rawPrice: best.rawPrice,
     });
   }
   if (candidates.length < 2) return;
@@ -863,13 +871,17 @@ function isTopPinLine(line: string): boolean {
 }
 
 /** Largest price in a text fragment (placement prices dwarf duration numbers). */
-function maxPriceInFragment(frag: string): { price: number; currency: string } | null {
+function maxPriceInFragment(
+  frag: string,
+): { price: number; currency: string; rawPrice: string } | null {
   const re = new RegExp(PRICE_WITH_CURRENCY_RE_SOURCE, 'giu');
-  let best: { price: number; currency: string } | null = null;
+  let best: { price: number; currency: string; rawPrice: string } | null = null;
   for (const m of frag.matchAll(re)) {
     const price = parsePrice(m[1] ?? '');
     if (price == null) continue;
-    if (!best || price > best.price) best = { price, currency: parseCurrency(m[2]) };
+    if (!best || price > best.price) {
+      best = { price, currency: parseCurrency(m[2]), rawPrice: (m[1] ?? '').trim() };
+    }
   }
   return best;
 }
@@ -923,6 +935,7 @@ function extractDurationLadderOffersFromLine(
       attributes,
       confidence: 0.85,
       rawSnippet: frag,
+      rawPrice: best.rawPrice,
     };
     const sig = offerSignature(draft);
     if (existing.has(sig)) continue;
@@ -960,6 +973,7 @@ function extractPricePerUnitOffersFromLine(
       attributes: [],
       confidence: 0.85,
       rawSnippet: m[0].trim(),
+      rawPrice: (m[1] ?? '').trim(),
     };
     const sig = offerSignature(draft);
     if (existing.has(sig)) continue;
@@ -1002,6 +1016,7 @@ function extractPackageOffersFromLine(
     attributes,
     confidence: 0.8,
     rawSnippet: line,
+    rawPrice: best.rawPrice,
   });
 }
 

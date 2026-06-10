@@ -12,6 +12,7 @@ function offerPoint(confidence: number, price: number, extra: Partial<PlacementO
     attributes: [{ key: 'duration', value: 'day', confidence: 1, rawSnippet: '' }],
     confidence,
     rawSnippet: `post ${price}`,
+    rawPrice: '',
     sourceMessageId: 'm1',
     extractedBy: 'rate_card_extractor',
     capturedAt: '2026-06-01T00:00:00.000Z',

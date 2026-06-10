@@ -89,12 +89,28 @@ export const KNOWN_PLACEMENT_KINDS = [
 export type KnownPlacementKind = (typeof KNOWN_PLACEMENT_KINDS)[number];
 
 /**
+ * Stash the literal price text into `rawPrice` BEFORE `PriceCoerceZ` collapses
+ * it to a number (placement-offer-table: lossy coercion must stay reversible —
+ * «от 118 000» → priceMin 118000, but the row keeps the verbatim token).
+ * Only fires when the input price is a string and no rawPrice was provided.
+ */
+function stashRawPrice(v: unknown): unknown {
+  if (v && typeof v === 'object' && !Array.isArray(v)) {
+    const o = v as Record<string, unknown>;
+    if (typeof o['price'] === 'string' && !o['rawPrice']) {
+      return { ...o, rawPrice: o['price'] };
+    }
+  }
+  return v;
+}
+
+/**
  * Structured placement offer as emitted by extraction (a "draft" — provenance
  * fields `sourceMessageId`/`extractedBy`/`capturedAt` are stamped on persist by
  * the worker). `price` is nullable so an ambiguous package whose price is known
  * but whose unit is not, or a term-only offer, is still preserved.
  */
-export const PlacementOfferDraftZ = z.object({
+const PlacementOfferDraftShapeZ = z.object({
   kind: z.string().min(1),
   /** Platform (telegram/youtube/instagram/vk/tiktok) — promoted hot field. */
   platform: z.string().nullish().transform((v) => v ?? null),
@@ -103,7 +119,10 @@ export const PlacementOfferDraftZ = z.object({
   attributes: z.array(PlacementAttributeZ).default([]),
   confidence: z.number().min(0).max(1).default(0.5),
   rawSnippet: z.string().default(''),
+  /** Literal price text as written, when the source had one («от 118 000»). */
+  rawPrice: z.string().default(''),
 });
+export const PlacementOfferDraftZ = z.preprocess(stashRawPrice, PlacementOfferDraftShapeZ);
 export type PlacementOfferDraft = z.infer<typeof PlacementOfferDraftZ>;
 
 /**
@@ -111,11 +130,14 @@ export type PlacementOfferDraft = z.infer<typeof PlacementOfferDraftZ>;
  * the shape stored in the `placement.offer` data-point value and surfaced on
  * `BloggerProfile.placementOffers` and in the profile read API.
  */
-export const PlacementOfferZ = PlacementOfferDraftZ.extend({
-  sourceMessageId: z.string().nullable().default(null),
-  extractedBy: z.string().default('llm'),
-  capturedAt: z.string().nullable().default(null),
-});
+export const PlacementOfferZ = z.preprocess(
+  stashRawPrice,
+  PlacementOfferDraftShapeZ.extend({
+    sourceMessageId: z.string().nullable().default(null),
+    extractedBy: z.string().default('llm'),
+    capturedAt: z.string().nullable().default(null),
+  }),
+);
 export type PlacementOffer = z.infer<typeof PlacementOfferZ>;
 
 /**

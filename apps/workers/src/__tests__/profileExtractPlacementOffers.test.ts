@@ -20,6 +20,13 @@ const mocks = vi.hoisted(() => {
     placementAttribute: { create: vi.fn(), findFirst: vi.fn(), deleteMany: vi.fn() },
     extractionHint: { findMany: vi.fn() },
     mediaAsset: { updateMany: vi.fn(), deleteMany: vi.fn(), create: vi.fn() },
+    placementOfferRow: {
+      findFirst: vi.fn(),
+      findMany: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      updateMany: vi.fn(),
+    },
     $transaction: vi.fn(),
   };
   const runAgentSafe = vi.fn();
@@ -28,7 +35,10 @@ const mocks = vi.hoisted(() => {
   return { prisma, runAgentSafe, publishRealtime, flagState };
 });
 
-vi.mock('@nosquare/db', () => ({ getPrisma: () => mocks.prisma, Prisma: { JsonNull: null } }));
+vi.mock('@nosquare/db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@nosquare/db')>();
+  return { ...actual, getPrisma: () => mocks.prisma, Prisma: { JsonNull: null } };
+});
 vi.mock('bullmq', () => ({ Worker: class {} }));
 vi.mock('../redis.js', () => ({ getRedis: () => ({}) }));
 vi.mock('../services/run-agent-safe.js', () => ({ runAgentSafe: mocks.runAgentSafe }));
@@ -89,7 +99,7 @@ beforeEach(() => {
   });
   mocks.prisma.bloggerProfile.upsert.mockResolvedValue({ id: 'prof1', channelId: 'ch1' });
   mocks.prisma.bloggerProfile.update.mockResolvedValue({});
-  mocks.prisma.profileDataPoint.create.mockResolvedValue({});
+  mocks.prisma.profileDataPoint.create.mockResolvedValue({ id: 'dp1' });
   mocks.prisma.profileDataPoint.findFirst.mockResolvedValue(null);
   mocks.prisma.profileDataPoint.findMany.mockResolvedValue([]);
   mocks.prisma.placementAttribute.create.mockResolvedValue({});
@@ -102,6 +112,11 @@ beforeEach(() => {
   mocks.prisma.mediaAsset.updateMany.mockResolvedValue({ count: 0 });
   mocks.prisma.mediaAsset.deleteMany.mockResolvedValue({ count: 0 });
   mocks.prisma.mediaAsset.create.mockResolvedValue({});
+  mocks.prisma.placementOfferRow.findFirst.mockResolvedValue(null);
+  mocks.prisma.placementOfferRow.findMany.mockResolvedValue([]);
+  mocks.prisma.placementOfferRow.create.mockResolvedValue({ id: 'or1' });
+  mocks.prisma.placementOfferRow.update.mockResolvedValue({});
+  mocks.prisma.placementOfferRow.updateMany.mockResolvedValue({ count: 0 });
   mocks.prisma.$transaction.mockImplementation(
     async (fn: (tx: typeof mocks.prisma) => Promise<unknown>) => fn(mocks.prisma),
   );

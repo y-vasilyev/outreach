@@ -13,6 +13,16 @@ const mocks = vi.hoisted(() => {
     bloggerProfile: { upsert: vi.fn(), update: vi.fn() },
     profileDataPoint: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn() },
     placementAttribute: { findFirst: vi.fn(), create: vi.fn(), deleteMany: vi.fn() },
+    // First-class offer rows (placement-offer-table): the worker dual-writes
+    // them through the REAL @nosquare/db helpers (importOriginal below), so
+    // the mock only fakes the prisma model.
+    placementOfferRow: {
+      findFirst: vi.fn(),
+      findMany: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      updateMany: vi.fn(),
+    },
     extractionHint: { findMany: vi.fn() },
     // harden-agency-sourcing-pipeline: profile-extract backfills
     // pre-profile media assets when the catalog profile appears.
@@ -26,7 +36,10 @@ const mocks = vi.hoisted(() => {
   return { prisma, runAgentSafe, publishRealtime, flagState };
 });
 
-vi.mock('@nosquare/db', () => ({ getPrisma: () => mocks.prisma, Prisma: { JsonNull: null } }));
+vi.mock('@nosquare/db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@nosquare/db')>();
+  return { ...actual, getPrisma: () => mocks.prisma, Prisma: { JsonNull: null } };
+});
 vi.mock('bullmq', () => ({ Worker: class {} }));
 vi.mock('../redis.js', () => ({ getRedis: () => ({}) }));
 vi.mock('../services/run-agent-safe.js', () => ({ runAgentSafe: mocks.runAgentSafe }));
@@ -61,7 +74,12 @@ beforeEach(() => {
   });
   mocks.prisma.bloggerProfile.upsert.mockResolvedValue({ id: 'prof1', channelId: 'ch1' });
   mocks.prisma.bloggerProfile.update.mockResolvedValue({});
-  mocks.prisma.profileDataPoint.create.mockResolvedValue({});
+  mocks.prisma.profileDataPoint.create.mockResolvedValue({ id: 'dp1' });
+  mocks.prisma.placementOfferRow.findFirst.mockResolvedValue(null);
+  mocks.prisma.placementOfferRow.findMany.mockResolvedValue([]);
+  mocks.prisma.placementOfferRow.create.mockResolvedValue({ id: 'or1' });
+  mocks.prisma.placementOfferRow.update.mockResolvedValue({});
+  mocks.prisma.placementOfferRow.updateMany.mockResolvedValue({ count: 0 });
   mocks.prisma.profileDataPoint.findFirst.mockResolvedValue(null);
   mocks.prisma.profileDataPoint.findMany.mockResolvedValue([]);
   mocks.prisma.profileDataPoint.deleteMany.mockResolvedValue({ count: 0 });
@@ -293,6 +311,143 @@ Instagram — https://instagram.com/polyaam?igshid=YmMyMTA2M2Y
     });
     expect(result).toMatchObject({ ok: true, channelId: 'ch1', dataPoints: 0 });
     expect(mocks.prisma.profileDataPoint.create).not.toHaveBeenCalled();
+  });
+
+  it('dual-writes a placement_offer row per extracted offer in the same tx (placement-offer-table)', async () => {
+    mocks.runAgentSafe.mockImplementation(async (name: string) => {
+      if (name === 'rate_card_extractor') {
+        return {
+          data_points: [],
+          placement_offers: [
+            {
+              kind: 'post',
+              platform: 'telegram',
+              price: 47000,
+              currency: 'RUB',
+              attributes: [{ key: 'duration', value: 'month', confidence: 1, rawSnippet: '' }],
+              confidence: 0.9,
+              rawSnippet: 'пост на месяц 47 000',
+              rawPrice: '47 000',
+            },
+          ],
+        };
+      }
+      return { data_points: [] };
+    });
+    mocks.prisma.profileDataPoint.findMany.mockResolvedValue([]);
+
+    await handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1' });
+
+    // The offer landed BOTH as a placement.offer data point AND as a row.
+    expect(mocks.prisma.profileDataPoint.create).toHaveBeenCalledTimes(1);
+    expect(mocks.prisma.placementOfferRow.create).toHaveBeenCalledTimes(1);
+    const rowData = (mocks.prisma.placementOfferRow.create.mock.calls[0]![0] as {
+      data: Record<string, unknown>;
+    }).data;
+    expect(rowData).toMatchObject({
+      profileId: 'prof1',
+      platform: 'telegram',
+      kind: 'post',
+      priceMin: 47000,
+      priceMax: 47000,
+      currency: 'RUB',
+      duration: 'month',
+      identityKey: 'telegram|post|month|||',
+      status: 'active',
+      rawPrice: '47 000',
+      sourceDataPointId: 'dp1',
+      sourceMessageId: 'm1',
+    });
+  });
+
+  it('price change supersedes the prior active row instead of duplicating or deleting', async () => {
+    mocks.runAgentSafe.mockImplementation(async (name: string) => {
+      if (name === 'rate_card_extractor') {
+        return {
+          data_points: [],
+          placement_offers: [
+            {
+              kind: 'post',
+              platform: 'telegram',
+              price: 52000,
+              currency: 'RUB',
+              attributes: [{ key: 'duration', value: 'month', confidence: 1, rawSnippet: '' }],
+              confidence: 0.9,
+              rawSnippet: 'теперь пост 52 000',
+            },
+          ],
+        };
+      }
+      return { data_points: [] };
+    });
+    mocks.prisma.profileDataPoint.findMany.mockResolvedValue([]);
+    // First findFirst = idempotency probe (by sourceDataPointId) → null;
+    // second findFirst = active-by-identity lookup → the prior 47k row.
+    mocks.prisma.placementOfferRow.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: 'or_old',
+        priceMin: 47000,
+        currency: 'RUB',
+        confidence: 0.9,
+        capturedAt: new Date('2026-06-01T00:00:00Z'),
+      });
+
+    await handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1' });
+
+    // Old row flipped to superseded BEFORE the new active insert, then chained.
+    const updates = mocks.prisma.placementOfferRow.update.mock.calls.map((c) => c[0]);
+    expect(updates[0]).toMatchObject({ where: { id: 'or_old' }, data: { status: 'superseded' } });
+    expect(updates[1]).toMatchObject({ where: { id: 'or_old' }, data: { supersededById: 'or1' } });
+    const rowData = (mocks.prisma.placementOfferRow.create.mock.calls[0]![0] as {
+      data: Record<string, unknown>;
+    }).data;
+    expect(rowData).toMatchObject({ status: 'active', priceMin: 52000 });
+  });
+
+  it('operator supersede re-run marks offer rows superseded (no deletes) and rolls up from rows', async () => {
+    mocks.runAgentSafe.mockImplementation(async () => ({ data_points: [] }));
+    mocks.prisma.profileDataPoint.findMany.mockResolvedValue([]);
+    const rowsInDb = [
+      {
+        id: 'or_live',
+        platform: 'telegram',
+        kind: 'post',
+        priceMin: 47000,
+        priceMax: 47000,
+        currency: 'RUB',
+        identityKey: 'telegram|post|month|||',
+        status: 'active',
+        confidence: 0.9,
+        attributes: [{ key: 'duration', value: 'month', confidence: 1, rawSnippet: '' }],
+        rawPrice: '',
+        rawSnippet: 'пост 47 000',
+        sourceMessageId: 'm_other',
+        sourceDataPointId: 'dp_other',
+        extractedBy: 'rate_card_extractor',
+        capturedAt: new Date('2026-06-01T00:00:00Z'),
+        createdAt: new Date('2026-06-01T00:00:00Z'),
+      },
+    ];
+    mocks.prisma.placementOfferRow.findMany.mockResolvedValue(rowsInDb);
+    mocks.prisma.placementOfferRow.updateMany.mockResolvedValue({ count: 1 });
+
+    await handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1', supersede: true });
+
+    expect(mocks.prisma.placementOfferRow.updateMany).toHaveBeenCalledWith({
+      where: {
+        profileId: 'prof1',
+        sourceMessageId: 'm1',
+        status: { in: ['active', 'low_confidence'] },
+      },
+      data: { status: 'superseded' },
+    });
+    // Roll-up composed placementOffers from the surviving rows.
+    const update = mocks.prisma.bloggerProfile.update.mock.calls.at(-1)![0] as {
+      data: { placementOffers: Array<{ price: number }> };
+    };
+    expect(update.data.placementOffers).toHaveLength(1);
+    expect(update.data.placementOffers[0]!.price).toBe(47000);
   });
 
   it('backfills mediaAsset.profileId for pre-profile assets on the same conversation', async () => {

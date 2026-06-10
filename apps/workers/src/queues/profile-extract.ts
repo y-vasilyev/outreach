@@ -2,6 +2,7 @@ import { Worker } from 'bullmq';
 import { getRedis } from '../redis.js';
 import {
   buildHudTargetRow,
+  composeOffersFromRows,
   EXTRACTION_HINT_LIMIT,
   getSuggestionTargetField,
   hintsToOperatorStrings,
@@ -19,7 +20,12 @@ import {
   type ProfileDataPointDraft,
   type RollupDataPoint,
 } from '@nosquare/shared';
-import { getPrisma, Prisma } from '@nosquare/db';
+import {
+  getPrisma,
+  persistPlacementOfferRow,
+  Prisma,
+  supersedeOfferRowsForMessage,
+} from '@nosquare/db';
 import { getFeatureFlags } from '../feature-flags.js';
 import { logger } from '../logger.js';
 import { publishRealtime } from '../services/realtime-emit.js';
@@ -329,6 +335,10 @@ export async function handleProfileExtract(data: {
       await tx.mediaAsset.deleteMany({
         where: { profileId: profile.id, messageId: sourceMessageId, kind: 'raw_payload' },
       });
+      // Offer ROWS are append-only (placement-offer-table): the prior
+      // generation is marked superseded, never deleted — the audit trail of
+      // «что мы считали верным до переразбора» survives the re-run.
+      await supersedeOfferRowsForMessage(tx, { profileId: profile.id, sourceMessageId });
     }
 
     for (const { extractedBy, draft } of drafts) {
@@ -383,19 +393,37 @@ export async function handleProfileExtract(data: {
           },
           select: { id: true },
         });
-        if (existing) continue;
-        await tx.profileDataPoint.create({
-          data: {
-            profileId: profile.id,
-            field: 'placement.offer',
-            value: value as never,
-            unit: value.currency,
-            confidence: value.confidence,
-            extractedBy: 'rate_card_extractor',
-            sourceMessageId,
-            rawSnippet: value.rawSnippet,
-            capturedAt: now,
-          },
+        // The offer ROW is keyed to its originating data point: reuse the
+        // existing row id on idempotent re-delivery, otherwise create both.
+        // `persistPlacementOfferRow` is itself idempotent on
+        // (profileId, sourceDataPointId), so either way re-runs are no-ops.
+        let dataPointId: string;
+        if (existing) {
+          dataPointId = existing.id;
+        } else {
+          const createdDp = await tx.profileDataPoint.create({
+            data: {
+              profileId: profile.id,
+              field: 'placement.offer',
+              value: value as never,
+              unit: value.currency,
+              confidence: value.confidence,
+              extractedBy: 'rate_card_extractor',
+              sourceMessageId,
+              rawSnippet: value.rawSnippet,
+              capturedAt: now,
+            },
+            select: { id: true },
+          });
+          dataPointId = createdDp.id;
+        }
+        // Dual-write the first-class offer row (placement-offer-table) in the
+        // SAME transaction: a failed row write fails the whole job (BullMQ
+        // retries) — never partial state.
+        await persistPlacementOfferRow(tx, {
+          profileId: profile.id,
+          offer: value,
+          sourceDataPointId: dataPointId,
         });
       }
 
@@ -443,7 +471,32 @@ export async function handleProfileExtract(data: {
       confidence: Number(p.confidence),
       capturedAt: p.capturedAt,
     }));
-    const rolled = rollUpProfileFields(rollupInput);
+    // placementOffers compose from the first-class offer ROWS when present
+    // (placement-offer-table D6) — only `active` rows, so superseded prices
+    // drop out of the catalog view. Profiles with no rows yet (pre-backfill
+    // window) fall back to the legacy compose-from-data-points path; the
+    // `rollup_source` log field makes silent fallback visible to ops.
+    const offerRows = await tx.placementOfferRow.findMany({
+      where: { profileId: profile.id },
+    });
+    const rollupSource = offerRows.length > 0 ? 'offer_rows' : 'legacy_fallback';
+    const rolled = rollUpProfileFields(
+      rollupInput,
+      offerRows.length > 0
+        ? {
+            placementOffers: composeOffersFromRows(offerRows, (rowId) =>
+              logger.warn(
+                { profileId: profile.id, offerRowId: rowId },
+                'placement_offer row unreadable; skipped from roll-up',
+              ),
+            ),
+          }
+        : undefined,
+    );
+    logger.debug(
+      { profileId: profile.id, rollup_source: rollupSource, offerRows: offerRows.length },
+      'placement offers composed',
+    );
 
     await tx.bloggerProfile.update({
       where: { id: profile.id },

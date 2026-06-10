@@ -28,6 +28,7 @@ describe('data_collection_planner — placement offers', () => {
     platform: 'telegram',
     price: 15000,
     currency: 'RUB',
+    rawPrice: '',
     confidence: 0.9,
     rawSnippet: 'пост 15000',
     attributes: [],
@@ -105,6 +106,7 @@ describe('data_collection_planner — placement offers', () => {
       platform: 'telegram',
       price: 15000,
       currency: 'RUB',
+      rawPrice: '',
       confidence: 0.9,
       rawSnippet: 'пост 15000 навсегда сутки',
       attributes: [
@@ -213,6 +215,7 @@ describe('data_collection_planner — placement offers', () => {
       platform: 'telegram',
       price: 15000,
       currency: 'RUB',
+      rawPrice: '',
       confidence: 0.9,
       rawSnippet: 'пост 15000',
       // Carries an `exclusivity` value, but since the key is only PROPOSED, it

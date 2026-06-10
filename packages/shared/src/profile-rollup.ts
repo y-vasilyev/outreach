@@ -4,7 +4,7 @@ import {
 } from './schemas/placement-offer.js';
 import {
   derivePlacementFormatKey,
-  getOfferAttribute,
+  offerIdentityKey,
   placementOffersToFormats,
   placementOffersToRateCards,
 } from './placement-offers.js';
@@ -76,7 +76,7 @@ function toMillis(at: string | Date): number {
  * differ by ≤ this are treated as "comparably certain", so the more recent one
  * is preferred; beyond it, higher confidence dominates.
  */
-const CONFIDENCE_BAND = 0.15;
+export const CONFIDENCE_BAND = 0.15;
 
 /**
  * Confidence floor for the comparable commercial views (harden-reply-extraction
@@ -178,16 +178,12 @@ interface CollectedOffer {
  * derived `rate.<format>` key.
  */
 function offerDedupeKey(offer: PlacementOffer): string {
-  const duration = getOfferAttribute(offer, 'duration');
-  const durationStr = typeof duration === 'string' ? duration.toLowerCase() : '';
-  const tariff = getOfferAttribute(offer, 'tariff_name');
-  const slot = getOfferAttribute(offer, 'slot');
+  // Delegates to the shared identity helper (placement-offer-table D5) so the
+  // worker write path, this roll-up, and the backfill agree on «which product
+  // is this». The dedupe key = identity + price/currency/rawSnippet — the
+  // joined output is byte-identical to the previous inline implementation.
   return [
-    (offer.platform ?? '').toLowerCase(),
-    offer.kind.toLowerCase(),
-    durationStr,
-    typeof tariff === 'string' ? tariff.toLowerCase() : '',
-    typeof slot === 'string' ? slot.toLowerCase() : '',
+    offerIdentityKey(offer),
     offer.price ?? '',
     (offer.currency ?? '').toLowerCase(),
     offer.rawSnippet.trim(),
@@ -243,7 +239,18 @@ function collectPlacementOffers(points: RollupDataPoint[]): PlacementOffer[] {
  * row. `capturedAt` is the most recent contributing data point's timestamp
  * (the freshness of the rolled-up view), or null when there are no points.
  */
-export function rollUpProfileFields(points: RollupDataPoint[]): RolledUpProfileFields {
+export function rollUpProfileFields(
+  points: RollupDataPoint[],
+  opts?: {
+    /**
+     * Pre-composed placement offers (placement-offer-table): when the caller
+     * composed them from `placement_offer` ROWS (`composeOffersFromRows`),
+     * pass them here and the legacy compose-from-data-points path is skipped.
+     * Omit for the legacy fallback (profiles with no offer rows yet).
+     */
+    placementOffers?: PlacementOffer[];
+  },
+): RolledUpProfileFields {
   const byField = new Map<string, RollupDataPoint[]>();
   for (const p of points) {
     const arr = byField.get(p.field) ?? [];
@@ -256,7 +263,7 @@ export function rollUpProfileFields(points: RollupDataPoint[]): RolledUpProfileF
   // ── Structured placement offers (entity-style-rate-cards). Source of truth
   // for commercial terms when present; legacy rateCards/formats are derived
   // from these and merged with the legacy `rate.*`-derived ones below. ──
-  const placementOffers = collectPlacementOffers(points);
+  const placementOffers = opts?.placementOffers ?? collectPlacementOffers(points);
 
   // ── Legacy rate cards: one per distinct `rate.<format>`, latest-high-
   // confidence price ──

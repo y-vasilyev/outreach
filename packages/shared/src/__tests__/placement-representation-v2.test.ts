@@ -53,7 +53,7 @@ function offer(price: number, attrs: Array<[string, unknown]>, snippet: string):
   const o: PlacementOffer = {
     kind: 'post', platform: 'telegram', price, currency: 'RUB',
     attributes: attrs.map(([key, value]) => ({ key, value: value as never, confidence: 1, rawSnippet: '' })),
-    confidence: 0.9, rawSnippet: snippet, sourceMessageId: 'm', extractedBy: 'rate_card_extractor', capturedAt: '2026-06-01T00:00:00.000Z',
+    confidence: 0.9, rawSnippet: snippet, rawPrice: '', sourceMessageId: 'm', extractedBy: 'rate_card_extractor', capturedAt: '2026-06-01T00:00:00.000Z',
   };
   return { field: 'placement.offer', value: o, confidence: 0.9, capturedAt: o.capturedAt! };
 }
@@ -88,7 +88,7 @@ describe('matching prefers base price (placement-representation-v2)', () => {
     const mk = (price: number, period?: string): PlacementOffer => ({
       kind: 'post', platform: 'telegram', price, currency: 'RUB',
       attributes: period ? [{ key: 'price_period', value: period, confidence: 1, rawSnippet: '' }] : [],
-      confidence: 0.9, rawSnippet: `p${price}`, sourceMessageId: null, extractedBy: 'llm', capturedAt: null,
+      confidence: 0.9, rawSnippet: `p${price}`, rawPrice: '', sourceMessageId: null, extractedBy: 'llm', capturedAt: null,
     });
     const res = structuredPlacementScore(brief, [mk(135000, 'seasonal'), mk(120000, 'base')]);
     expect(res.best?.price).toBe(120000);
@@ -101,7 +101,7 @@ describe('matching budget + per-platform ranking (codex fixes)', () => {
   const mk = (price: number, period?: string): PlacementOffer => ({
     kind: 'post', platform: 'telegram', price, currency: 'RUB',
     attributes: period ? [{ key: 'price_period', value: period, confidence: 1, rawSnippet: '' }] : [],
-    confidence: 0.9, rawSnippet: `p${price}`, sourceMessageId: null, extractedBy: 'llm', capturedAt: null,
+    confidence: 0.9, rawSnippet: `p${price}`, rawPrice: '', sourceMessageId: null, extractedBy: 'llm', capturedAt: null,
   });
 
   it('budget checks the base price, not a temporary promo', () => {

@@ -22,6 +22,7 @@ function offer(partial: Partial<PlacementOffer>): PlacementOffer {
     attributes: [],
     confidence: 0.8,
     rawSnippet: '',
+    rawPrice: '',
     sourceMessageId: null,
     extractedBy: 'llm',
     capturedAt: at('2026-05-01T00:00:00Z'),

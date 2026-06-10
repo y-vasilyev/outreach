@@ -360,6 +360,40 @@ const DURATION_FORMAT_SUFFIX: Record<string, string> = {
 };
 
 /**
+ * Stable offer IDENTITY (placement-offer-table): «which product is this» —
+ * platform | kind | duration | tariff_name | slot | price_period. The
+ * roll-up-dedupe participants MINUS price/currency/rawSnippet, so a price
+ * change is the SAME identity (it supersedes the prior row into a history
+ * chain) while a day-vs-month post or two named slots stay distinct.
+ * `price_period` joins the identity so a marked seasonal price («Цена июня»,
+ * v2 `price_period=seasonal`) coexists with the base price instead of
+ * superseding it — they are concurrent offers, not a price change. When
+ * extraction didn't mark the period, base/season DO collapse into one chain
+ * (newest active, prior in history) — accepted: nothing is lost, the catalog
+ * shows the most recent quote. `delete_policy` is deliberately NOT part of
+ * identity (the established dedupe semantics never included it); revisit once
+ * extraction emits it reliably.
+ *
+ * Single source of truth: the worker write path, the roll-up dedupe
+ * (`offerDedupeKey` delegates here) and the backfill script all use this —
+ * identity semantics cannot drift between writers (design D5).
+ */
+export function offerIdentityKey(offer: OfferAttributeView): string {
+  const duration = getOfferAttribute(offer, 'duration');
+  const tariff = getOfferAttribute(offer, 'tariff_name');
+  const slot = getOfferAttribute(offer, 'slot');
+  const pricePeriod = getOfferAttribute(offer, 'price_period');
+  return [
+    (offer.platform ?? '').toLowerCase(),
+    offer.kind.toLowerCase(),
+    typeof duration === 'string' ? duration.toLowerCase() : '',
+    typeof tariff === 'string' ? tariff.toLowerCase() : '',
+    typeof slot === 'string' ? slot.toLowerCase() : '',
+    typeof pricePeriod === 'string' ? pricePeriod.toLowerCase() : '',
+  ].join('|');
+}
+
+/**
  * Deterministic legacy `rate.<format>` key (without the `rate.` prefix) from an
  * offer's stable attributes — platform, kind, duration. Built to match the keys
  * the legacy text extractor already produces (`telegram_post_month`,

@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => {
     discoveryRunCandidate: { findMany: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
     channel: { findMany: vi.fn() },
     bloggerProfile: { findMany: vi.fn() },
-    contact: { findMany: vi.fn(async (_args: unknown): Promise<Array<{ id: string }>> => []) },
+    contact: { findMany: vi.fn(async (_args: unknown): Promise<Array<{ id: string; roleGuess?: string; type?: string; confidence?: number }>> => []) },
   };
   const guidedAdd = vi.fn(async () => ({}));
   const scrapeAdd = vi.fn(async () => ({}));
