@@ -201,10 +201,32 @@ export const matchingService = {
     // (`precutIncludesProfile` parity in shared tests). Flag off ⇒ full scan,
     // byte-identical to the pre-change behavior.
     const useStructuredOffersForPrecut = getFeatureFlags().get('structured_placement_offers');
-    const precutWhere =
+    let precutWhere =
       useStructuredOffersForPrecut && brief.budget !== null && brief.budget !== undefined
         ? matchingPrecutWhere(brief.budget)
         : undefined;
+    if (precutWhere) {
+      // Superset guard (codex review): with PARTIAL row coverage a profile's
+      // rolled placementOffers come from the legacy data-point fallback — an
+      // under-budget offer may exist in the JSON with no row, and the SQL cut
+      // would false-exclude it. The pre-cut is safe only when the backfill is
+      // complete, so detect unmirrored placement.offer data points and fall
+      // back to the full scan while any exist.
+      const [{ count: unmirrored }] = await prisma.$queryRaw<[{ count: bigint }]>`
+        SELECT COUNT(*)::bigint AS count
+        FROM profile_data_point dp
+        WHERE dp.field = 'placement.offer'
+          AND NOT EXISTS (
+            SELECT 1 FROM placement_offer r WHERE r.source_data_point_id = dp.id
+          )`;
+      if (unmirrored > 0n) {
+        logger.warn(
+          { event: 'prefilter_cut_skipped', briefId, unmirrored: Number(unmirrored) },
+          'matching pre-cut skipped: placement.offer data points without rows (run db:backfill:offers)',
+        );
+        precutWhere = undefined;
+      }
+    }
     const profilesRows = await prisma.bloggerProfile.findMany({
       ...(precutWhere ? { where: precutWhere } : {}),
       orderBy: { updatedAt: 'desc' },

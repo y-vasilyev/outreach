@@ -27,8 +27,16 @@ export const CatalogOfferFiltersZ = z.object({
   cpmRubMax: z.coerce.number().positive().optional(),
   /** Only offers captured within the last N days. */
   offerFreshDays: z.coerce.number().int().positive().optional(),
-  /** Only profiles having at least one active offer row. */
-  hasOffers: z.coerce.boolean().optional(),
+  /** Only profiles having at least one active offer row. (`?hasOffers=false`
+   * must parse as false — `z.coerce.boolean()` would treat any non-empty
+   * string as true.) */
+  hasOffers: z
+    .preprocess((v) => {
+      if (v === 'true' || v === true || v === '1') return true;
+      if (v === 'false' || v === false || v === '0') return false;
+      return v;
+    }, z.boolean())
+    .optional(),
   sort: z.enum(CATALOG_SORTS).default('updated'),
 });
 export type CatalogOfferFilters = z.infer<typeof CatalogOfferFiltersZ>;

@@ -52,6 +52,7 @@ const { data, isLoading, isFetching, error } = useQuery({
     'blogger-profiles',
     contextType,
     contextId,
+    platformFilter,
     serverKind,
     serverPriceMax,
     serverCpmMax,
@@ -62,6 +63,9 @@ const { data, isLoading, isFetching, error } = useQuery({
     const params = new URLSearchParams({ limit: '200' });
     if (contextType.value === 'campaign' && contextId.value.trim()) params.set('campaignId', contextId.value.trim());
     if (contextType.value === 'brief' && contextId.value.trim()) params.set('briefId', contextId.value.trim());
+    // Platform is a SERVER facet (codex review): older matches beyond the
+    // first page must not be lost to client-side filtering.
+    if (platformFilter.value) params.set('platform', platformFilter.value);
     if (serverKind.value) params.set('kind', serverKind.value);
     const priceMax = Number(serverPriceMax.value.replace(/\s/g, ''));
     if (Number.isFinite(priceMax) && priceMax > 0) params.set('priceRubMax', String(priceMax));
@@ -167,13 +171,6 @@ const filteredItems = computed(() => {
   if (tab.value === 'with_rates') xs = xs.filter(hasRates);
   if (tab.value === 'with_audience') xs = xs.filter(hasAudience);
   if (tab.value === 'needs_data') xs = xs.filter((p) => !hasRates(p) || !hasAudience(p));
-  if (platformFilter.value) {
-    xs = xs.filter(
-      (p) =>
-        (p.socialLinks ?? []).some((link) => link.platform === platformFilter.value) ||
-        (p.placementOffers ?? []).some((offer) => offer.platform === platformFilter.value),
-    );
-  }
   if (langFilter.value) xs = xs.filter((p) => p.languages.includes(langFilter.value));
   if (formatFilter.value) xs = xs.filter((p) => p.formats.includes(formatFilter.value));
   // Free-text search over name / topics / social handle (blogger-profile-who-is-this).
@@ -208,7 +205,16 @@ function topRates(p: BloggerProfile): string {
       p
         .placementOffers!.filter((o) => o.price != null)
         .slice(0, 2)
-        .map((o) => `${offerKindLabel(o.kind)}: ${formatCompact(o.price)} ${o.currency}`)
+        .map((o) => {
+          // ₽-hint for fx-converted prices + stale marker (catalog-sql-search):
+          // an old price must not read as fresh in the list/compare views.
+          const rub =
+            o.normalized?.priceRubMin != null && (o.normalized?.fxRateUsed ?? 1) !== 1
+              ? ` ≈${formatCompact(o.normalized.priceRubMin)} ₽`
+              : '';
+          const stale = o.stale ? ' (устарело)' : '';
+          return `${offerKindLabel(o.kind)}: ${formatCompact(o.price)} ${o.currency}${rub}${stale}`;
+        })
         .join(' · ') || 'по запросу'
     );
   }
