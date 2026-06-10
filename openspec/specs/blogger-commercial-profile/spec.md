@@ -16,15 +16,27 @@ The system SHALL maintain a `blogger_profile` per blogger/channel holding standa
 
 ### Requirement: Granular data points preserve provenance and raw text
 
-Each harvested fact SHALL be stored as a `profile_data_point` `{ profile_id, field, value, unit?, confidence, extracted_by, source_message_id, raw_snippet, captured_at }`. The verbatim source text SHALL be preserved in `raw_snippet` (and the original message retained), so the rolled-up profile can be re-derived and audited.
+Each harvested fact SHALL be stored as a `profile_data_point` `{ profile_id, field, value, unit?, confidence, extracted_by, source_message_id, agent_run_id?, raw_snippet, captured_at, superseded_at? }`. The verbatim source text SHALL be preserved in `raw_snippet` (and the original message retained), so the rolled-up profile can be re-derived and audited. LLM-extracted points SHALL carry the `agent_run_id` of the extractor run that produced them (operator-origin points keep it null), so any fact is traceable to the exact model/config/cost that emitted it; the id SHALL be the persisted `agent_run.id` (never a dangling identifier) and SHALL be null when run persistence failed. Data points SHALL never be physically deleted by extraction flows: replacement marks the prior row with `superseded_at`. Default readers (roll-up, HUD, idempotency checks, profile read API) SHALL consider only live rows (`superseded_at IS NULL`); superseded rows SHALL remain retrievable on demand (`includeSuperseded=true` on the profile read, returning `superseded_at` and `agent_run_id`).
 
 #### Scenario: Raw reply text is preserved alongside the parsed value
+
 - **WHEN** an extractor parses "охваты сторис ~12к, пост 25к" into reach data points
 - **THEN** each resulting `profile_data_point` stores the parsed numeric value plus the original snippet and a confidence
 
 #### Scenario: Profile roll-up is deterministic from data points
+
 - **WHEN** multiple data points exist for the same field
-- **THEN** the `blogger_profile` field is composed deterministically (e.g. latest high-confidence value) and the contributing data points remain individually retrievable
+- **THEN** the `blogger_profile` field is composed deterministically (e.g. latest high-confidence value) from live rows and the contributing data points remain individually retrievable
+
+#### Scenario: Fact traceable to its agent run
+
+- **WHEN** an operator questions a wrong price extracted last week
+- **THEN** the data point's `agent_run_id` identifies the exact extractor run (model, config version, tokens) that produced it
+
+#### Scenario: Superseded facts are excluded by default but auditable
+
+- **WHEN** a message was re-analyzed and its prior points superseded
+- **THEN** roll-up and HUD reflect only the fresh points, while `includeSuperseded=true` returns both generations with their timestamps
 
 ### Requirement: Extractor agents map free-text replies to data points
 
@@ -119,3 +131,84 @@ Post insight metric freshness SHALL be calculated from each post insight's `metr
 #### Scenario: Missing metric timestamp is unavailable
 - **WHEN** a post insight has no metric capture timestamp or no numeric metrics
 - **THEN** the API reports metric freshness as unavailable rather than fresh
+
+### Requirement: Blogger profile surfaces structured placement offers
+The blogger profile read API SHALL include `placementOffers` alongside legacy `rateCards`. Each placement offer SHALL expose typed attributes, price/currency, confidence, source message id, raw snippet, and captured timestamp. Existing `rateCards` and `formats` SHALL continue to be present and SHALL be derived from placement offers when structured data exists.
+
+#### Scenario: Profile detail includes offer attributes
+- **WHEN** a profile contains a Telegram post offer for one month and an offsite review offer
+- **THEN** the profile detail response includes both structured offers with their attributes and also includes compatibility `rateCards`
+
+#### Scenario: Legacy rows are repaired from source message
+- **WHEN** a profile only has generic legacy rows but their source message can be loaded
+- **THEN** the read service derives structured placement offers from the source message and uses them to produce non-collapsed compatibility rate cards
+
+### Requirement: Placement offer provenance is auditable
+Each placement offer and attribute SHALL retain source provenance back to the original message/media-kit payload and the extractor run. The raw text fragment used for the offer or attribute SHALL be available in the profile detail response.
+
+#### Scenario: Operator audits extracted duration
+- **WHEN** an operator opens a placement offer with `duration=month`
+- **THEN** the UI can show the raw snippet containing "пост на месяц 21000" and link back to the source message
+
+### Requirement: Profile freshness includes placement offers
+The profile freshness signal SHALL classify usable structured placement offers as contributing to the `rateCards` and `formats` freshness sections. Missing or inactive attribute proposals SHALL NOT mark a placement target as complete.
+
+#### Scenario: Fresh structured offer updates rate-card freshness
+- **WHEN** a placement offer with a usable price was captured within the rate-card TTL
+- **THEN** `freshness.rateCards` and `freshness.formats` are fresh even if no legacy `rate.<format>` data point was written directly
+
+#### Scenario: Proposed attribute does not complete active profile field
+- **WHEN** an extractor proposes an inactive attribute for an offer
+- **THEN** the profile may show the proposal for review, but the attribute is not counted as collected until activation
+
+### Requirement: placementOffers always populated from data points
+
+`BloggerProfile.placementOffers` SHALL be populated from the profile's `placement.offer` data points on every roll-up, regardless of feature-flag state, so the catalog is structurally complete. The rolled-up `placementOffers` AND the legacy `rateCards`/`formats` derived for compatibility SHALL both apply the confidence-floor rule (facts below the configurable floor are excluded from these comparable views but retained as data points). Legacy `rateCards`/`formats` SHALL remain derived for compatibility above the floor.
+
+#### Scenario: Profile exposes offers independent of flag
+
+- **WHEN** a profile has confident `placement.offer` data points
+- **THEN** the profile read response includes them in `placementOffers` whether or not `structured_placement_offers` is on
+
+#### Scenario: Low-confidence offer excluded from comparable list but retained
+
+- **WHEN** a profile has a `placement.offer` data point below the confidence floor
+- **THEN** it is absent from `placementOffers` but still present (flagged needs-review) in the `dataPoints` provenance array
+
+### Requirement: Profile exposes platformAudience and v2 placement terms
+
+The blogger profile read API SHALL include `platformAudience` and SHALL preserve the v2 placement attributes (`price_period`, `prepayment`, `tax_regime`, `tax_included`, `tariff_name`, `slot`, `top_pin_hours`, `package_items`, `package_price`) on each offer, so operators and the compare view can inspect them without parsing free text. Legacy `reach`/`avgViews`/`audience`/`rateCards` SHALL remain populated and unchanged.
+
+#### Scenario: Read API returns per-platform audience
+
+- **WHEN** a profile has `platformAudience` entries
+- **THEN** the profile detail response includes them alongside the legacy scalar `reach`
+
+#### Scenario: v2 attributes survive the roll-up onto the read model
+
+- **WHEN** an offer carries `price_period`/`prepayment`/`tax_regime`
+- **THEN** those attributes appear on the offer in the profile read response
+
+### Requirement: Rolled-up placement offers compose from offer rows
+
+`BloggerProfile.placementOffers` SHALL be composed from `active` `placement_offer` rows, producing output byte-compatible with the legacy compose-from-data-points path (same shape, ordering, confidence floor). The rows path SHALL be used only when rows fully cover the profile's `placement.offer` data points; with no rows yet (pre-backfill window, dual-write incident override) or PARTIAL coverage (interrupted backfill, operator-created offer points), composition SHALL fall back to the legacy data-point path — never silently dropping uncovered offers — and log which source was used. Every profile re-roll path (extraction worker, operator markup edits) SHALL use this same rows-aware composition so superseded prices cannot resurface via a legacy re-roll.
+
+#### Scenario: Catalog reads are unchanged after the switch
+
+- **WHEN** the same extraction history is composed via offer rows and via the legacy data-point path
+- **THEN** the resulting `placementOffers` arrays are equal (verified on the real failing-reply fixtures)
+
+#### Scenario: Fallback before backfill
+
+- **WHEN** a profile has `placement.offer` data points but no `placement_offer` rows
+- **THEN** the roll-up composes from data points and records the fallback source
+
+### Requirement: Profile read API exposes offer history
+
+`GET /blogger-profiles/:id` SHALL expose, per offer identity, the `active` row id and its superseded chain (prior prices with `capturedAt` and provenance references), so an operator can see how a blogger's pricing changed over time without reading raw messages.
+
+#### Scenario: Price history visible on the profile
+
+- **WHEN** an offer was superseded twice by price updates
+- **THEN** the profile response lists the active offer plus its two prior prices in reverse-chronological order with their captured timestamps
+

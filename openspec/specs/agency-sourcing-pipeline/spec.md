@@ -72,3 +72,84 @@ For the categories that MUST be blocked (guarantees, payment/transfer references
 - **WHEN** the resolved safety context contains `hard_block_patterns = []` (e.g. a `custdev` campaign, a typeless campaign, or a flag-off rollout)
 - **THEN** the SafetyFilter hard-block branch is a no-op and behavior is identical to the pre-change advisory-only flow
 
+### Requirement: Agency inbound extraction creates placement offers
+For `agency_sourcing` conversations, the inbound profile extraction path SHALL create structured placement offers from blogger replies and media-kit text when prices or commercial placement terms are present. The pipeline SHALL preserve low-confidence offers for operator review rather than silently dropping commercially relevant facts.
+
+#### Scenario: Inline terms are extracted during inbound processing
+- **WHEN** the latest inbound contains inline pricing such as "пост на сутки 13000, пост на месяц 21000"
+- **THEN** the profile extraction pipeline creates separate structured placement offers and persists provenance to the source message
+
+#### Scenario: Ambiguous package is kept for review
+- **WHEN** the extractor cannot determine whether a price is for one format or a package
+- **THEN** it emits a low-confidence package or unknown-kind offer with raw evidence instead of discarding the price
+
+### Requirement: Planner asks for missing placement attributes
+The `DataCollectionPlanner` SHALL receive known placement offers and active required attributes for the campaign. If an offer is missing a required attribute, the planner SHALL ask a focused follow-up about that attribute rather than re-asking for the whole rate card.
+
+#### Scenario: Planner asks for deletion policy
+- **WHEN** the blogger shared a post price but the active campaign target requires deletion policy and no `delete_policy` attribute is known
+- **THEN** the planner asks whether the post is deleted after a fixed period or remains permanently
+
+#### Scenario: Planner does not re-ask collected price
+- **WHEN** an offer already has a usable price and currency
+- **THEN** the planner SHALL NOT ask for price again unless the price is stale, low-confidence, or contradicted by newer evidence
+
+### Requirement: Attribute proposals are routed to operator review
+When extraction produces inactive attribute proposals, the agency pipeline SHALL surface them to the operator/admin review path without sending them to the contact and without treating them as completed data-collection targets.
+
+#### Scenario: Proposed attribute is operator-only
+- **WHEN** the extractor proposes a new attribute from a blogger reply
+- **THEN** the proposal is visible to operators/admins for review and no outbound message mentions internal schema or attribute creation
+
+### Requirement: Structured placement offers are the canonical write path
+
+For `agency_sourcing` conversations, the inbound profile-extract pipeline SHALL **always** persist structured `placement.offer` data points, `placement_attribute` proposals, and roll them up onto `BloggerProfile.placementOffers`, independent of any feature flag. The `structured_placement_offers` feature flag SHALL govern only downstream **matching and data-collection-planner preference** (whether fit-scoring and the planner prefer structured offers over legacy `rate.<format>` cards) — it SHALL NOT gate whether structured offers are persisted, rolled up, or exposed by the profile read API (which already returns `placementOffers` unconditionally). Legacy `rate.<format>` data points SHALL continue to be derived for compatibility.
+
+#### Scenario: Offers persisted and exposed with flag off
+
+- **WHEN** an inbound reply yields placement offers and `structured_placement_offers` is off
+- **THEN** the `placement.offer` data points and attribute proposals are persisted, `BloggerProfile.placementOffers` is rolled up, and the profile read API exposes them — while fit-scoring and the planner still use the legacy path
+
+#### Scenario: Flag governs matching/planner preference only
+
+- **WHEN** `structured_placement_offers` is turned on
+- **THEN** fit-scoring and the planner prefer the already-persisted structured offers; turning the flag on does not require re-running extraction to populate them
+
+### Requirement: Deterministic parser covers common Russian reply layouts
+
+The deterministic placement-offer parser SHALL, without any schema change, recognise: a `млн`/`млрд` price multiplier; the platforms `МАХ`/MAX, `Дзен`/Zen, and `ТГК` (mapped to the promoted `platform` field as `max`/`zen`/`telegram`); comma-separated per-format price pairs on a single line; and placement-duration ladders (`час топа`/`72ч`) as separate offers whose precise tier is preserved in the free-form `notes` attribute when it does not fit the existing duration values.
+
+#### Scenario: Millions parsed in audience/price prose
+
+- **WHEN** a reply contains `"1.2млн"`
+- **THEN** the parser yields the numeric value `1200000`, not `1.2`
+
+#### Scenario: Non-enum platforms preserved
+
+- **WHEN** a reply prices placements on `ТГК` and `МАХ`
+- **THEN** the offers carry `platform = "telegram"` and `platform = "max"` respectively, instead of dropping the second platform
+
+#### Scenario: Comma-separated per-format pair on one line
+
+- **WHEN** a line reads `"Фото-пост 120000, Видео-пост 170000"`
+- **THEN** the parser yields two offers, one per format with its own price
+
+#### Scenario: Duration ladder preserved in notes
+
+- **WHEN** a line reads `"Час топа/24ч 6000, /72ч 9000, /месяц 12000"`
+- **THEN** the parser yields three offers and the `72ч` tier is preserved (e.g. in a `notes` attribute) rather than discarded
+
+### Requirement: Profile-extract is observable, supersedable, and hint-aware
+
+The profile-extract worker SHALL stamp `Message.extractionStatus` on every terminal outcome (`failed` only on sync-catch / final retry exhaustion), SHALL honor a `supersede` job flag (after both extractors succeed, delete prior `(profileId, sourceMessageId)` rows — incl. the `raw_payload` media-asset row — inside the write transaction before the fresh writes), and SHALL load operator hints applicable to the conversation/channel and pass them to the extractor agents. These behaviors SHALL be additive: when no hint exists and `supersede` is absent, extraction behavior is unchanged except for the status stamp.
+
+#### Scenario: Status stamped without changing extraction output
+
+- **WHEN** a normal inbound is extracted with no operator action
+- **THEN** the data written is the same as before AND the message is stamped `ok`/`empty`/`no_signal` accordingly
+
+#### Scenario: Supersede is idempotent-safe
+
+- **WHEN** `supersede` re-run is invoked twice in a row
+- **THEN** the second run deletes the first run's rows and re-writes, leaving exactly one set of rows for that message (no accumulation)
+

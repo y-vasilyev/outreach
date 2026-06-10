@@ -1,9 +1,7 @@
 ## Purpose
 
 Context-aware catalog triage for existing blogger profiles: operators can compare profiles against a campaign or advertising brief, inspect top public post evidence with metrics, and request asynchronous post insight refresh without making catalog reads perform upstream scraping.
-
 ## Requirements
-
 ### Requirement: Context-aware catalog fit
 The blogger catalog SHALL support an optional fit context so operators can scan existing profiles against a current campaign goal or advertising brief. The catalog list API SHALL accept at most one of `campaignId` or `briefId`; when provided, each returned profile row SHALL include `fit` with `{ score, source, rationale, positiveSignals, gaps, evidencePostIds }`. The fit context SHALL be derived from persisted data: `briefId` loads the `AdBrief`; `campaignId` loads the campaign type goal, using AJTBD for `custdev` and the agency goal object for `agency_sourcing`. Catalog reads SHALL NOT call an LLM, ScrapeCreators, or Telegram inline.
 
@@ -63,3 +61,18 @@ The UI SHALL provide an operator action to request post insight refresh for a pr
 #### Scenario: Refresh is unavailable for unsupported source
 - **WHEN** a profile has no supported public source for ScrapeCreators or Telegram parsing
 - **THEN** the UI disables the refresh action and explains the missing supported source without creating a worker job
+
+### Requirement: Catalog filter bar drives server-side offer filters
+
+The catalog UI SHALL expose controls for platform, kind, max price (₽), max CPM, offer freshness, and sort mode that map to the `GET /blogger-profiles` offer-search params and refetch from the server. Free-text/topic search SHALL remain client-side; no facet SHALL be filtered both client- and server-side. Rows and the compare view SHALL render normalized prices/CPM with their staleness badges and fx/views-basis hints.
+
+#### Scenario: Filter change refetches from the server
+
+- **WHEN** the operator sets «до 50 000 ₽» and «Telegram»
+- **THEN** the catalog refetches with the corresponding query params and shows only server-matched profiles
+
+#### Scenario: Compare shows normalized values with provenance hints
+
+- **WHEN** two bloggers are compared and one has a stale USD-derived price
+- **THEN** the compare panel shows its ₽ value with the rate date hint and a stale badge alongside the fresher competitor
+
