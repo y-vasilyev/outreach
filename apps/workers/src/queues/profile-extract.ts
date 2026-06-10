@@ -32,7 +32,7 @@ import {
 import { getFeatureFlags } from '../feature-flags.js';
 import { logger } from '../logger.js';
 import { publishRealtime } from '../services/realtime-emit.js';
-import { runAgentSafe } from '../services/run-agent-safe.js';
+import { runAgentSafeWithMeta } from '../services/run-agent-safe.js';
 import { snapshotRawPayload } from '../services/media-store.js';
 import { ocrMessageAttachments } from '../services/attachment-ocr.js';
 
@@ -238,16 +238,22 @@ export async function handleProfileExtract(data: {
     operator_hints: operatorHints,
   };
 
-  const [rate, audience] = await Promise.all([
-    runAgentSafe<ExtractionOut>('rate_card_extractor', extractorInput, {
+  const [rateMeta, audienceMeta] = await Promise.all([
+    runAgentSafeWithMeta<ExtractionOut>('rate_card_extractor', extractorInput, {
       conversationId: conv.id,
       channelId,
     }),
-    runAgentSafe<ExtractionOut>('audience_stats_extractor', extractorInput, {
+    runAgentSafeWithMeta<ExtractionOut>('audience_stats_extractor', extractorInput, {
       conversationId: conv.id,
       channelId,
     }),
   ]);
+  const rate = rateMeta?.output ?? null;
+  const audience = audienceMeta?.output ?? null;
+  // Persisted agent_run ids (extraction-provenance): stamped onto every fact
+  // each extractor emitted; null = run persistence failed (never dangling).
+  const rateRunId = rateMeta?.runId ?? null;
+  const audienceRunId = audienceMeta?.runId ?? null;
 
   // Distinguish "extractor call failed" (BullMQ should retry the whole job)
   // from "call returned empty data_points" (legitimate success — the inbound
@@ -264,12 +270,16 @@ export async function handleProfileExtract(data: {
     throw new Error(`profile-extract: extractors failed: ${failed.join(', ')}`);
   }
 
-  const drafts: Array<{ extractedBy: string; draft: ProfileDataPointDraft }> = [];
+  const drafts: Array<{
+    extractedBy: string;
+    agentRunId: string | null;
+    draft: ProfileDataPointDraft;
+  }> = [];
   for (const dp of rate?.data_points ?? []) {
-    drafts.push({ extractedBy: 'rate_card_extractor', draft: dp });
+    drafts.push({ extractedBy: 'rate_card_extractor', agentRunId: rateRunId, draft: dp });
   }
   for (const dp of audience?.data_points ?? []) {
-    drafts.push({ extractedBy: 'audience_stats_extractor', draft: dp });
+    drafts.push({ extractedBy: 'audience_stats_extractor', agentRunId: audienceRunId, draft: dp });
   }
 
   // Structured placement offers are the CANONICAL write path
@@ -360,13 +370,26 @@ export async function handleProfileExtract(data: {
     // those). Deleting here — after extraction, inside the write tx — means a
     // failed re-extraction never lost the old data (it threw before this tx).
     if (data.supersede) {
-      await tx.profileDataPoint.deleteMany({
-        where: { profileId: profile.id, sourceMessageId, extractedBy: { not: 'operator' } },
+      // Soft supersede (extraction-provenance): the prior generation is the
+      // system's record of «что мы считали верным до переразбора» — exactly
+      // when an operator decided the extraction was wrong. Mark, never delete.
+      await tx.profileDataPoint.updateMany({
+        where: {
+          profileId: profile.id,
+          sourceMessageId,
+          extractedBy: { not: 'operator' },
+          supersededAt: null,
+        },
+        data: { supersededAt: now },
       });
       // Only proposed (unreviewed) attributes — an admin-approved `active` row
       // is a curated registry entry the planner uses; a message re-run must not
-      // silently remove it (codex).
-      await tx.placementAttribute.deleteMany({ where: { sourceMessageId, status: 'proposed' } });
+      // silently remove it (codex). `superseded` ≠ `rejected`: переразбор
+      // заменил, а не оператор отклонил.
+      await tx.placementAttribute.updateMany({
+        where: { sourceMessageId, status: 'proposed' },
+        data: { status: 'superseded' },
+      });
       await tx.mediaAsset.deleteMany({
         where: { profileId: profile.id, messageId: sourceMessageId, kind: 'raw_payload' },
       });
@@ -376,14 +399,22 @@ export async function handleProfileExtract(data: {
       await supersedeOfferRowsForMessage(tx, { profileId: profile.id, sourceMessageId });
     }
 
-    for (const { extractedBy, draft } of drafts) {
+    for (const { extractedBy, agentRunId, draft } of drafts) {
       // Idempotency: the same (profileId, sourceMessageId, field, extractedBy)
       // tuple should produce at most one row. handleProfileExtract may be
       // re-run for the same source message (sync invocation from on_inbound
       // followed by an on-demand BullMQ enqueue) and we don't want
       // duplicates. Cheaper than adding a unique index migration.
       const existing = await tx.profileDataPoint.findFirst({
-        where: { profileId: profile.id, sourceMessageId, field: draft.field, extractedBy },
+        // Live rows only: a re-run just superseded the old generation — the
+        // fresh writes must not be skipped as its duplicates.
+        where: {
+          profileId: profile.id,
+          sourceMessageId,
+          field: draft.field,
+          extractedBy,
+          supersededAt: null,
+        },
         select: { id: true },
       });
       if (existing) continue;
@@ -398,6 +429,7 @@ export async function handleProfileExtract(data: {
           confidence: draft.confidence,
           extractedBy,
           sourceMessageId,
+          agentRunId,
           rawSnippet: draft.rawSnippet ?? '',
           capturedAt: now,
         },
@@ -431,6 +463,7 @@ export async function handleProfileExtract(data: {
             field: 'placement.offer',
             extractedBy: 'rate_card_extractor',
             rawSnippet: value.rawSnippet,
+            supersededAt: null,
           },
           select: { id: true },
         });
@@ -451,6 +484,7 @@ export async function handleProfileExtract(data: {
               confidence: value.confidence,
               extractedBy: 'rate_card_extractor',
               sourceMessageId,
+              agentRunId: rateRunId,
               rawSnippet: value.rawSnippet,
               capturedAt: now,
             },
@@ -502,19 +536,17 @@ export async function handleProfileExtract(data: {
             confidence: proposal.confidence,
             rationale: proposal.rationale,
             sourceMessageId,
-            // The agent run id is not surfaced by `runAgentSafe` (it returns
-            // only the parsed output). Correlate proposals to the run via the
-            // (profileId, sourceMessageId) tuple + the `agent_run` row written
-            // by AgentRunner for this conversation/message. Left null until the
-            // runner exposes the id. (Section follow-up.)
-            proposedByRunId: null,
+            // The persisted agent_run.id of the extractor run that proposed
+            // this attribute (extraction-provenance).
+            proposedByRunId: rateRunId,
           },
         });
       }
     }
 
     const allPoints = await tx.profileDataPoint.findMany({
-      where: { profileId: profile.id },
+      // Default readers see LIVE rows only (extraction-provenance).
+      where: { profileId: profile.id, supersededAt: null },
     });
     const rollupInput: RollupDataPoint[] = allPoints.map((p) => ({
       field: p.field,
@@ -715,6 +747,7 @@ async function emitDataCollectionUpdatesForExtraction(opts: {
       where: { id: opts.profileId },
       select: {
         dataPoints: {
+          where: { supersededAt: null },
           select: { field: true, value: true, capturedAt: true, sourceMessageId: true },
         },
       },

@@ -11,8 +11,8 @@ const mocks = vi.hoisted(() => {
     conversation: { findUnique: vi.fn() },
     message: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
     bloggerProfile: { upsert: vi.fn(), update: vi.fn(), findUnique: vi.fn() },
-    profileDataPoint: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn() },
-    placementAttribute: { findFirst: vi.fn(), create: vi.fn(), deleteMany: vi.fn() },
+    profileDataPoint: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn(), updateMany: vi.fn() },
+    placementAttribute: { findFirst: vi.fn(), create: vi.fn(), deleteMany: vi.fn(), updateMany: vi.fn() },
     // First-class offer rows (placement-offer-table): the worker dual-writes
     // them through the REAL @nosquare/db helpers (importOriginal below), so
     // the mock only fakes the prisma model.
@@ -43,7 +43,15 @@ vi.mock('@nosquare/db', async (importOriginal) => {
 });
 vi.mock('bullmq', () => ({ Worker: class {}, Queue: class { add = vi.fn(async () => ({})); } }));
 vi.mock('../redis.js', () => ({ getRedis: () => ({}) }));
-vi.mock('../services/run-agent-safe.js', () => ({ runAgentSafe: mocks.runAgentSafe }));
+vi.mock('../services/run-agent-safe.js', () => ({
+  runAgentSafe: mocks.runAgentSafe,
+  // extraction-provenance: the worker uses the WithMeta variant; tests keep
+  // driving the same mock and get a deterministic run id.
+  runAgentSafeWithMeta: async (...args: unknown[]) => {
+    const out = await mocks.runAgentSafe(...(args as [string, unknown, unknown]));
+    return out === null ? null : { output: out, runId: 'run_test' };
+  },
+}));
 vi.mock('../services/realtime-emit.js', () => ({ publishRealtime: mocks.publishRealtime }));
 vi.mock('../feature-flags.js', () => ({
   getFeatureFlags: () => ({ get: (k: string) => mocks.flagState[k] ?? false }),
@@ -86,6 +94,8 @@ beforeEach(() => {
   mocks.prisma.profileDataPoint.findFirst.mockResolvedValue(null);
   mocks.prisma.profileDataPoint.findMany.mockResolvedValue([]);
   mocks.prisma.profileDataPoint.deleteMany.mockResolvedValue({ count: 0 });
+  mocks.prisma.profileDataPoint.updateMany.mockResolvedValue({ count: 0 });
+  mocks.prisma.placementAttribute.updateMany.mockResolvedValue({ count: 0 });
   mocks.prisma.placementAttribute.findFirst.mockResolvedValue(null);
   mocks.prisma.placementAttribute.create.mockResolvedValue({});
   mocks.prisma.placementAttribute.deleteMany.mockResolvedValue({ count: 0 });
@@ -347,6 +357,11 @@ Instagram — https://instagram.com/polyaam?igshid=YmMyMTA2M2Y
     const rowData = (mocks.prisma.placementOfferRow.create.mock.calls[0]![0] as {
       data: Record<string, unknown>;
     }).data;
+    // Every fact carries the PERSISTED agent_run.id of its extractor run.
+    const dpData = (mocks.prisma.profileDataPoint.create.mock.calls[0]![0] as {
+      data: { agentRunId?: string | null };
+    }).data;
+    expect(dpData.agentRunId).toBe('run_test');
     expect(rowData).toMatchObject({
       profileId: 'prof1',
       platform: 'telegram',

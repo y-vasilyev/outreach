@@ -412,7 +412,7 @@ async function collectedAgencyTargets(
   if (!channelId) return [];
   const profile = await getPrisma().bloggerProfile.findUnique({
     where: { channelId },
-    select: { dataPoints: { select: { field: true, value: true } } },
+    select: { dataPoints: { where: { supersededAt: null }, select: { field: true, value: true } } },
   });
   if (!profile) return [];
   const dataPoints = profile.dataPoints.map((d) => ({ field: d.field, value: d.value }));
@@ -515,6 +515,7 @@ async function emitDataCollectionUpdatesForSuggestion(opts: {
       where: { channelId: opts.channelId },
       select: {
         dataPoints: {
+          where: { supersededAt: null },
           select: { field: true, value: true, capturedAt: true, sourceMessageId: true },
         },
       },

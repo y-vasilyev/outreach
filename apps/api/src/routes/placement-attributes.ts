@@ -25,7 +25,18 @@ export async function placementAttributesRoutes(app: FastifyInstance) {
   app.get(
     '/placement-attributes/proposals',
     { preHandler: [app.requireRole(['admin'])] },
-    async () => placementAttributesService.listProposals(),
+    async (req) => {
+      const q = z
+        .object({
+          includeSuperseded: z
+            .preprocess((v) => (v === 'true' || v === true ? true : v === 'false' ? false : v), z.boolean())
+            .optional(),
+        })
+        .parse(req.query ?? {});
+      return placementAttributesService.listProposals({
+        includeSuperseded: q.includeSuperseded ?? false,
+      });
+    },
   );
 
   app.get(

@@ -126,6 +126,20 @@ export class AgentRunner {
     input: unknown,
     ctx?: RunOptions,
   ): Promise<T> {
+    return (await this.runWithMeta<T>(agentName, input, ctx)).output;
+  }
+
+  /**
+   * Like `run`, but also returns the PERSISTED `agent_run.id` so callers can
+   * stamp extracted facts with their provenance (extraction-provenance).
+   * `runId` is null when run persistence failed — a fact must never reference
+   * a row that was not written.
+   */
+  async runWithMeta<T>(
+    agentName: string,
+    input: unknown,
+    ctx?: RunOptions,
+  ): Promise<{ output: T; runId: string | null }> {
     const started = Date.now();
     const runId = randomUUID();
     const log = this.logger.child({ runId, agent: agentName, ...ctx });
@@ -268,7 +282,7 @@ export class AgentRunner {
     }
 
     const acc = takeAcc(runId);
-    await this.persistRun({
+    const persisted = await this.persistRun({
       runId,
       agent,
       config,
@@ -291,7 +305,7 @@ export class AgentRunner {
       'agent run ok',
     );
 
-    return output as T;
+    return { output: output as T, runId: persisted ? runId : null };
   }
 
   /**
@@ -463,11 +477,14 @@ export class AgentRunner {
     status: 'ok' | 'fallback' | 'failed';
     startedAt: number;
     error?: string;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const { agent, config, ctx, input, output, acc, status, startedAt, error } = args;
     try {
       await this.prisma.agentRun.create({
         data: {
+          // Persist under the log-correlated runId (extraction-provenance):
+          // the id facts reference IS the row id, never a dangling UUID.
+          id: args.runId,
           agentName: agent.name,
           channelId: ctx?.channelId ?? null,
           contactId: ctx?.contactId ?? null,
@@ -484,12 +501,14 @@ export class AgentRunner {
           error: error ?? null,
         },
       });
+      return true;
     } catch (e) {
       // Persisting telemetry must never crash the caller. Log and swallow.
       this.logger.error(
         { event: 'agent.runPersistFailed', err: (e as Error).message },
         'failed to persist agent_run',
       );
+      return false;
     }
   }
 }

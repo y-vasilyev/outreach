@@ -37,7 +37,14 @@ export async function bloggerProfilesRoutes(app: FastifyInstance) {
     { preHandler: [app.requireRole(['admin', 'operator', 'viewer'])] },
     async (req) => {
       const params = z.object({ id: z.string() }).parse(req.params);
-      return bloggerProfilesService.get(params.id);
+      const q = z
+        .object({
+          includeSuperseded: z
+            .preprocess((v) => (v === 'true' || v === true ? true : v === 'false' ? false : v), z.boolean())
+            .optional(),
+        })
+        .parse(req.query ?? {});
+      return bloggerProfilesService.get(params.id, { includeSuperseded: q.includeSuperseded ?? false });
     },
   );
 

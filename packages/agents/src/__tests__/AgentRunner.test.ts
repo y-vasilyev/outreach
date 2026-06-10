@@ -97,6 +97,39 @@ describe('AgentRunner implementation resolution', () => {
     expect(out.y).toBe('ok:a');
   });
 
+  it('runWithMeta returns the PERSISTED agent_run.id (row id == log runId)', async () => {
+    const row = makeConfigRow({ name: 'fake_impl', role: 'fake_impl' });
+    const prisma = {
+      agentConfig: { findUnique: vi.fn().mockResolvedValue(row) },
+      agentRun: { create: vi.fn().mockResolvedValue({}) },
+    } as unknown as PrismaClient;
+
+    const runner = new AgentRunner({ prisma, endpointResolver: resolver });
+    const { output, runId } = await runner.runWithMeta<{ y: string }>('fake_impl', { x: 'hi' });
+    expect(output.y).toBe('ok:hi');
+    // extraction-provenance: the create carries id = runId, so facts that
+    // reference runId never dangle.
+    const createMock = prisma.agentRun.create as unknown as ReturnType<typeof vi.fn>;
+    const data = createMock.mock.calls[0]?.[0].data as { id?: string };
+    expect(runId).toBeTruthy();
+    expect(data.id).toBe(runId);
+  });
+
+  it('runWithMeta returns runId=null when run persistence failed', async () => {
+    const row = makeConfigRow({ name: 'fake_impl', role: 'fake_impl' });
+    const prisma = {
+      agentConfig: { findUnique: vi.fn().mockResolvedValue(row) },
+      agentRun: { create: vi.fn().mockRejectedValue(new Error('db down')) },
+    } as unknown as PrismaClient;
+
+    const runner = new AgentRunner({ prisma, endpointResolver: resolver });
+    const { output, runId } = await runner.runWithMeta<{ y: string }>('fake_impl', { x: 'hi' });
+    // The run itself still succeeds (telemetry must never crash the caller)…
+    expect(output.y).toBe('ok:hi');
+    // …but no fact may reference a row that was not written.
+    expect(runId).toBeNull();
+  });
+
   it('throws notFound when neither the name nor the role is a registered impl', async () => {
     const row = makeConfigRow({ name: 'mystery', role: 'also_unknown' });
     const prisma = {

@@ -25,7 +25,7 @@ import {
  */
 
 /** Lifecycle of a `placement_attribute` row (DB `status` column). */
-export const PlacementAttributeStatusZ = z.enum(['active', 'proposed', 'rejected']);
+export const PlacementAttributeStatusZ = z.enum(['active', 'proposed', 'rejected', 'superseded']);
 export type PlacementAttributeStatus = z.infer<typeof PlacementAttributeStatusZ>;
 
 /**

@@ -16,8 +16,8 @@ const mocks = vi.hoisted(() => {
     conversation: { findUnique: vi.fn() },
     message: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
     bloggerProfile: { upsert: vi.fn(), update: vi.fn(), findUnique: vi.fn() },
-    profileDataPoint: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn() },
-    placementAttribute: { create: vi.fn(), findFirst: vi.fn(), deleteMany: vi.fn() },
+    profileDataPoint: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn(), updateMany: vi.fn() },
+    placementAttribute: { create: vi.fn(), findFirst: vi.fn(), deleteMany: vi.fn(), updateMany: vi.fn() },
     extractionHint: { findMany: vi.fn() },
     mediaAsset: { updateMany: vi.fn(), deleteMany: vi.fn(), create: vi.fn() },
     exchangeRate: { findMany: vi.fn() },
@@ -42,7 +42,15 @@ vi.mock('@nosquare/db', async (importOriginal) => {
 });
 vi.mock('bullmq', () => ({ Worker: class {}, Queue: class { add = vi.fn(async () => ({})); } }));
 vi.mock('../redis.js', () => ({ getRedis: () => ({}) }));
-vi.mock('../services/run-agent-safe.js', () => ({ runAgentSafe: mocks.runAgentSafe }));
+vi.mock('../services/run-agent-safe.js', () => ({
+  runAgentSafe: mocks.runAgentSafe,
+  // extraction-provenance: the worker uses the WithMeta variant; tests keep
+  // driving the same mock and get a deterministic run id.
+  runAgentSafeWithMeta: async (...args: unknown[]) => {
+    const out = await mocks.runAgentSafe(...(args as [string, unknown, unknown]));
+    return out === null ? null : { output: out, runId: 'run_test' };
+  },
+}));
 vi.mock('../services/realtime-emit.js', () => ({ publishRealtime: mocks.publishRealtime }));
 vi.mock('../feature-flags.js', () => ({
   getFeatureFlags: () => ({ get: (k: string) => mocks.flagState[k] ?? false }),
@@ -107,6 +115,8 @@ beforeEach(() => {
   mocks.prisma.placementAttribute.findFirst.mockResolvedValue(null);
   mocks.prisma.placementAttribute.deleteMany.mockResolvedValue({ count: 0 });
   mocks.prisma.profileDataPoint.deleteMany.mockResolvedValue({ count: 0 });
+  mocks.prisma.profileDataPoint.updateMany.mockResolvedValue({ count: 0 });
+  mocks.prisma.placementAttribute.updateMany.mockResolvedValue({ count: 0 });
   mocks.prisma.extractionHint.findMany.mockResolvedValue([]);
   mocks.prisma.message.update.mockResolvedValue({});
   mocks.publishRealtime.mockResolvedValue(undefined);
@@ -274,27 +284,35 @@ describe('handleProfileExtract — structured placement offers', () => {
     expect(mocks.prisma.placementAttribute.create).not.toHaveBeenCalled();
   });
 
-  it('supersede deletes prior rows (not operator points) before writing', async () => {
+  it('supersede MARKS prior rows superseded (not operator points) — never deletes', async () => {
     await handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1', supersede: true });
-    // Prior data points for this message deleted, excluding operator origin.
-    const del = mocks.prisma.profileDataPoint.deleteMany.mock.calls[0]![0] as {
-      where: { profileId: string; sourceMessageId: string; extractedBy: { not: string } };
+    // extraction-provenance: soft supersede — prior LIVE data points for this
+    // message get supersededAt, excluding operator origin. No deleteMany.
+    expect(mocks.prisma.profileDataPoint.deleteMany).not.toHaveBeenCalled();
+    const upd = mocks.prisma.profileDataPoint.updateMany.mock.calls[0]![0] as {
+      where: { profileId: string; sourceMessageId: string; extractedBy: { not: string }; supersededAt: null };
+      data: { supersededAt: Date };
     };
-    expect(del.where.sourceMessageId).toBe('m1');
-    expect(del.where.extractedBy.not).toBe('operator');
-    // Prior PROPOSED attribute proposals + raw-payload media deleted; an
-    // admin-approved `active` registry row is preserved (status filter).
-    expect(mocks.prisma.placementAttribute.deleteMany).toHaveBeenCalledWith({
+    expect(upd.where.sourceMessageId).toBe('m1');
+    expect(upd.where.extractedBy.not).toBe('operator');
+    expect(upd.where.supersededAt).toBeNull();
+    expect(upd.data.supersededAt).toBeInstanceOf(Date);
+    // Prior PROPOSED attribute proposals move to `superseded` (history, not
+    // rejected); an admin-approved `active` registry row is preserved.
+    expect(mocks.prisma.placementAttribute.deleteMany).not.toHaveBeenCalled();
+    expect(mocks.prisma.placementAttribute.updateMany).toHaveBeenCalledWith({
       where: { sourceMessageId: 'm1', status: 'proposed' },
+      data: { status: 'superseded' },
     });
+    // The raw-payload snapshot is a regenerated cache — still replaced.
     expect(mocks.prisma.mediaAsset.deleteMany).toHaveBeenCalled();
   });
 
   it('supersede with an EMPTY re-extraction still clears the prior rows (codex P2.2)', async () => {
     mocks.runAgentSafe.mockResolvedValue({ data_points: [], placement_offers: [], attribute_proposals: [] });
     await handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1', supersede: true });
-    // Entered the tx and cleared old rows even though nothing new was extracted.
-    expect(mocks.prisma.profileDataPoint.deleteMany).toHaveBeenCalled();
+    // Entered the tx and superseded old rows even though nothing new came in.
+    expect(mocks.prisma.profileDataPoint.updateMany).toHaveBeenCalled();
     expect(mocks.prisma.bloggerProfile.update).toHaveBeenCalled(); // re-rolled
     const stamped = mocks.prisma.message.update.mock.calls.find(
       (c) => (c[0] as { data: { extractionStatus?: string } }).data.extractionStatus === 'empty',
@@ -302,9 +320,10 @@ describe('handleProfileExtract — structured placement offers', () => {
     expect(stamped).toBeTruthy();
   });
 
-  it('does NOT delete prior rows when supersede is absent', async () => {
+  it('does NOT touch prior rows when supersede is absent', async () => {
     await handleProfileExtract({ conversationId: 'conv1', sourceMessageId: 'm1' });
     expect(mocks.prisma.profileDataPoint.deleteMany).not.toHaveBeenCalled();
+    expect(mocks.prisma.profileDataPoint.updateMany).not.toHaveBeenCalled();
   });
 
   it('stamps extractionStatus ok on a successful write', async () => {

@@ -55,7 +55,12 @@ function serialize(row: PlacementAttributeDbRow): PlacementAttributeReviewItem {
   // unions at the read boundary so the response schema stays honest.
   const valueType = VALUE_TYPES.has(row.valueType) ? row.valueType : 'string';
   const status =
-    row.status === 'active' || row.status === 'proposed' || row.status === 'rejected'
+    row.status === 'active' ||
+    row.status === 'proposed' ||
+    row.status === 'rejected' ||
+    // extraction-provenance: a re-run replaced the proposal — history, never
+    // actionable, and never clamped back into the review queue.
+    row.status === 'superseded'
       ? row.status
       : 'proposed';
   return {
@@ -98,15 +103,28 @@ const SELECT = {
 } as const;
 
 export const placementAttributesService = {
-  /** List proposals awaiting review (`status='proposed'`), newest first. */
-  async listProposals(): Promise<PlacementAttributeReviewList> {
+  /**
+   * List proposals awaiting review (`status='proposed'`), newest first.
+   * `includeSuperseded` additionally returns the superseded generations
+   * (proposals a re-run replaced) as a separate non-actionable history list.
+   */
+  async listProposals(
+    opts: { includeSuperseded?: boolean } = {},
+  ): Promise<PlacementAttributeReviewList & { superseded?: PlacementAttributeReviewItem[] }> {
     const prisma = getPrisma();
     const rows = (await prisma.placementAttribute.findMany({
       where: { status: 'proposed' },
       orderBy: { createdAt: 'desc' },
       select: SELECT,
     })) as PlacementAttributeDbRow[];
-    return { items: rows.map(serialize), total: rows.length };
+    const base = { items: rows.map(serialize), total: rows.length };
+    if (!opts.includeSuperseded) return base;
+    const history = (await prisma.placementAttribute.findMany({
+      where: { status: 'superseded' },
+      orderBy: { updatedAt: 'desc' },
+      select: SELECT,
+    })) as PlacementAttributeDbRow[];
+    return { ...base, superseded: history.map(serialize) };
   },
 
   /**

@@ -175,7 +175,10 @@ export async function rerollBloggerProfile(
   profileId: string,
   onSkipRow?: (rowId: string) => void,
 ): Promise<{ source: OfferRollupSource }> {
-  const points = await tx.profileDataPoint.findMany({ where: { profileId } });
+  // Live rows only (extraction-provenance): superseded facts never re-roll.
+  const points = await tx.profileDataPoint.findMany({
+    where: { profileId, supersededAt: null },
+  });
   const rollupInput: RollupDataPoint[] = points.map((p) => ({
     field: p.field,
     value: p.value,

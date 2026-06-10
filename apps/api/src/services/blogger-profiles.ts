@@ -479,6 +479,7 @@ export const bloggerProfilesService = {
     const includeShape = {
       _count: { select: { dataPoints: true } },
       dataPoints: {
+        where: { supersededAt: null },
         select: { sourceMessageId: true, rawSnippet: true },
         orderBy: { capturedAt: 'desc' },
       },
@@ -600,12 +601,19 @@ export const bloggerProfilesService = {
     };
   },
 
-  async get(id: string) {
+  async get(id: string, opts: { includeSuperseded?: boolean } = {}) {
     const prisma = getPrisma();
     const profile = await prisma.bloggerProfile.findUnique({
       where: { id },
       include: {
-        dataPoints: { orderBy: [{ field: 'asc' }, { capturedAt: 'desc' }] },
+        // Default = live rows only (extraction-provenance); the history view
+        // (`includeSuperseded=true`) returns superseded generations too, with
+        // their supersededAt/agentRunId, so «что изменил переразбор» is
+        // auditable without raw SQL.
+        dataPoints: {
+          ...(opts.includeSuperseded ? {} : { where: { supersededAt: null } }),
+          orderBy: [{ field: 'asc' }, { capturedAt: 'desc' }],
+        },
         postInsights: {
           orderBy: [{ metricCapturedAt: 'desc' }, { publishedAt: 'desc' }],
         },
@@ -630,7 +638,8 @@ export const bloggerProfilesService = {
     ]);
     const messagesById = new Map(messages.map((m) => [m.id, m.text]));
     const freshness = computeProfileFreshness(
-      profile.dataPoints.map((dp) => ({
+      // Freshness reflects LIVE facts even when the history view is requested.
+      profile.dataPoints.filter((dp) => !dp.supersededAt).map((dp) => ({
         field: dp.field,
         value: dp.value,
         capturedAt: dp.capturedAt,

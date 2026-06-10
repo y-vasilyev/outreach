@@ -40,9 +40,23 @@ export async function runAgentSafe<T>(
     overrides?: RunOptions['overrides'];
   },
 ): Promise<T | null> {
+  const meta = await runAgentSafeWithMeta<T>(agentName, input, ctx);
+  return meta ? meta.output : null;
+}
+
+/**
+ * `runAgentSafe` + the persisted `agent_run.id` (extraction-provenance), so
+ * extraction callers can stamp facts with the run that produced them.
+ * `runId` is null when run persistence failed — never a dangling reference.
+ */
+export async function runAgentSafeWithMeta<T>(
+  agentName: string,
+  input: unknown,
+  ctx: Parameters<typeof runAgentSafe<T>>[2],
+): Promise<{ output: T; runId: string | null } | null> {
   const runner = getRunner();
   try {
-    return await runner.run<T>(agentName, input, ctx);
+    return await runner.runWithMeta<T>(agentName, input, ctx);
   } catch (e) {
     const code = isAppError(e) ? e.code : 'INTERNAL';
     const reason = e instanceof Error ? e.message : String(e);

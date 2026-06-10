@@ -957,6 +957,10 @@ model BloggerPostInsight {
 
 // One harvested fact with provenance, so the rolled-up profile can be
 // re-derived and audited. Raw source text preserved in `rawSnippet`.
+// Lifecycle (extraction-provenance): extraction flows NEVER physically delete
+// rows — replacement (operator re-run supersede) stamps `supersededAt`.
+// Default readers consider live rows only (`supersededAt IS NULL`); a partial
+// index in migration 9h keeps the hot path on live rows.
 model ProfileDataPoint {
   id              String         @id @default(cuid())
   profileId       String         @map("profile_id")
@@ -968,8 +972,13 @@ model ProfileDataPoint {
   extractedBy     String         @default("llm") @map("extracted_by")
   // Plain reference to Message.id (no FK relation).
   sourceMessageId String?        @map("source_message_id")
+  // Plain reference to the persisted agent_run.id of the extractor run that
+  // produced this fact (null = operator-origin or run persistence failed) —
+  // any fact is traceable to the exact model/config/cost that emitted it.
+  agentRunId      String?        @map("agent_run_id")
   rawSnippet      String         @default("") @map("raw_snippet")
   capturedAt      DateTime       @default(now()) @map("captured_at")
+  supersededAt    DateTime?      @map("superseded_at")
   createdAt       DateTime       @default(now()) @map("created_at")
 
   @@index([profileId, field])

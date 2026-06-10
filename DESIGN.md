@@ -621,6 +621,19 @@ SQL) с гарантией суперсета — профили без active-�
 изменений поверх. Паритет закреплён тестом `precutIncludesProfile ⊇
 shortlist`. Ops-логи: `catalog_query`, `prefilter_cut`, `rollup_source`.
 
+### Аудит-цепочка экстракции (extraction-provenance)
+
+Полная цепочка: message → media/OCR → `agent_run` → `profile_data_point` →
+`placement_offer` → `blogger_profile`. Каждый LLM-факт несёт `agent_run_id` —
+ПЕРСИСТЕНТНЫЙ id строки `agent_run` (`AgentRunner.persistRun` пишет `id =
+runId`; `runWithMeta`/`runAgentSafeWithMeta` возвращают его, null при сбое
+персиста — висячих ссылок не бывает). Переразбор оператора больше НЕ удаляет
+факты: `superseded_at` (данные), `status='superseded'` (attribute proposals);
+дефолтные читатели (roll-up, HUD, планировщик, каталог, idempotency) видят
+только живые строки (partial-индекс в `9h`), история — `GET
+/blogger-profiles/:id?includeSuperseded=true` и `GET /placement-attributes/
+proposals?includeSuperseded=true`.
+
 ### Object storage (`packages/storage`)
 
 `ObjectStore` — обёртка над S3-совместимым SDK (MinIO в dev, `S3_*` env),

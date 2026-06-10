@@ -100,6 +100,7 @@ export const dataCollectionHudService = {
         where: { channelId },
         select: {
           dataPoints: {
+            where: { supersededAt: null },
             select: {
               field: true,
               value: true,

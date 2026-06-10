@@ -663,6 +663,10 @@ advertising/business contact. Сообщение должно прямо обо�
   «5-7к» ⇒ 5000/7000), «от»-цена НИКОГДА не коерсится в точную; `price` =
   `price_min`; литеральный токен цены сохраняется в `rawPrice` (схема
   стэшит его до коерции и для строковых цен из LLM-вывода).
+  Провенанс (extraction-provenance): воркер вызывает экстракторы через
+  `runAgentSafeWithMeta` и штампует `agent_run_id` на каждый факт/пропозал;
+  `AgentRunner.runWithMeta` возвращает персистентный id строки `agent_run`
+  (null при сбое персиста телеметрии).
   Примечание: фокусный доспрос `duration` для прайсованных постов уже
   встроен (реестр `requiredForKinds: ['post']` + planner placement inputs);
   в проде его активирует флаг `structured_placement_offers`.
