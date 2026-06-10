@@ -520,7 +520,11 @@ export async function handleProfileExtract(data: {
         const key = proposal.suggestedKey.trim();
         if (!key) continue;
         const existing = await tx.placementAttribute.findFirst({
-          where: { key, sourceMessageId },
+          // History rows must not suppress a fresh re-proposal after a re-run
+          // (codex review): `superseded` is exactly «replaced by reanalysis»,
+          // while proposed/active/rejected still dedupe (a reviewed decision
+          // is not re-asked).
+          where: { key, sourceMessageId, status: { not: 'superseded' } },
           select: { id: true },
         });
         if (existing) continue;

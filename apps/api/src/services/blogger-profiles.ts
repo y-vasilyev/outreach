@@ -477,7 +477,7 @@ export const bloggerProfilesService = {
     const startedAt = Date.now();
     const where = profileOfferFilterWhere(filters, now);
     const includeShape = {
-      _count: { select: { dataPoints: true } },
+      _count: { select: { dataPoints: { where: { supersededAt: null } } } },
       dataPoints: {
         where: { supersededAt: null },
         select: { sourceMessageId: true, rawSnippet: true },
@@ -671,7 +671,11 @@ export const bloggerProfilesService = {
     };
     const presented = withPresentation(serialized, {
       channel,
-      dataPoints: serialized.dataPoints,
+      // Presentation refinement (source texts → rate-card/format enrichment)
+      // must see LIVE facts only — with includeSuperseded the audit list
+      // carries history, but superseded prices must not leak back into the
+      // current top-level fields (codex review).
+      dataPoints: serialized.dataPoints.filter((dp) => !dp.supersededAt),
       messagesById,
     });
     // Staleness labels on the detail view too (catalog-sql-search): stale
