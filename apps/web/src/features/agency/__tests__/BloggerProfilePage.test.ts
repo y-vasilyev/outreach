@@ -55,9 +55,8 @@ beforeEach(() => {
     }
     // Campaign-context request: the same profile plus a fit verdict.
     if (path === '/blogger-profiles/p_live?campaignId=c1') {
-      const base = await apiGet.getMockImplementation()!('/blogger-profiles/p_live');
       return {
-        ...base,
+        ...liveProfile(),
         fit: {
           score: 0.78,
           source: 'deterministic',
@@ -70,7 +69,14 @@ beforeEach(() => {
       };
     }
     if (path === '/blogger-profiles/p_live') {
-      return {
+      return liveProfile();
+    }
+    throw new Error(`unexpected GET ${path}`);
+  });
+});
+
+function liveProfile(): Record<string, unknown> {
+  return {
         id: 'p_live',
         channelId: 'chan_live',
         displayName: '@polyaam',
@@ -145,11 +151,8 @@ beforeEach(() => {
           reach: { stale: true, ageDays: null },
           avgViews: { stale: true, ageDays: null },
         },
-      };
-    }
-    throw new Error(`unexpected GET ${path}`);
-  });
-});
+  };
+}
 
 const profileWithOffers = {
   id: 'p_offers',
