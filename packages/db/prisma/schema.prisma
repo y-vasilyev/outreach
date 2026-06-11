@@ -818,13 +818,36 @@ model BloggerProfile {
   createdAt  DateTime  @default(now()) @map("created_at")
   updatedAt  DateTime  @updatedAt @map("updated_at")
 
-  dataPoints   ProfileDataPoint[]
-  mediaAssets  MediaAsset[]
-  matchResults MatchResult[]
-  postInsights BloggerPostInsight[]
-  offerRows    PlacementOfferRow[]
+  dataPoints      ProfileDataPoint[]
+  mediaAssets     MediaAsset[]
+  matchResults    MatchResult[]
+  postInsights    BloggerPostInsight[]
+  offerRows       PlacementOfferRow[]
+  metricSnapshots ProfileMetricSnapshot[]
 
   @@map("blogger_profile")
+}
+
+// Numeric-metric time series (blogger-dynamics): one row per OBSERVED CHANGE
+// of a rolled-up numeric metric, written by the rollup writers (worker
+// profile-extract + shared reroll) when the new value differs from the latest
+// snapshot. Price/CPM history deliberately lives elsewhere — the
+// placement_offer superseded chains are already a complete price series.
+// Read by the profile-detail trends (deltas + sparklines).
+model ProfileMetricSnapshot {
+  id         String   @id @default(cuid())
+  profileId  String   @map("profile_id")
+  // Metric key: 'avgViews' | 'reach' | 'subscribers:<platform>'.
+  metric     String
+  value      Decimal  @db.Decimal(18, 4)
+  capturedAt DateTime @default(now()) @map("captured_at")
+  // Writer provenance ('rollup' for both current writers).
+  source     String   @default("rollup")
+
+  profile BloggerProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId, metric, capturedAt])
+  @@map("profile_metric_snapshot")
 }
 
 // First-class placement-offer rows (placement-offer-table). One row per

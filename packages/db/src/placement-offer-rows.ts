@@ -1,4 +1,5 @@
 import type { Prisma } from '@prisma/client';
+import { recordMetricSnapshots } from './metric-snapshots.js';
 import {
   composeOffersFromRows,
   decideOfferRowWrite,
@@ -211,6 +212,9 @@ export async function rerollBloggerProfile(
       capturedAt: rolled.capturedAt ? new Date(rolled.capturedAt) : null,
     },
   });
+  // Metric time series (blogger-dynamics): append a snapshot per numeric
+  // metric whose rolled value changed.
+  await recordMetricSnapshots(tx, profileId, rolled);
   return { source: composed.source };
 }
 

@@ -24,6 +24,8 @@ const mocks = vi.hoisted(() => {
       update: vi.fn(),
       updateMany: vi.fn(),
     },
+    // Metric time series (blogger-dynamics): rollup appends change-only rows.
+    profileMetricSnapshot: { findMany: vi.fn(), createMany: vi.fn() },
     extractionHint: { findMany: vi.fn() },
     // harden-agency-sourcing-pipeline: profile-extract backfills
     // pre-profile media assets when the catalog profile appears.
@@ -105,6 +107,8 @@ beforeEach(() => {
   mocks.prisma.mediaAsset.updateMany.mockResolvedValue({ count: 0 });
   mocks.prisma.mediaAsset.deleteMany.mockResolvedValue({ count: 0 });
   mocks.prisma.mediaAsset.create.mockResolvedValue({});
+  mocks.prisma.profileMetricSnapshot.findMany.mockResolvedValue([]);
+  mocks.prisma.profileMetricSnapshot.createMany.mockResolvedValue({ count: 0 });
   mocks.prisma.$transaction.mockImplementation(
     async (fn: (tx: typeof mocks.prisma) => Promise<unknown>) => fn(mocks.prisma),
   );
@@ -151,6 +155,11 @@ describe('handleProfileExtract', () => {
       }),
     );
     expect(result).toMatchObject({ ok: true, profileId: 'prof1', dataPointsCreated: 2 });
+    // Metric time series (blogger-dynamics): the changed numeric metric got a
+    // change-only snapshot row.
+    expect(mocks.prisma.profileMetricSnapshot.createMany).toHaveBeenCalledWith({
+      data: [{ profileId: 'prof1', metric: 'reach', value: 12000, source: 'rollup' }],
+    });
   });
 
   it('fills the blogger profile rate card from a real multi-platform quote', async () => {

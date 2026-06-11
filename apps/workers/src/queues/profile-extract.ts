@@ -27,6 +27,7 @@ import {
   getPrisma,
   persistPlacementOfferRow,
   Prisma,
+  recordMetricSnapshots,
   supersedeOfferRowsForMessage,
 } from '@nosquare/db';
 import { getFeatureFlags } from '../feature-flags.js';
@@ -602,6 +603,10 @@ export async function handleProfileExtract(data: {
         platformAudience: rolled.platformAudience as never,
       },
     });
+
+    // Metric time series (blogger-dynamics): append a snapshot per numeric
+    // metric whose rolled value changed.
+    await recordMetricSnapshots(tx, profile.id, rolled);
 
     return { profileId: profile.id, dataPointsCreated: drafts.length };
   });
