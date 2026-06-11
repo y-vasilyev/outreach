@@ -31,6 +31,10 @@ describe('buildChannelSummary', () => {
     expect(buildChannelSummary({ platform: 'youtube', handle: 'kate' })?.url).toBe(
       'https://youtube.com/@kate',
     );
+    // A raw YouTube channel ID is not an @handle (codex review).
+    expect(
+      buildChannelSummary({ platform: 'youtube', handle: 'UCabcdefghijklmnopqrstuv' })?.url,
+    ).toBe('https://youtube.com/channel/UCabcdefghijklmnopqrstuv');
     // No deterministic public profile url for this platform — url stays null.
     expect(buildChannelSummary({ platform: 'vk', handle: 'kate' })?.url).toBeNull();
   });

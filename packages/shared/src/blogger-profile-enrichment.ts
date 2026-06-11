@@ -94,6 +94,12 @@ function channelProfileUrl(channel: BloggerProfileSourceChannel): SocialProfileL
   if (platform === 'telegram') return canonicalSocialUrl(`https://t.me/${handle}`);
   if (platform === 'instagram') return canonicalSocialUrl(`https://instagram.com/${handle}`);
   if (platform === 'youtube') {
+    // A bare channel ID (UC…) is not an @handle — its public page lives under
+    // /channel/<id>. Built manually so the link's `handle` stays the ID rather
+    // than the literal "channel" path segment (codex review).
+    if (/^UC[0-9A-Za-z_-]{20,}$/.test(handle)) {
+      return { platform: 'youtube', url: `https://youtube.com/channel/${handle}`, handle };
+    }
     const path = handle.startsWith('@') ? handle : `@${handle}`;
     return canonicalSocialUrl(`https://youtube.com/${path}`);
   }
