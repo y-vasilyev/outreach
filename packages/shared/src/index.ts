@@ -16,6 +16,7 @@ export * from './profile-staleness.js';
 export * from './blogger-profile-enrichment.js';
 export * from './blogger-post-insights.js';
 export * from './placement-offers.js';
+export * from './metric-trends.js';
 export * from './placement-offer-rows.js';
 export * from './offer-normalization.js';
 export * from './catalog-offer-filters.js';

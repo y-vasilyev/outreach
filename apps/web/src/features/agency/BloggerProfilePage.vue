@@ -22,6 +22,7 @@ import { bloggerDisplayTitle } from './blogger-display';
 import type {
   BloggerPostInsight,
   BloggerProfile,
+  OfferPriceTrend,
   PlacementAttribute,
   PlacementOffer,
   MediaAsset,
@@ -141,6 +142,30 @@ function offerNormalizedHint(o: PlacementOffer): string {
     bits.push(`CPM ${approx}${formatCompact(n.cpmRub)} ₽`);
   }
   return bits.join(' · ');
+}
+
+// Динамика цены оффера (blogger-dynamics): ряд по superseded-цепочке его
+// identity. Рост цены — warn (дороже), снижение — ok.
+const offerTrendByIdentity = computed(() => {
+  const map = new Map<string, OfferPriceTrend>();
+  for (const t of profile.value?.trends?.offers ?? []) map.set(t.identityKey, t);
+  return map;
+});
+
+function offerPriceDelta(o: PlacementOffer): { text: string; tone: string; title: string } | null {
+  if (!o.identityKey) return null;
+  const t = offerTrendByIdentity.value.get(o.identityKey);
+  if (!t || t.deltaPrev == null || t.deltaPrev === 0) return null;
+  const pct = Math.abs(t.deltaPrev * 100);
+  const num = pct >= 10 ? Math.round(pct).toString() : pct.toFixed(1);
+  const prev = t.points.at(-2);
+  return {
+    text: `${t.deltaPrev > 0 ? '↑ +' : '↓ −'}${num}% к прошлой цене`,
+    tone: t.deltaPrev > 0 ? 'warn' : 'ok',
+    title: prev
+      ? `Прошлая цена: ${formatCompact(prev.value)} ${t.currency} (${prev.capturedAt.slice(0, 10)})`
+      : '',
+  };
 }
 
 function attrLabel(key: string): string {
@@ -315,6 +340,11 @@ const refreshMut = useMutation({
                 <span v-if="offerNormalizedHint(o)" class="muted-2" style="font-size: 11px; font-weight: 400;">
                   {{ offerNormalizedHint(o) }}
                 </span>
+                <span
+                  v-if="offerPriceDelta(o)"
+                  :title="offerPriceDelta(o)!.title"
+                  :style="`font-size: 11px; font-weight: 600; color: var(--${offerPriceDelta(o)!.tone});`"
+                >{{ offerPriceDelta(o)!.text }}</span>
               </span>
             </div>
             <div v-if="offerTerms(o).length" style="margin-top: 8px; display: flex; flex-direction: column; gap: 3px;">

@@ -92,6 +92,20 @@ function liveProfile(): Record<string, unknown> {
         platformAudience: [
           { platform: 'telegram', subscribers: 100000, source: 'reply', capturedAt: NOW },
         ],
+        trends: {
+          metrics: [
+            {
+              metric: 'subscribers:telegram',
+              points: [
+                { value: 90000, capturedAt: '2026-05-01T00:00:00.000Z' },
+                { value: 100000, capturedAt: NOW },
+              ],
+              deltaPrev: 0.1111,
+              delta30d: 0.1111,
+            },
+          ],
+          offers: [],
+        },
         socialLinks: [
           { platform: 'telegram', url: 'https://t.me/polyaam', handle: 'polyaam' },
           { platform: 'youtube', url: 'https://youtube.com/@polyaam', handle: 'polyaam' },
@@ -180,6 +194,7 @@ const profileWithOffers = {
       sourceMessageId: 'm_offers',
       extractedBy: 'rate_card_extractor',
       capturedAt: NOW,
+      identityKey: 'telegram|post|day|||',
     },
     {
       kind: 'post',
@@ -219,6 +234,22 @@ const profileWithOffers = {
   updatedAt: NOW,
   dataPoints: [],
   mediaAssets: [],
+  trends: {
+    metrics: [],
+    offers: [
+      {
+        identityKey: 'telegram|post|day|||',
+        platform: 'telegram',
+        kind: 'post',
+        currency: 'RUB',
+        points: [
+          { value: 11000, capturedAt: '2026-04-01T00:00:00.000Z' },
+          { value: 13000, capturedAt: NOW },
+        ],
+        deltaPrev: 0.1818,
+      },
+    ],
+  },
 };
 
 describe('BloggerProfilePage', () => {
@@ -279,6 +310,8 @@ describe('BloggerProfilePage', () => {
     expect(stripText).toContain('2.1%');
     // Legacy rate cards back the «цена от» fallback (min = 19 000 RUB).
     expect(stripText).toContain('от 19');
+    // Динамика (blogger-dynamics): дельта подписчиков из trends.
+    expect(stripText).toContain('↑ +11% · 30 дн');
   });
 
   it('shows the fit verdict in the header when opened with campaign context', async () => {
@@ -339,5 +372,7 @@ describe('BloggerProfilePage', () => {
     expect(text).toContain('Входит');
     // Source snippet shown as the audit affordance back to the message.
     expect(text).toContain('пост на месяц 21000 + налог 6%');
+    // Динамика цены (blogger-dynamics): дельта к прошлой цене identity.
+    expect(text).toContain('↑ +18% к прошлой цене');
   });
 });

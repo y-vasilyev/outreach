@@ -46,6 +46,8 @@ export interface PlacementOffer {
   capturedAt: string | null;
   /** Older than the rate-card freshness TTL (catalog-sql-search) — visible, marked. */
   stale?: boolean;
+  /** Stable offer identity (detail only) — matches trends.offers (blogger-dynamics). */
+  identityKey?: string;
   /** Derived ₽-normalization (present when it adds info: fx conversion / CPM). */
   normalized?: {
     priceRubMin: number | null;
@@ -178,6 +180,34 @@ export interface ProfileFreshnessSection {
 
 export type ProfileFreshness = Record<ProfileFreshnessCategory, ProfileFreshnessSection>;
 
+// Metric/price dynamics (blogger-dynamics). Mirror of
+// packages/shared/src/metric-trends.ts. Deltas are fractions (0.12 = +12%).
+export interface MetricTrendPoint {
+  value: number;
+  capturedAt: string;
+}
+
+export interface MetricTrend {
+  metric: string; // 'avgViews' | 'reach' | 'subscribers:<platform>'
+  points: MetricTrendPoint[];
+  deltaPrev: number | null;
+  delta30d: number | null;
+}
+
+export interface OfferPriceTrend {
+  identityKey: string;
+  platform: string | null;
+  kind: string;
+  currency: string;
+  points: MetricTrendPoint[];
+  deltaPrev: number | null;
+}
+
+export interface BloggerProfileTrends {
+  metrics: MetricTrend[];
+  offers: OfferPriceTrend[];
+}
+
 export interface BloggerProfile {
   id: string;
   channelId: string | null;
@@ -207,6 +237,7 @@ export interface BloggerProfile {
   dataPoints?: ProfileDataPoint[];
   mediaAssets?: MediaAsset[];
   freshness?: ProfileFreshness;
+  trends?: BloggerProfileTrends;
   _count?: { dataPoints: number };
 }
 

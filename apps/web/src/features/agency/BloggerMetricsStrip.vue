@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import Pill from '../../components/Pill.vue';
+import Sparkline from './Sparkline.vue';
 import { formatCompact, formatRelative } from '../../lib/format';
 import { freshnessAgeText, freshnessTone, freshnessTooltip } from './freshness-ui';
 import { isRubCurrency, summarizeOffers } from './offer-summary';
 import type { PillClass } from '../../lib/state';
-import type { BloggerProfile, ProfileFreshnessCategory } from './types';
+import type { BloggerProfile, MetricTrend, ProfileFreshnessCategory } from './types';
 
 // Decision-ux: полоса решающих метрик — подписчики (по платформам),
 // просмотры, охват, ERR/ER, «цена от», «CPM от». Каждое число несёт inline
@@ -24,9 +25,45 @@ interface MetricTile {
   value: string;
   title?: string;
   badge: MetricBadge | null;
+  /** Дельта динамики (blogger-dynamics): рост охвата — ok, падение — warn. */
+  delta?: MetricBadge | null;
+  /** Спарклайн ряда значений (≥2 точек). */
+  spark?: number[];
 }
 
 const summary = computed(() => summarizeOffers(props.profile.placementOffers ?? []));
+
+const trendByMetric = computed(() => {
+  const map = new Map<string, MetricTrend>();
+  for (const t of props.profile.trends?.metrics ?? []) map.set(t.metric, t);
+  return map;
+});
+
+function formatDelta(delta: number): string {
+  const pct = Math.abs(delta * 100);
+  const num = pct >= 10 ? Math.round(pct).toString() : pct.toFixed(1);
+  return `${delta > 0 ? '↑ +' : delta < 0 ? '↓ −' : ''}${num}%`;
+}
+
+/** Дельта-бейдж тайла: 30-дневная, если ряд достаёт, иначе к предыдущему наблюдению. */
+function trendDelta(metric: string): MetricBadge | null {
+  const t = trendByMetric.value.get(metric);
+  if (!t) return null;
+  const delta = t.delta30d ?? t.deltaPrev;
+  if (delta == null || delta === 0) return null;
+  const window = t.delta30d != null ? 'за 30 дн' : 'к пред. наблюдению';
+  return {
+    text: `${formatDelta(delta)} · ${t.delta30d != null ? '30 дн' : 'пред.'}`,
+    tone: delta > 0 ? 'ok' : 'warn',
+    title: `Изменение ${window} (${t.points.length} наблюдений)`,
+  };
+}
+
+function trendSpark(metric: string): number[] | undefined {
+  const t = trendByMetric.value.get(metric);
+  if (!t || t.points.length < 2) return undefined;
+  return t.points.slice(-20).map((p) => p.value);
+}
 
 function freshnessBadge(category: ProfileFreshnessCategory, label: string): MetricBadge | null {
   const section = props.profile.freshness?.[category];
@@ -70,6 +107,7 @@ const tiles = computed<MetricTile[]>(() => {
   const audience = p.platformAudience ?? [];
   if (audience.length) {
     for (const pa of audience) {
+      const metric = `subscribers:${pa.platform.toLowerCase()}`;
       out.push({
         key: `subs:${pa.platform}`,
         label: `подписчики · ${pa.platform}`,
@@ -77,6 +115,8 @@ const tiles = computed<MetricTile[]>(() => {
         badge: pa.capturedAt
           ? { text: formatRelative(pa.capturedAt), tone: 'ghost', title: `Снято: ${pa.capturedAt.slice(0, 10)}` }
           : null,
+        delta: trendDelta(metric),
+        spark: trendSpark(metric),
       });
     }
   } else {
@@ -93,12 +133,16 @@ const tiles = computed<MetricTile[]>(() => {
     label: 'ср. просмотры',
     value: p.avgViews != null ? formatCompact(p.avgViews) : '—',
     badge: freshnessBadge('avgViews', 'Ср. просмотры'),
+    delta: trendDelta('avgViews'),
+    spark: trendSpark('avgViews'),
   });
   out.push({
     key: 'reach',
     label: 'охват',
     value: p.reach != null ? formatCompact(p.reach) : '—',
     badge: freshnessBadge('reach', 'Охват'),
+    delta: trendDelta('reach'),
+    spark: trendSpark('reach'),
   });
 
   if (e?.err != null) {
@@ -171,9 +215,15 @@ const tiles = computed<MetricTile[]>(() => {
       <div v-for="t in tiles" :key="t.key" class="stat" :title="t.title">
         <span class="stat__v mono">{{ t.value }}</span>
         <span class="stat__l">{{ t.label }}</span>
-        <Pill v-if="t.badge" :cls="t.badge.tone" :dot="false" :title="t.badge.title" class="stat__badge">
-          {{ t.badge.text }}
-        </Pill>
+        <Sparkline v-if="t.spark" :values="t.spark" />
+        <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+          <Pill v-if="t.delta" :cls="t.delta.tone" :dot="false" :title="t.delta.title" class="stat__badge">
+            {{ t.delta.text }}
+          </Pill>
+          <Pill v-if="t.badge" :cls="t.badge.tone" :dot="false" :title="t.badge.title" class="stat__badge">
+            {{ t.badge.text }}
+          </Pill>
+        </div>
       </div>
     </div>
   </div>

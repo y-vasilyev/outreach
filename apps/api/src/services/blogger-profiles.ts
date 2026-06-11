@@ -5,9 +5,11 @@ import {
   BloggerPostMetricsZ,
   buildChannelSummary,
   buildFitBreakdown,
+  buildMetricTrends,
   buildOfferHistory,
   buildBloggerProfilePresentation,
   computeBloggerEngagement,
+  offerIdentityKey,
   computePostMetricFreshness,
   Errors,
   computeProfileFreshness,
@@ -662,13 +664,33 @@ export const bloggerProfilesService = {
     });
     if (!profile) throw Errors.notFound('blogger_profile', id);
     const sourceIds = collectSourceMessageIds(profile.dataPoints);
-    const [channel, messages] = await Promise.all([
+    const [channel, messages, metricSnapshots, trendDataPoints] = await Promise.all([
       profile.channelId
         ? prisma.channel.findUnique({ where: { id: profile.channelId }, select: channelSelect })
         : Promise.resolve(null),
       sourceIds.length
         ? prisma.message.findMany({ where: { id: { in: sourceIds } }, select: { id: true, text: true } })
         : Promise.resolve([]),
+      // Metric time series (blogger-dynamics): the change-only snapshot rows…
+      prisma.profileMetricSnapshot.findMany({
+        where: { profileId: id },
+        orderBy: { capturedAt: 'asc' },
+        select: { metric: true, value: true, capturedAt: true },
+      }),
+      // …plus the numeric facts INCLUDING superseded generations as the
+      // pre-snapshot backfill (buildMetricTrends drops overlap itself).
+      prisma.profileDataPoint.findMany({
+        where: {
+          profileId: id,
+          OR: [
+            { field: { in: ['reach', 'views.avg', 'avg_views', 'views'] } },
+            { field: { startsWith: 'reach.' } },
+            { field: { startsWith: 'views.' } },
+            { field: { startsWith: 'audience.subscribers.' } },
+          ],
+        },
+        select: { field: true, value: true, capturedAt: true },
+      }),
     ]);
     const messagesById = new Map(messages.map((m) => [m.id, m.text]));
     const freshness = computeProfileFreshness(
@@ -712,9 +734,28 @@ export const bloggerProfilesService = {
       dataPoints: serialized.dataPoints.filter((dp) => !dp.supersededAt),
       messagesById,
     });
+    // Metric/price dynamics (blogger-dynamics): snapshots + superseded numeric
+    // facts + offer history → per-metric deltas and series.
+    const trends = buildMetricTrends({
+      snapshots: metricSnapshots.map((s) => ({
+        metric: s.metric,
+        value: Number(s.value),
+        capturedAt: s.capturedAt,
+      })),
+      dataPoints: trendDataPoints,
+      offerHistory: serialized.offerHistory,
+    });
     // Staleness labels on the detail view too (catalog-sql-search): stale
-    // prices stay visible, marked.
-    const labeled = { ...presented, placementOffers: labelOfferStaleness(presented.placementOffers) };
+    // prices stay visible, marked. identityKey lets the UI match an offer to
+    // its price trend.
+    const labeled = {
+      ...presented,
+      placementOffers: labelOfferStaleness(presented.placementOffers).map((o) => ({
+        ...o,
+        identityKey: offerIdentityKey(o),
+      })),
+      trends,
+    };
     if (!opts.campaignId && !opts.briefId) return labeled;
     // Fit verdict in campaign/brief context (decision-ux) — the same scoring
     // path as list(): persisted matchResult wins, else deterministic score.

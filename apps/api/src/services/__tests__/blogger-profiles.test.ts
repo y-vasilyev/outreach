@@ -23,6 +23,10 @@ interface PrismaMock {
   matchResult: { findMany: ReturnType<typeof vi.fn> };
   channel: { findUnique: ReturnType<typeof vi.fn>; findMany: ReturnType<typeof vi.fn> };
   message: { findMany: ReturnType<typeof vi.fn> };
+  // Metric time series (blogger-dynamics): detail reads snapshots + numeric
+  // facts (incl. superseded) for the trends payload.
+  profileMetricSnapshot: { findMany: ReturnType<typeof vi.fn> };
+  profileDataPoint: { findMany: ReturnType<typeof vi.fn> };
 }
 
 const prismaMock: PrismaMock = {
@@ -32,6 +36,8 @@ const prismaMock: PrismaMock = {
   matchResult: { findMany: vi.fn() },
   channel: { findUnique: vi.fn(), findMany: vi.fn() },
   message: { findMany: vi.fn() },
+  profileMetricSnapshot: { findMany: vi.fn() },
+  profileDataPoint: { findMany: vi.fn() },
 };
 
 vi.mock('@nosquare/db', () => ({
@@ -65,6 +71,8 @@ beforeEach(() => {
   prismaMock.adBrief.findUnique.mockResolvedValue(null);
   prismaMock.campaign.findUnique.mockResolvedValue(null);
   prismaMock.matchResult.findMany.mockResolvedValue([]);
+  prismaMock.profileMetricSnapshot.findMany.mockResolvedValue([]);
+  prismaMock.profileDataPoint.findMany.mockResolvedValue([]);
   // Pin the clock so age-in-days assertions don't drift with the real wall clock.
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
