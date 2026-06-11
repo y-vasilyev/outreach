@@ -1,5 +1,8 @@
 import { normalizePriceToken } from './price.js';
 import type {
+  BloggerChannelSummary,
+  BloggerEngagement,
+  BloggerPostMetrics,
   ProfileDataPointDraft,
   RateCard,
   SocialProfileLink,
@@ -146,6 +149,131 @@ export function buildBloggerProfilePresentation(opts: {
   if (channelHandle) return { displayName: `@${channelHandle}`, socialLinks };
 
   return { displayName: opts.channelId ?? opts.profileId.slice(0, 8), socialLinks };
+}
+
+/**
+ * Safe channel summary for UI presentation (blogger-profile decision-ux):
+ * platform/handle/title plus the public profile URL. Deliberately omits the
+ * internal channel id and raw `links` — the id stays on `profile.channelId`
+ * for the audit section.
+ */
+export function buildChannelSummary(
+  channel: BloggerProfileSourceChannel | null | undefined,
+): BloggerChannelSummary | null {
+  if (!channel) return null;
+  const platform = (channel.platform ?? '').trim().toLowerCase();
+  const handle = (channel.handle ?? '').trim().replace(/^@/, '');
+  if (!platform || !handle) return null;
+  return {
+    platform,
+    handle,
+    title: channel.title?.trim() || null,
+    url: channelProfileUrl(channel)?.url ?? null,
+  };
+}
+
+/**
+ * Engagement rates arrive in two conventions depending on the source
+ * (fraction 0.042 vs percent 4.2). Single normalization point: values ≤ 1 are
+ * already fractions, larger values are percents.
+ */
+export function normalizeEngagementRate(value: number): number {
+  return value <= 1 ? value : value / 100;
+}
+
+const ENGAGEMENT_COUNT_KEYS = [
+  'likes',
+  'comments',
+  'reactions',
+  'forwards',
+  'shares',
+  'saves',
+] as const;
+
+function round4(value: number): number {
+  return Math.round(value * 10_000) / 10_000;
+}
+
+function mean(values: number[]): number {
+  return values.reduce((sum, v) => sum + v, 0) / values.length;
+}
+
+/** Per-post ER: the stated rate when present, else interactions / views. */
+function postEngagementRate(metrics: BloggerPostMetrics): number | null {
+  if (metrics.engagementRate != null) return normalizeEngagementRate(metrics.engagementRate);
+  const views = metrics.views ?? 0;
+  if (views <= 0) return null;
+  let hasCounts = false;
+  let interactions = 0;
+  for (const key of ENGAGEMENT_COUNT_KEYS) {
+    const v = metrics[key];
+    if (v != null) {
+      hasCounts = true;
+      interactions += v;
+    }
+  }
+  return hasCounts ? interactions / views : null;
+}
+
+export interface BloggerEngagementInput {
+  avgViews: number | null;
+  /** Platform of the linked channel — the preferred ERR basis. */
+  channelPlatform?: string | null;
+  platformAudience: ReadonlyArray<{ platform: string; subscribers: number }>;
+  postInsights?: ReadonlyArray<{ platform: string; metrics: BloggerPostMetrics }>;
+}
+
+/**
+ * Derived engagement metrics (blogger-profile decision-ux).
+ *
+ * ERR basis platform: the linked channel's platform when its audience size is
+ * known (avgViews is observed on that channel), else the largest known
+ * audience as a proxy. A multi-platform blogger gets per-platform post
+ * aggregates in `perPlatform` so one scalar never hides the rest.
+ */
+export function computeBloggerEngagement(input: BloggerEngagementInput): BloggerEngagement {
+  const audience = input.platformAudience.filter((a) => a.subscribers > 0);
+  const channelPlatform = (input.channelPlatform ?? '').trim().toLowerCase();
+  const basis =
+    audience.find((a) => a.platform.toLowerCase() === channelPlatform) ??
+    [...audience].sort((a, b) => b.subscribers - a.subscribers)[0] ??
+    null;
+  const err =
+    basis && input.avgViews != null && input.avgViews > 0
+      ? round4(input.avgViews / basis.subscribers)
+      : null;
+
+  const byPlatform = new Map<string, { ers: number[]; views: number[] }>();
+  const allErs: number[] = [];
+  for (const post of input.postInsights ?? []) {
+    const platform = post.platform.trim().toLowerCase();
+    if (!platform) continue;
+    const bucket = byPlatform.get(platform) ?? { ers: [], views: [] };
+    const er = postEngagementRate(post.metrics);
+    if (er != null) {
+      bucket.ers.push(er);
+      allErs.push(er);
+    }
+    if (post.metrics.views != null && post.metrics.views > 0) bucket.views.push(post.metrics.views);
+    if (bucket.ers.length > 0 || bucket.views.length > 0) byPlatform.set(platform, bucket);
+  }
+  const perPlatform = [...byPlatform.entries()]
+    .map(([platform, b]) => ({
+      platform,
+      avgPostEr: b.ers.length > 0 ? round4(mean(b.ers)) : null,
+      avgViews: b.views.length > 0 ? Math.round(mean(b.views)) : null,
+      postsBasis: b.ers.length,
+    }))
+    .sort((a, b) => a.platform.localeCompare(b.platform));
+
+  return {
+    err,
+    errPlatform: err != null ? basis!.platform : null,
+    subscribersBasis: err != null ? basis!.subscribers : null,
+    avgPostEr: allErs.length > 0 ? round4(mean(allErs)) : null,
+    postsBasis: allErs.length,
+    perPlatform,
+  };
 }
 
 function parseCurrency(raw: string | undefined): string {

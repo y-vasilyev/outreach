@@ -141,6 +141,43 @@ export const PlatformAudienceEntryZ = z.object({
 });
 export type PlatformAudienceEntry = z.infer<typeof PlatformAudienceEntryZ>;
 
+/**
+ * Safe linked-channel presentation for the catalog/profile UI
+ * (blogger-profile decision-ux): platform + handle + title + public profile
+ * URL only — never the internal channel id or raw links. The id stays on
+ * `profile.channelId` for the audit affordances.
+ */
+export const BloggerChannelSummaryZ = z.object({
+  platform: z.string().min(1),
+  handle: z.string().min(1),
+  title: z.string().nullable().default(null),
+  url: z.string().url().nullable().default(null),
+});
+
+/** Per-platform post-engagement aggregates (blogger-profile decision-ux). */
+export const BloggerEngagementPlatformZ = z.object({
+  platform: z.string().min(1),
+  avgPostEr: z.number().nullable().default(null),
+  avgViews: z.number().nullable().default(null),
+  postsBasis: z.number().int().nonnegative().default(0),
+});
+
+/**
+ * Derived engagement metrics (blogger-profile decision-ux). `err` follows the
+ * TGStat ERR convention — avg post views / subscribers of the basis platform
+ * (`errPlatform`/`subscribersBasis` name that basis so the UI labels it
+ * honestly); `avgPostEr` averages per-post ER over posts with usable metrics.
+ * All rates are fractions (0.042 = 4.2%). Derived on read — never stored.
+ */
+export const BloggerEngagementZ = z.object({
+  err: z.number().nullable().default(null),
+  errPlatform: z.string().nullable().default(null),
+  subscribersBasis: z.number().int().nullable().default(null),
+  avgPostEr: z.number().nullable().default(null),
+  postsBasis: z.number().int().nonnegative().default(0),
+  perPlatform: z.array(BloggerEngagementPlatformZ).default([]),
+});
+
 export const BloggerProfileZ = z.object({
   id: z.string(),
   channelId: z.string().nullable(),
@@ -159,6 +196,10 @@ export const BloggerProfileZ = z.object({
   placementOffers: z.array(PlacementOfferZ).default([]),
   /** Per-platform audience sizes (placement-representation-v2). */
   platformAudience: z.array(PlatformAudienceEntryZ).default([]),
+  /** Safe linked-channel presentation (decision-ux); null when no channel. */
+  channel: BloggerChannelSummaryZ.nullable().optional(),
+  /** Derived engagement metrics (decision-ux). */
+  engagement: BloggerEngagementZ.nullable().optional(),
   reach: z.number().int().nullable(),
   avgViews: z.number().int().nullable(),
   capturedAt: z.string().nullable(),
@@ -223,6 +264,9 @@ export const ProfileExtractionOutputZ = z.object({
 
 export type RateCard = z.infer<typeof RateCardZ>;
 export type SocialProfileLink = z.infer<typeof SocialProfileLinkZ>;
+export type BloggerChannelSummary = z.infer<typeof BloggerChannelSummaryZ>;
+export type BloggerEngagementPlatform = z.infer<typeof BloggerEngagementPlatformZ>;
+export type BloggerEngagement = z.infer<typeof BloggerEngagementZ>;
 export type BloggerPostMetrics = z.infer<typeof BloggerPostMetricsZ>;
 export type PostMetricFreshness = z.infer<typeof PostMetricFreshnessZ>;
 export type BloggerPostInsight = z.infer<typeof BloggerPostInsightZ>;
