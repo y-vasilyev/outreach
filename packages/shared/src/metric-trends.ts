@@ -171,6 +171,9 @@ export function buildMetricTrends(input: MetricTrendsInput): BloggerProfileTrend
 
   const offers: OfferPriceTrend[] = [];
   for (const entry of input.offerHistory ?? []) {
+    // No CURRENT price → no dynamics: a «по запросу» offer must not carry a
+    // «к прошлой цене» delta built purely from history (codex review).
+    if (!entry.active || entry.active.priceMin == null) continue;
     const all = [...entry.history, ...(entry.active ? [entry.active] : [])]
       // Low-confidence captures are not observations of the real price.
       .filter((r) => r.status !== 'low_confidence' && r.priceMin != null);

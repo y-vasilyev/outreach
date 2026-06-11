@@ -128,21 +128,24 @@ const tiles = computed<MetricTile[]>(() => {
     });
   }
 
+  // Динамика рисуется только при ЖИВОМ текущем значении: после удаления
+  // последнего факта старые точки ряда не должны изображать «текущее
+  // изменение» у пустой метрики (codex review).
   out.push({
     key: 'avgViews',
     label: 'ср. просмотры',
     value: p.avgViews != null ? formatCompact(p.avgViews) : '—',
     badge: freshnessBadge('avgViews', 'Ср. просмотры'),
-    delta: trendDelta('avgViews'),
-    spark: trendSpark('avgViews'),
+    delta: p.avgViews != null ? trendDelta('avgViews') : null,
+    spark: p.avgViews != null ? trendSpark('avgViews') : undefined,
   });
   out.push({
     key: 'reach',
     label: 'охват',
     value: p.reach != null ? formatCompact(p.reach) : '—',
     badge: freshnessBadge('reach', 'Охват'),
-    delta: trendDelta('reach'),
-    spark: trendSpark('reach'),
+    delta: p.reach != null ? trendDelta('reach') : null,
+    spark: p.reach != null ? trendSpark('reach') : undefined,
   });
 
   if (e?.err != null) {

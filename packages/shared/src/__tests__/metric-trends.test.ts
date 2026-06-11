@@ -93,6 +93,35 @@ describe('buildMetricTrends', () => {
     expect(offers).toHaveLength(0);
   });
 
+  it('skips offer dynamics when the current price is unknown («по запросу»)', () => {
+    const entry: OfferHistoryEntry = {
+      identityKey: 'telegram|post|day|||',
+      platform: 'telegram',
+      kind: 'post',
+      duration: 'day',
+      tariffName: null,
+      slot: null,
+      active: {
+        id: 'r3', status: 'active', priceMin: null, priceMax: null, currency: 'RUB',
+        confidence: 0.9, rawPrice: '', rawSnippet: 'по запросу', sourceMessageId: null,
+        supersededById: null, capturedAt: days(1),
+      },
+      history: [
+        {
+          id: 'r1', status: 'superseded', priceMin: 11_000, priceMax: null, currency: 'RUB',
+          confidence: 0.9, rawPrice: '11000', rawSnippet: '', sourceMessageId: null,
+          supersededById: 'r2', capturedAt: days(60),
+        },
+        {
+          id: 'r2', status: 'superseded', priceMin: 13_000, priceMax: null, currency: 'RUB',
+          confidence: 0.9, rawPrice: '13000', rawSnippet: '', sourceMessageId: null,
+          supersededById: 'r3', capturedAt: days(30),
+        },
+      ],
+    };
+    expect(buildMetricTrends({ now: NOW, snapshots: [], offerHistory: [entry] }).offers).toEqual([]);
+  });
+
   it('backfills from superseded data points only before the snapshot era', () => {
     const { metrics } = buildMetricTrends({
       now: NOW,
