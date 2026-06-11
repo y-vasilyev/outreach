@@ -35,9 +35,22 @@ const router = useRouter();
 const qc = useQueryClient();
 const id = computed(() => route.params.id as string);
 
+// Fit-verdict context (decision-ux): the catalog passes its campaign/brief
+// context through the URL so the detail can answer «совпадает ли с брифом».
+const fitCtx = computed(() => ({
+  campaignId: typeof route.query.campaignId === 'string' ? route.query.campaignId : '',
+  briefId: typeof route.query.briefId === 'string' ? route.query.briefId : '',
+}));
+
 const { data: profile, isLoading, error } = useQuery({
-  queryKey: ['blogger-profile', id],
-  queryFn: () => api.get<BloggerProfile>(`/blogger-profiles/${id.value}`),
+  queryKey: ['blogger-profile', id, fitCtx],
+  queryFn: () => {
+    const params = new URLSearchParams();
+    if (fitCtx.value.campaignId) params.set('campaignId', fitCtx.value.campaignId);
+    else if (fitCtx.value.briefId) params.set('briefId', fitCtx.value.briefId);
+    const qs = params.toString();
+    return api.get<BloggerProfile>(`/blogger-profiles/${id.value}${qs ? `?${qs}` : ''}`);
+  },
   enabled: computed(() => !!id.value),
   retry: false,
 });
@@ -250,7 +263,23 @@ const refreshMut = useMutation({
 
   <template v-else>
     <!-- «Кто это»: имя, платформы, темы — без внутренних идентификаторов. -->
-    <BloggerProfileHeader :profile="profile" />
+    <BloggerProfileHeader :profile="profile">
+      <!-- Fit verdict при заходе из каталога с контекстом кампании/брифа. -->
+      <div
+        v-if="profile.fit"
+        style="border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; max-width: 640px;"
+      >
+        <div style="display: flex; align-items: baseline; gap: 8px;">
+          <span style="font-size: 13px; font-weight: 600;">Совпадение с брифом: {{ Math.round(profile.fit.score * 100) }}%</span>
+          <span class="muted-2" style="font-size: 10.5px;">{{ profile.fit.source === 'llm_rerank' ? 'LLM-ранжирование' : profile.fit.source === 'match_result' ? 'по результату подбора' : 'детерминированная оценка' }}</span>
+        </div>
+        <p v-if="profile.fit.rationale" class="muted" style="margin: 0; font-size: 12px;">{{ profile.fit.rationale }}</p>
+        <div v-if="profile.fit.positiveSignals.length || profile.fit.gaps.length" style="display: flex; flex-direction: column; gap: 2px; font-size: 11.5px;">
+          <span v-for="s in profile.fit.positiveSignals" :key="`+${s}`" style="color: var(--ok);">+ {{ s }}</span>
+          <span v-for="g in profile.fit.gaps" :key="`-${g}`" style="color: var(--warn);">− {{ g }}</span>
+        </div>
+      </div>
+    </BloggerProfileHeader>
 
     <!-- Решающие метрики с inline-бейджами свежести. -->
     <BloggerMetricsStrip :profile="profile" style="margin-top: 12px;" />

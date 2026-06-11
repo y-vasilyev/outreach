@@ -20,9 +20,9 @@ import { api } from '../../../lib/api';
 const apiGet = api.get as unknown as ReturnType<typeof vi.fn>;
 
 const routerPush = vi.fn();
-const routeState = { id: 'p_live' };
+const routeState = { id: 'p_live', query: {} as Record<string, string> };
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ params: { id: routeState.id } }),
+  useRoute: () => ({ params: { id: routeState.id }, query: routeState.query }),
   useRouter: () => ({ push: routerPush }),
   RouterLink: { name: 'RouterLink', template: '<a><slot /></a>' },
 }));
@@ -48,9 +48,26 @@ const rateCards = [
 beforeEach(() => {
   vi.clearAllMocks();
   routeState.id = 'p_live';
+  routeState.query = {};
   apiGet.mockImplementation(async (path: string) => {
     if (path === '/blogger-profiles/p_offers') {
       return profileWithOffers;
+    }
+    // Campaign-context request: the same profile plus a fit verdict.
+    if (path === '/blogger-profiles/p_live?campaignId=c1') {
+      const base = await apiGet.getMockImplementation()!('/blogger-profiles/p_live');
+      return {
+        ...base,
+        fit: {
+          score: 0.78,
+          source: 'deterministic',
+          rationale: 'темы и форматы совпадают с брифом',
+          positiveSignals: ['тема финтех'],
+          gaps: ['нет цены сторис'],
+          evidencePostIds: [],
+          scoreBreakdown: { total: 0.78 },
+        },
+      };
     }
     if (path === '/blogger-profiles/p_live') {
       return {
@@ -259,6 +276,21 @@ describe('BloggerProfilePage', () => {
     expect(stripText).toContain('2.1%');
     // Legacy rate cards back the «цена от» fallback (min = 19 000 RUB).
     expect(stripText).toContain('от 19');
+  });
+
+  it('shows the fit verdict in the header when opened with campaign context', async () => {
+    routeState.query = { campaignId: 'c1' };
+    const { wrapper } = mountWithApp(BloggerProfilePage, {
+      global: { stubs: { MediaKitDownload: { template: '<button>Скачать</button>' } } },
+    });
+    await flushPromises();
+
+    expect(apiGet).toHaveBeenCalledWith('/blogger-profiles/p_live?campaignId=c1');
+    const header = wrapper.findComponent(BloggerProfileHeader);
+    expect(header.text()).toContain('Совпадение с брифом: 78%');
+    expect(header.text()).toContain('темы и форматы совпадают с брифом');
+    expect(header.text()).toContain('+ тема финтех');
+    expect(header.text()).toContain('− нет цены сторис');
   });
 
   it('falls back to the legacy rate-card table when there are no structured offers', async () => {

@@ -294,6 +294,19 @@ function offerKindLabel(kind: string): string {
   return labels[kind] ?? kind;
 }
 
+// Профиль открывается с контекстом кампании/брифа — detail покажет fit-вердикт
+// (decision-ux). Без контекста остаётся строка-путь (стабильно для тестов).
+function profileRoute(profileId: string): string | { path: string; query: Record<string, string> } {
+  const ctxId = contextId.value.trim();
+  if (contextType.value === 'campaign' && ctxId) {
+    return { path: `/bloggers/${profileId}`, query: { campaignId: ctxId } };
+  }
+  if (contextType.value === 'brief' && ctxId) {
+    return { path: `/bloggers/${profileId}`, query: { briefId: ctxId } };
+  }
+  return `/bloggers/${profileId}`;
+}
+
 function rowActions(p: BloggerProfile): Array<{
   label: string;
   icon?: IconName;
@@ -304,7 +317,7 @@ function rowActions(p: BloggerProfile): Array<{
     {
       label: 'Открыть профиль',
       icon: 'edit',
-      onClick: () => router.push(`/bloggers/${p.id}`),
+      onClick: () => router.push(profileRoute(p.id)),
     },
     {
       label: 'Перейти к подбору',
@@ -468,7 +481,7 @@ function rowActions(p: BloggerProfile): Array<{
             v-for="row in filteredItems"
             :key="row.id"
             class="clickable"
-            @click="router.push(`/bloggers/${row.id}`)"
+            @click="router.push(profileRoute(row.id))"
           >
             <td @click.stop>
               <input

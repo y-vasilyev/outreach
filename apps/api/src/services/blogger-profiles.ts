@@ -629,7 +629,13 @@ export const bloggerProfilesService = {
     };
   },
 
-  async get(id: string, opts: { includeSuperseded?: boolean } = {}) {
+  async get(
+    id: string,
+    opts: { includeSuperseded?: boolean; campaignId?: string; briefId?: string } = {},
+  ) {
+    if (opts.campaignId && opts.briefId) {
+      throw Errors.badRequest('campaignId and briefId are mutually exclusive');
+    }
     const prisma = getPrisma();
     const profile = await prisma.bloggerProfile.findUnique({
       where: { id },
@@ -708,7 +714,42 @@ export const bloggerProfilesService = {
     });
     // Staleness labels on the detail view too (catalog-sql-search): stale
     // prices stay visible, marked.
-    return { ...presented, placementOffers: labelOfferStaleness(presented.placementOffers) };
+    const labeled = { ...presented, placementOffers: labelOfferStaleness(presented.placementOffers) };
+    if (!opts.campaignId && !opts.briefId) return labeled;
+    // Fit verdict in campaign/brief context (decision-ux) — the same scoring
+    // path as list(): persisted matchResult wins, else deterministic score.
+    // The profile matters more than the verdict: a broken context (missing
+    // campaign, unsupported type, no goal) must not 500 the page.
+    try {
+      const brief = opts.campaignId
+        ? await briefFromCampaign(opts.campaignId)
+        : await prisma.adBrief.findUnique({ where: { id: opts.briefId! } }).then((b) => {
+            if (!b) throw Errors.notFound('ad_brief', opts.briefId);
+            return toBrief(b);
+          });
+      const match = opts.briefId
+        ? await prisma.matchResult.findFirst({ where: { briefId: opts.briefId, profileId: id } })
+        : null;
+      if (match) return { ...labeled, fit: fitFromMatchResult(match) };
+      const useStructuredOffers = getFeatureFlags().get('structured_placement_offers');
+      const scored = scoreProfile(brief, toMatchable(profile), { useStructuredOffers });
+      return {
+        ...labeled,
+        fit: buildFitBreakdown(brief, labeled, scored, labeled.postInsights ?? [], 'deterministic'),
+      };
+    } catch (err) {
+      logger.warn(
+        {
+          event: 'profile_detail_fit_failed',
+          profileId: id,
+          campaignId: opts.campaignId ?? null,
+          briefId: opts.briefId ?? null,
+          error: err instanceof Error ? err.message : String(err),
+        },
+        'fit verdict failed on profile detail; returning profile without fit',
+      );
+      return labeled;
+    }
   },
 
   async requestPostInsightRefresh(id: string) {

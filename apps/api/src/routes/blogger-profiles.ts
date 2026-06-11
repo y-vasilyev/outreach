@@ -42,9 +42,17 @@ export async function bloggerProfilesRoutes(app: FastifyInstance) {
           includeSuperseded: z
             .preprocess((v) => (v === 'true' || v === true ? true : v === 'false' ? false : v), z.boolean())
             .optional(),
+          // Fit-verdict context (decision-ux): mutually exclusive, validated
+          // in the service.
+          campaignId: z.string().optional(),
+          briefId: z.string().optional(),
         })
         .parse(req.query ?? {});
-      return bloggerProfilesService.get(params.id, { includeSuperseded: q.includeSuperseded ?? false });
+      return bloggerProfilesService.get(params.id, {
+        includeSuperseded: q.includeSuperseded ?? false,
+        campaignId: q.campaignId,
+        briefId: q.briefId,
+      });
     },
   );
 
