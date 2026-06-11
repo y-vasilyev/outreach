@@ -3,7 +3,7 @@ import { computed } from 'vue';
 import Pill from '../../components/Pill.vue';
 import { formatCompact, formatRelative } from '../../lib/format';
 import { freshnessAgeText, freshnessTone, freshnessTooltip } from './freshness-ui';
-import { summarizeOffers } from './offer-summary';
+import { isRubCurrency, summarizeOffers } from './offer-summary';
 import type { PillClass } from '../../lib/state';
 import type { BloggerProfile, ProfileFreshnessCategory } from './types';
 
@@ -49,7 +49,7 @@ function percent(rate: number): string {
 const priceFrom = computed<{ value: number; stale: boolean } | null>(() => {
   const s = summary.value;
   if (s.priceFromRub != null) return { value: s.priceFromRub, stale: s.priceStale };
-  const rub = (props.profile.rateCards ?? []).filter((r) => r.currency === 'RUB');
+  const rub = (props.profile.rateCards ?? []).filter((r) => isRubCurrency(r.currency));
   if (!rub.length) return null;
   return { value: Math.min(...rub.map((r) => r.price)), stale: false };
 });
@@ -141,7 +141,8 @@ const tiles = computed<MetricTile[]>(() => {
   out.push({
     key: 'price',
     label: 'цена',
-    value: price ? `от ${formatCompact(price.value)} ₽` : 'по запросу',
+    // Explicit null check: a known price of 0 (барter/бесплатно) is a price.
+    value: price != null ? `от ${formatCompact(price.value)} ₽` : 'по запросу',
     title: summary.value.perPlatform.length ? priceTooltip.value : undefined,
     badge: price?.stale
       ? { text: 'устарело', tone: 'warn', title: 'Минимальная цена старше TTL прайсов' }

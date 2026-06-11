@@ -24,10 +24,15 @@ export interface OfferPriceSummary {
   perPlatform: Array<{ platform: string | null; priceFromRub: number | null; stale: boolean }>;
 }
 
+/** Currency tags are not normalized upstream («rub» vs «RUB») — match catalog/matching. */
+export function isRubCurrency(currency: string | null | undefined): boolean {
+  return (currency ?? '').trim().toUpperCase() === 'RUB';
+}
+
 function candidatePriceRub(o: PlacementOffer): number | null {
   const normalized = o.normalized?.priceRubMin;
   if (normalized != null) return normalized;
-  if (o.currency === 'RUB') return o.price_min ?? o.price ?? null;
+  if (isRubCurrency(o.currency)) return o.price_min ?? o.price ?? null;
   return null;
 }
 

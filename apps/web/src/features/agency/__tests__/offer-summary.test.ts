@@ -49,6 +49,11 @@ describe('summarizeOffers', () => {
     expect(s.priceFromRub).toBeNull();
   });
 
+  it('accepts lowercase/padded ruble currency tags (codex review)', () => {
+    expect(summarizeOffers([offer({ price: 5000, currency: 'rub' })]).priceFromRub).toBe(5000);
+    expect(summarizeOffers([offer({ price: 5000, currency: ' RUB ' })]).priceFromRub).toBe(5000);
+  });
+
   it('uses price_min for range offers', () => {
     const s = summarizeOffers([offer({ price: null, price_min: 8000, price_max: 12000 })]);
     expect(s.priceFromRub).toBe(8000);
