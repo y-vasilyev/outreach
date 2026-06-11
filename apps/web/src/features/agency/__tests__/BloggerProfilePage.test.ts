@@ -28,6 +28,8 @@ vi.mock('vue-router', () => ({
 }));
 
 import BloggerProfilePage from '../BloggerProfilePage.vue';
+import BloggerProfileHeader from '../BloggerProfileHeader.vue';
+import BloggerMetricsStrip from '../BloggerMetricsStrip.vue';
 
 const NOW = '2026-06-04T10:00:00.000Z';
 
@@ -55,6 +57,18 @@ beforeEach(() => {
         id: 'p_live',
         channelId: 'chan_live',
         displayName: '@polyaam',
+        channel: { platform: 'telegram', handle: 'polyaam', title: null, url: 'https://t.me/polyaam' },
+        engagement: {
+          err: 0.042,
+          errPlatform: 'telegram',
+          subscribersBasis: 100000,
+          avgPostEr: 0.021,
+          postsBasis: 1,
+          perPlatform: [{ platform: 'telegram', avgPostEr: 0.021, avgViews: 45000, postsBasis: 1 }],
+        },
+        platformAudience: [
+          { platform: 'telegram', subscribers: 100000, source: 'reply', capturedAt: NOW },
+        ],
         socialLinks: [
           { platform: 'telegram', url: 'https://t.me/polyaam', handle: 'polyaam' },
           { platform: 'youtube', url: 'https://youtube.com/@polyaam', handle: 'polyaam' },
@@ -200,7 +214,6 @@ describe('BloggerProfilePage', () => {
 
     const text = wrapper.text();
     expect(text).toContain('@polyaam');
-    expect(text).toContain('Соцпрофили');
     expect(text).toContain('telegram @polyaam');
     expect(text).toContain('youtube @polyaam');
     expect(text).toContain('Прайс (9)');
@@ -214,10 +227,38 @@ describe('BloggerProfilePage', () => {
     expect(text).toContain('RUB');
     expect(text).toContain('47');
     expect(text).toContain('87');
+    expect(text).toContain('Аудит данных (9)');
     expect(text).toContain('Точки данных (9)');
     expect(text).toContain('rate.telegram_photo_post');
     expect(text).not.toContain('tiktok');
     expect(text).not.toContain('tax');
+  });
+
+  it('keeps internal ids out of the header and shows decision metrics', async () => {
+    const { wrapper } = mountWithApp(BloggerProfilePage, {
+      global: { stubs: { MediaKitDownload: { template: '<button>Скачать</button>' } } },
+    });
+    await flushPromises();
+
+    // «Кто это» — заголовок без сырого CUID; внутренний ID остаётся в аудите.
+    const header = wrapper.findComponent(BloggerProfileHeader);
+    expect(header.exists()).toBe(true);
+    expect(header.text()).toContain('@polyaam');
+    expect(header.text()).not.toContain('chan_live');
+    expect(wrapper.text()).toContain('chan_live'); // audit section keeps it
+
+    // Полоса решающих метрик: подписчики по платформе, ERR с базой, цена от.
+    const strip = wrapper.findComponent(BloggerMetricsStrip);
+    expect(strip.exists()).toBe(true);
+    const stripText = strip.text();
+    expect(stripText).toContain('подписчики · telegram');
+    expect(stripText).toContain('100');
+    expect(stripText).toContain('ERR (telegram)');
+    expect(stripText).toContain('4.2%');
+    expect(stripText).toContain('ER постов');
+    expect(stripText).toContain('2.1%');
+    // Legacy rate cards back the «цена от» fallback (min = 19 000 RUB).
+    expect(stripText).toContain('от 19');
   });
 
   it('falls back to the legacy rate-card table when there are no structured offers', async () => {
@@ -241,8 +282,10 @@ describe('BloggerProfilePage', () => {
     await flushPromises();
 
     const text = wrapper.text();
-    // Structured offers card present with all three offers.
+    // Structured offers card present with all three offers, grouped per
+    // platform (telegram + «без платформы» for the offsite review).
     expect(text).toContain('Размещения (3)');
+    expect(text).toContain('без платформы');
     // Kind + platform + price+currency rendered.
     expect(text).toContain('Пост');
     expect(text).toContain('Выездной обзор');

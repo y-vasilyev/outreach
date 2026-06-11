@@ -2,8 +2,8 @@
 import { computed } from 'vue';
 import Icon from '../../components/Icon.vue';
 import Pill from '../../components/Pill.vue';
-import type { PillClass } from '../../lib/state';
-import type { ProfileFreshness, ProfileFreshnessCategory, ProfileFreshnessSection } from './types';
+import { freshnessAgeText, freshnessTone, freshnessTooltip } from './freshness-ui';
+import type { ProfileFreshness, ProfileFreshnessCategory } from './types';
 
 const props = defineProps<{ freshness: ProfileFreshness }>();
 
@@ -17,32 +17,11 @@ const SECTIONS: Array<{ key: ProfileFreshnessCategory; label: string }> = [
   { key: 'avgViews', label: 'Ср. просмотры' },
 ];
 
-// Tone reflects the operator-workflow question "do we have a recent enough
-// source for this section?":
-//   - no contributing points → ghost (нет данных)
-//   - within TTL              → ok (свежо)
-//   - past TTL                → warn (устарело)
-function tone(s: ProfileFreshnessSection): PillClass {
-  if (s.ageDays == null) return 'ghost';
-  return s.stale ? 'warn' : 'ok';
-}
-
-function ageText(s: ProfileFreshnessSection): string {
-  if (s.ageDays == null) return 'нет данных';
-  if (s.ageDays === 0) return 'сегодня';
-  return `${s.ageDays} д`;
-}
-
-function statusWord(s: ProfileFreshnessSection): string {
-  if (s.ageDays == null) return 'нет данных';
-  return s.stale ? 'устарело' : 'свежо';
-}
-
-function tooltip(label: string, s: ProfileFreshnessSection): string {
-  // Surfaces the same signal a sighted user gets from the pill colour, so
-  // status is reachable for keyboard / screen-reader users (codex M1 R1).
-  return `${label}: ${statusWord(s)}${s.ageDays != null ? `, ${ageText(s)}` : ''}`;
-}
+// Tone/age/tooltip logic is shared with the inline metric badges — see
+// freshness-ui.ts (decision-ux).
+const tone = freshnessTone;
+const ageText = freshnessAgeText;
+const tooltip = freshnessTooltip;
 
 const rows = computed(() => SECTIONS.map((s) => ({
   ...s,

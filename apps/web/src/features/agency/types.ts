@@ -67,6 +67,32 @@ export interface PlatformAudienceEntry {
   capturedAt: string | null;
 }
 
+// Safe linked-channel presentation (decision-ux). Mirror of
+// packages/shared/src/schemas/blogger-profile.ts (BloggerChannelSummary).
+export interface BloggerChannelSummary {
+  platform: string;
+  handle: string;
+  title: string | null;
+  url: string | null;
+}
+
+// Derived engagement metrics (decision-ux). Rates are fractions (0.042 = 4.2%).
+export interface BloggerEngagementPlatform {
+  platform: string;
+  avgPostEr: number | null;
+  avgViews: number | null;
+  postsBasis: number;
+}
+
+export interface BloggerEngagement {
+  err: number | null;
+  errPlatform: string | null;
+  subscribersBasis: number | null;
+  avgPostEr: number | null;
+  postsBasis: number;
+  perPlatform: BloggerEngagementPlatform[];
+}
+
 export interface Audience {
   age?: Record<string, number>;
   gender?: Record<string, number>;
@@ -164,6 +190,8 @@ export interface BloggerProfile {
   rateCards: RateCard[];
   placementOffers?: PlacementOffer[];
   platformAudience?: PlatformAudienceEntry[];
+  channel?: BloggerChannelSummary | null;
+  engagement?: BloggerEngagement | null;
   reach: number | null;
   avgViews: number | null;
   capturedAt: string | null;
