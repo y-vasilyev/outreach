@@ -51,6 +51,48 @@ describe('buildMetricTrends', () => {
     expect(metrics[0]!.points.map((p) => p.value)).toEqual([4000, 4200]);
   });
 
+  it('collapses same-day backfill facts into one point (no fake intra-run delta)', () => {
+    // One extraction run emitted two facts rolling into `reach` — that is ONE
+    // observation, not a trend (codex review).
+    const { metrics } = buildMetricTrends({
+      now: NOW,
+      snapshots: [],
+      dataPoints: [
+        { field: 'reach.post', value: 5000, capturedAt: `${days(40).slice(0, 10)}T10:00:00.000Z` },
+        { field: 'reach.story', value: 12_000, capturedAt: `${days(40).slice(0, 10)}T10:00:01.000Z` },
+      ],
+    });
+    expect(metrics[0]!.points).toHaveLength(1);
+    expect(metrics[0]!.points[0]!.value).toBe(12_000); // latest of the day
+    expect(metrics[0]!.deltaPrev).toBeNull();
+  });
+
+  it('keeps the offer price series in one currency (requote in another currency is not a delta)', () => {
+    const entry: OfferHistoryEntry = {
+      identityKey: 'telegram|post|day|||',
+      platform: 'telegram',
+      kind: 'post',
+      duration: 'day',
+      tariffName: null,
+      slot: null,
+      active: {
+        id: 'r2', status: 'active', priceMin: 13_000, priceMax: null, currency: 'RUB',
+        confidence: 0.9, rawPrice: '13000', rawSnippet: '', sourceMessageId: null,
+        supersededById: null, capturedAt: days(1),
+      },
+      history: [
+        {
+          id: 'r1', status: 'superseded', priceMin: 150, priceMax: null, currency: 'USD',
+          confidence: 0.9, rawPrice: '$150', rawSnippet: '', sourceMessageId: null,
+          supersededById: 'r2', capturedAt: days(30),
+        },
+      ],
+    };
+    const { offers } = buildMetricTrends({ now: NOW, snapshots: [], offerHistory: [entry] });
+    // Single RUB observation → no dynamics, NOT a +8567% delta.
+    expect(offers).toHaveLength(0);
+  });
+
   it('backfills from superseded data points only before the snapshot era', () => {
     const { metrics } = buildMetricTrends({
       now: NOW,

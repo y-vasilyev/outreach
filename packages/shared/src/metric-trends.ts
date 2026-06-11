@@ -129,6 +129,13 @@ export function buildMetricTrends(input: MetricTrendsInput): BloggerProfileTrend
     const cur = earliestSnapshotMs.get(s.metric);
     if (cur == null || ms < cur) earliestSnapshotMs.set(s.metric, ms);
   }
+  // Backfill collapses to ONE point per (metric, day): a single extraction
+  // run can emit several facts that roll into the same metric (reach.post +
+  // reach.story), and treating those as chronology would fabricate a delta
+  // out of one observation (codex review). The latest point of the day wins —
+  // an approximation of the rollup's pick, anchored by the snapshot series
+  // from the first snapshot onward.
+  const backfill = new Map<string, Map<string, { value: number; ms: number }>>();
   for (const dp of input.dataPoints ?? []) {
     const metric = metricForDataPointField(dp.field);
     if (!metric) continue;
@@ -140,8 +147,17 @@ export function buildMetricTrends(input: MetricTrendsInput): BloggerProfileTrend
     // observed after that is already in the snapshot series.
     const snapshotStart = earliestSnapshotMs.get(metric);
     if (snapshotStart != null && ms >= snapshotStart) continue;
+    const day = toIso(dp.capturedAt).slice(0, 10);
+    const days = backfill.get(metric) ?? new Map<string, { value: number; ms: number }>();
+    const cur = days.get(day);
+    if (!cur || ms >= cur.ms) days.set(day, { value: Math.round(value), ms });
+    backfill.set(metric, days);
+  }
+  for (const [metric, days] of backfill) {
     const arr = byMetric.get(metric) ?? [];
-    arr.push({ value: Math.round(value), capturedAt: toIso(dp.capturedAt) });
+    for (const { value, ms } of days.values()) {
+      arr.push({ value, capturedAt: new Date(ms).toISOString() });
+    }
     byMetric.set(metric, arr);
   }
 
@@ -155,9 +171,16 @@ export function buildMetricTrends(input: MetricTrendsInput): BloggerProfileTrend
 
   const offers: OfferPriceTrend[] = [];
   for (const entry of input.offerHistory ?? []) {
-    const rows = [...entry.history, ...(entry.active ? [entry.active] : [])]
+    const all = [...entry.history, ...(entry.active ? [entry.active] : [])]
       // Low-confidence captures are not observations of the real price.
       .filter((r) => r.status !== 'low_confidence' && r.priceMin != null);
+    // Offer identity excludes currency, so a requote in another currency
+    // supersedes into the same chain; comparing raw numbers across currencies
+    // would fabricate a huge delta (codex review). The series sticks to the
+    // CURRENT currency (active row, else the newest observation).
+    const seriesCurrency =
+      entry.active?.currency ?? [...all].sort((a, b) => toMs(b.capturedAt) - toMs(a.capturedAt))[0]?.currency;
+    const rows = all.filter((r) => r.currency === seriesCurrency);
     const points = normalizeSeries(
       rows.map((r) => ({ value: r.priceMin!, capturedAt: toIso(r.capturedAt) })),
     );
@@ -167,7 +190,7 @@ export function buildMetricTrends(input: MetricTrendsInput): BloggerProfileTrend
       identityKey: entry.identityKey,
       platform: entry.platform,
       kind: entry.kind,
-      currency: entry.active?.currency ?? rows[rows.length - 1]?.currency ?? 'RUB',
+      currency: seriesCurrency ?? 'RUB',
       points,
       deltaPrev: deltas(points, nowMs).deltaPrev,
     });
