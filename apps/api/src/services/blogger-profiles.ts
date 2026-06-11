@@ -3,9 +3,11 @@ import { getObjectStore } from '@nosquare/storage';
 import {
   AppError,
   BloggerPostMetricsZ,
+  buildChannelSummary,
   buildFitBreakdown,
   buildOfferHistory,
   buildBloggerProfilePresentation,
+  computeBloggerEngagement,
   computePostMetricFreshness,
   Errors,
   computeProfileFreshness,
@@ -22,7 +24,11 @@ import {
   rateCardsFromDataPoints,
   RateCardZ,
   CampaignAjtbdZ,
+  PlatformAudienceEntryZ,
+  type BloggerChannelSummary,
+  type BloggerEngagement,
   type PlacementOffer,
+  type PlatformAudienceEntry,
   type RateCard,
   type AdBrief,
   type BloggerPostInsight,
@@ -98,6 +104,17 @@ function parsePlacementOffers(value: unknown): PlacementOffer[] {
   const out: PlacementOffer[] = [];
   for (const item of arr) {
     const parsed = PlacementOfferZ.safeParse(item);
+    if (parsed.success) out.push(parsed.data);
+  }
+  return out;
+}
+
+/** Defensive boundary parse of the rolled-up `platformAudience` Json column. */
+function parsePlatformAudience(value: unknown): PlatformAudienceEntry[] {
+  const arr = Array.isArray(value) ? value : [];
+  const out: PlatformAudienceEntry[] = [];
+  for (const item of arr) {
+    const parsed = PlatformAudienceEntryZ.safeParse(item);
     if (parsed.success) out.push(parsed.data);
   }
   return out;
@@ -238,6 +255,7 @@ function withPresentation<T extends {
   formats: string[];
   rateCards: unknown;
   placementOffers?: unknown;
+  platformAudience?: unknown;
   avgViews?: number | null;
   postInsightRefreshStatus?: string | null;
   postInsights?: DbPostInsight[];
@@ -254,6 +272,8 @@ function withPresentation<T extends {
   rateCards: RateCard[];
   formats: string[];
   placementOffers: PlacementOffer[];
+  channel: BloggerChannelSummary | null;
+  engagement: BloggerEngagement;
   topPostsPreview: ReturnType<typeof rankPostInsightsForPreview>;
   postInsights?: BloggerPostInsight[];
 } {
@@ -285,6 +305,14 @@ function withPresentation<T extends {
     rateCards: rates.rateCards,
     formats: rates.formats,
     placementOffers,
+    // Decision-ux derived fields: safe channel presentation + engagement.
+    channel: buildChannelSummary(opts.channel),
+    engagement: computeBloggerEngagement({
+      avgViews: profile.avgViews ?? null,
+      channelPlatform: opts.channel?.platform ?? null,
+      platformAudience: parsePlatformAudience(profile.platformAudience),
+      postInsights: serializedPosts,
+    }),
     postInsights: serializedPosts,
     topPostsPreview: rankPostInsightsForPreview(serializedPosts, {
       avgViews: profile.avgViews ?? null,
